@@ -274,10 +274,14 @@ function buildWelcomeMsg(vals, totals) {
   const reg = vals?.regNo || "—";
   const estimate = inr(totals?.grand ?? 0);
 
+  const isNH = String(branch).trim() === "Byadarahalli";
+  const showroomEn = isNH ? "NH Motors" : "Shantha Motors";
+  const showroomKn = isNH ? "ಎನ್ ಎಚ್ ಮೋಟರ್ಸ್" : "ಶಾಂತ ಮೋಟರ್ಸ್";
+
   return (
     `Hi ${name}! 👋\n\n` +
-    `✅ Your bike service is confirmed at Shantha Motors.\n\n` +
-    `Welcome to Shantha Motors,\nಶಾಂತ ಮೋಟರ್ಸ್‌ಗೆ ಸ್ವಾಗತ 🏍️✨\n\n` +
+    `✅ Your bike service is confirmed at ${showroomEn}.\n\n` +
+    `Welcome to ${showroomEn},\n${showroomKn}ಗೆ ಸ್ವಾಗತ 🏍️✨\n\n` +
     `🧾 Job Card: ${jc}\n` +
     `🏍️ Vehicle: ${reg}\n` +
     `📅 Delivery Date: ${fmtDate}\n` +

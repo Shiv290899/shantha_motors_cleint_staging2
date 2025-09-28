@@ -7,6 +7,7 @@ import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons
 import ViewSheet from "./ViewSheet";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
 
+
 /* ======================
    GOOGLE FORM INTEGRATION
    ====================== */
@@ -124,7 +125,6 @@ const EXECUTIVES = [
   { name: "Kavi", phone: "9108970455" },
   { name: "Narasimha", phone: "9900887666" },
   { name: "Kavya", phone: "8073165374" },
-  { name: "Vanitha", phone: "9380729861" },
 ];
 const BRANCHES = [
   "Byadarahalli",

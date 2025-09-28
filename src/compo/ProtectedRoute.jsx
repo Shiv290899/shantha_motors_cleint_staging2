@@ -1,19 +1,50 @@
-import React, { useEffect } from "react";
-import { useNavigate , Link} from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
+import { GetCurrentUser } from "../apiCalls/users";
 
-const ProtectedRoute = ({ children }) => {
-      const navigate = useNavigate();
+export default function ProtectedRoute({ children, roles }) {
+  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
 
-       useEffect(() => {
-    if (localStorage.getItem("token")) {
-      navigate("/");
-    } else {
-      navigate("/login");
-    }
+  useEffect(() => {
+    const init = async () => {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const result = await GetCurrentUser();
+        if (result && result.success && result.data) {
+          setUser(result.data);
+          try { localStorage.setItem("user", JSON.stringify(result.data)); } catch {
+            //ignore
+          }
+        } else {
+          // Token present but validation failed (e.g., 401). Allow non-role routes.
+          setUser({});
+        }
+      } catch {
+        // Network or 401 error — allow non-role routes, but you may refresh login later
+        setUser({});
+      } finally {
+        setLoading(false);
+      }
+    };
+    init();
   }, []);
-  return (
-   <div>{children}</div>
-  )
-}
 
-export default ProtectedRoute
+  if (loading) return null; // or a spinner
+
+  if (!user) return <Navigate to="/login" replace />;
+
+  if (Array.isArray(roles) && roles.length) {
+    const role = String(user.role || "").toLowerCase();
+    const ok = roles.map((r) => String(r).toLowerCase()).includes(role);
+    if (!ok) return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}

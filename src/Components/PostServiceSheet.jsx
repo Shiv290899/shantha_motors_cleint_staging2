@@ -30,6 +30,8 @@ const PostServiceSheet = forwardRef(function PostServiceSheet({ active, vals }, 
   };
   const kmVal = parseKm(vals?.km);
   const nextServiceKm = kmVal != null ? kmVal + 2000 : null;
+  const branch = String(vals?.branch || "").trim();
+  const isNH = branch === "Byadarahalli"; // Switch branding for Byadarahalli
 
   return (
     <div ref={ref} className={`print-sheet ${active ? "active" : ""}`}>
@@ -134,12 +136,29 @@ img { max-width: 100%; height: auto; background: transparent; }
         <div className="bill-wrap">
           <div className="bill-box">
             <div className="hdr-grid">
-              <img src="/shantha-logoprint.png" alt="Shantha Motors" style={{ width: "100%", maxHeight: 100 }} />
+              <img
+                src={isNH ? "/honda-logo.png" : "/shantha-logoprint.png"}
+                alt={isNH ? "NH Motors" : "Shantha Motors"}
+                style={{ width: "100%", maxHeight: 100 }}
+              />
               <div className="shop-title">
-                <div className="en">SHANTHA MOTORS | ಶಾಂತ ಮೋಟರ್ಸ್</div>
-                <div className="shop-sub">Multi Brand Two Wheeler Sales &amp; Service</div>
-                <div className="shop-sub">Mob No : 9731366921 / 8073283502 </div>
-                <div className="tiny">Kadabagere • Muddinapalya • D-Group Layout • Andrahalli • Tavarekere • Hegganahalli • Channenahalli • Nelagadrahalli</div>
+                {isNH ? (
+                  <>
+                    <div className="en">NH Motors | ಎನ್ ಎಚ್ ಮೋಟರ್ಸ್</div>
+                    <div className="shop-sub" style={{ marginTop: 4 }}>
+                      Site No. 116/1, Bydarahalli, Magadi Main Road, Opp.<br />
+                      HP Petrol Bunk, Bangalore - 560091
+                    </div>
+                    <div className="shop-sub">Mob: 9731366921 / 8073283502 / 9741609799</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="en">SHANTHA MOTORS | ಶಾಂತ ಮೋಟರ್ಸ್</div>
+                    <div className="shop-sub">Multi Brand Two Wheeler Sales &amp; Service</div>
+                    <div className="shop-sub">Mob No : 9731366921 / 8073283502 </div>
+                    <div className="tiny">Kadabagere • Muddinapalya • D-Group Layout • Andrahalli • Tavarekere • Hegganahalli • Channenahalli • Nelagadrahalli</div>
+                  </>
+                )}
               </div>
               <div>
                 <img src="/location-qr.png" alt="Location QR" style={{ width: "100%", maxHeight: 100 }} />
@@ -212,7 +231,7 @@ img { max-width: 100%; height: auto; background: transparent; }
             <div className="sign-row">
               <div />
               <div className="sign-box tiny">
-                For Shantha Motors<br/>Authorised Signatory
+                {isNH ? "For NH Motors" : "For Shantha Motors"}<br/>Authorised Signatory
               </div>
             </div>
 

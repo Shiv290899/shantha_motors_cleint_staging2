@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { Button, Form, Input, message } from "antd"; // ✅ added message for notifications
 import { Link, useNavigate } from "react-router-dom";
+//import { useDispatch } from "react-redux";
 import "./auth.css";
-import { LoginUser } from "../apiCalls/users";
+import { LoginUser, GetCurrentUser } from "../apiCalls/users";
+//import { setUser } from "../redux/userSlice";
 import { CompassOutlined } from "@ant-design/icons";
 
 function Login() {
   const navigate = useNavigate();
+  
   const [loading, setLoading] = useState(false);
 
   const onFinish = async (values) => {
@@ -23,6 +26,21 @@ function Login() {
         if (data.token) {
           localStorage.setItem("token", data.token);
         }
+        // Save minimal user profile if provided by login response
+        if (data.user) {
+          try { localStorage.setItem("user", JSON.stringify(data.user)); } catch {}
+        }
+
+        // Pull the latest profile so navbar/account chip can show the name/email
+        // Best effort: refresh from /get-valid-user; ignore if it fails
+        try {
+          const profile = await GetCurrentUser();
+          if (profile?.success && profile?.data) {
+            localStorage.setItem("user", JSON.stringify(profile.data));
+          }
+        } catch {
+          // ignore
+        }
 
         message.success("Login successful!");
         navigate("/"); // redirect home
@@ -31,6 +49,7 @@ function Login() {
       }
     } catch (error) {
       console.error("Login error:", error);
+      localStorage.removeItem("user");
       message.error("Something went wrong, please try again");
     } finally {
       setLoading(false);
