@@ -64,7 +64,7 @@ export default function BookingForm() {
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
 
-  // ---- EMI STATE (driven by form fields) ----
+  // ---- EMI sample STATE (driven by form fields) ----
   const fixedProcessingFee = 8000;
   const [emiPrice, setEmiPrice] = useState(0);          // on-road price
   const [emiDown, setEmiDown] = useState(0);            // down payment (booking amount)
@@ -685,3 +685,4 @@ export default function BookingForm() {
     </div>
   );
 }
+
