@@ -21,7 +21,7 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
-import * as XLSX from "xlsx";
+// Load xlsx only when the user exports to keep initial bundles small
 
 dayjs.extend(customParseFormat);
 
@@ -361,13 +361,14 @@ export default function ViewSheet({
   
 
   /* --------------------------------- Export ---------------------------------- */
-  const exportExcel = () => {
+  const exportExcel = async () => {
     if (!headers.length) return message.warning("No data to export");
     const ordered = filteredRows.map((r) => {
       const o = {};
       headers.forEach((h) => (o[h] = r[h]));
       return o;
     });
+    const XLSX = await import("xlsx");
     const ws = XLSX.utils.json_to_sheet(ordered, { header: headers });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sheet");
