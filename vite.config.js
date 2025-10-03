@@ -15,7 +15,7 @@ export default ({ mode }) => {
       'process.env': '{}',
       global: 'globalThis',
     },
-    // Keep dev comfortable; production optimizations are below in build.rollupOptions
+    // Keep dev comfortable; production tweaks live in the build section below
     server: {
       proxy: {
         // Forward API calls during development
@@ -25,26 +25,10 @@ export default ({ mode }) => {
         },
       },
     },
-    // Production build tuning: split heavy vendors and relax the warning threshold
+    // Production build tuning: trust Rollup for chunking but keep the higher warning threshold
     build: {
-      // Raise only the warning threshold; the build still optimizes output
+      // Raise only the warning threshold; leave chunking to Rollup's defaults to avoid circular splits
       chunkSizeWarningLimit: 1200,
-      rollupOptions: {
-        output: {
-          // Group large dependencies into their own chunks to reduce initial payload
-          manualChunks(id) {
-            if (!id.includes('node_modules')) return undefined
-            if (id.includes('react-router')) return 'vendor-router'
-            if (id.includes('react-dom') || id.includes('/react/')) return 'vendor-react'
-            if (id.includes('antd') || id.includes('@ant-design/icons')) return 'vendor-antd'
-            if (id.includes('@reduxjs') || id.includes('react-redux')) return 'vendor-redux'
-            if (id.includes('/xlsx')) return 'vendor-xlsx'
-            if (id.includes('jspdf') || id.includes('html2canvas')) return 'vendor-print'
-            if (id.includes('/dayjs')) return 'vendor-dayjs'
-            return 'vendor'
-          },
-        },
-      },
     },
   })
 }
