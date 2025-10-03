@@ -6,7 +6,7 @@ export const RegisterUser = async (values) => {
     const { data } = await axiosInstance.post("/users/register", values);
     return data;
   } catch (error) {
-    console.log(error);
+    console.error("RegisterUser failed", error);
   }
 };
 
@@ -19,7 +19,7 @@ export const LoginUser = async (values) => {
     }
     return data;
   } catch (error) {
-    console.log(error);
+    console.error("LoginUser failed", error);
   }
 };
 
@@ -29,6 +29,6 @@ export const GetCurrentUser = async () => {
     const { data } = await axiosInstance.get("/users/get-valid-user");
     return data;
   } catch (error) {
-    console.log(error);
+    console.error("GetCurrentUser failed", error);
   }
 };

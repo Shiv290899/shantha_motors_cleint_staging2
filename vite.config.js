@@ -7,7 +7,7 @@ import { cwd } from 'node:process'
 export default ({ mode }) => {
   // Use Node's cwd via explicit import to satisfy linters
   const env = loadEnv(mode, cwd(), '')
-  const backendOrigin = env.VITE_BACKEND_ORIGIN || 'http://localhost:8082'
+  const backendOrigin = env.VITE_BACKEND_ORIGIN 
   return defineConfig({
     plugins: [react()],
     define: {

@@ -13,13 +13,17 @@ function Login() {
   const [loading, setLoading] = useState(false);
 
   const onFinish = async (values) => {
-    console.log("Login form submitted:", values);
+    if (import.meta.env.DEV) {
+      console.log("Login form submitted:", values);
+    }
     setLoading(true);
 
     try {
       // Call backend API
       const data = await LoginUser(values);
-      console.log(data);
+      if (import.meta.env.DEV) {
+        console.log("Login response:", data);
+      }
 
       if (data?.success) {
         // Save token if your backend sends one
@@ -28,7 +32,9 @@ function Login() {
         }
         // Save minimal user profile if provided by login response
         if (data.user) {
-          try { localStorage.setItem("user", JSON.stringify(data.user)); } catch {}
+          try { localStorage.setItem("user", JSON.stringify(data.user)); } catch {
+            // ignore localStorage failures (storage quota, disabled storage, etc.)
+          }
         }
 
         // Pull the latest profile so navbar/account chip can show the name/email

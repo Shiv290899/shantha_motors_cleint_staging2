@@ -3,6 +3,25 @@ import { Link, useLocation, useNavigate } from "react-router-dom"; // <-- added 
 // ^ We import useNavigate to programmatically redirect after sign-out.
 //   Link/location are already used for routing and active styling.
 
+const parseJwt = (token) => {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+        .join("")
+    );
+    return JSON.parse(json);
+  } catch {
+    // ignore malformed tokens
+    return null;
+  }
+};
+
 // A polished, attractive Navbar with:
 // - Gradient topbar
 // - Sticky, blurred header with subtle shadow
@@ -61,32 +80,8 @@ export default function Navbar() {
   }, [menuOpen, isMobile]);
   // ^ Prevents background scrolling when the drawer is open.
 
-  // --- NEW: Lightweight auth helpers (read from localStorage or JWT) ---
-  // parseJwt: decodes a base64url JWT payload safely without external libs.
-  const parseJwt = (token) => {
-    // If no token, return null
-    if (!token) return null;
-    // JWT is "header.payload.signature" -> we want payload (index 1)
-    const parts = token.split(".");
-    if (parts.length < 2) return null;
-    try {
-      // Base64url decode the payload
-      const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-      const json = decodeURIComponent(
-        atob(base64)
-          .split("")
-          .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
-          .join("")
-      );
-      return JSON.parse(json);
-    } catch {
-      return null;
-    }
-  };
-  // ^ Safely decode the JWT payload (if present) to extract user fields.
-
-  // getCurrentUser: tries "user" JSON first, then JWT "token".
-  const getCurrentUser = () => {
+  // --- Lightweight auth helpers (read from localStorage or JWT) ---
+  const getCurrentUser = React.useCallback(() => {
     // 1) Try a saved user object (recommended)
     const raw = localStorage.getItem("user");
     if (raw) {
@@ -113,10 +108,10 @@ export default function Navbar() {
     }
     // 3) Not logged in
     return null;
-  };
+  }, []);
   // ^ Centralized way to read current user info.
 
-  const [user, setUser] = React.useState(getCurrentUser());
+  const [user, setUser] = React.useState(() => getCurrentUser());
   // ^ Holds the current user object or null when logged out.
 
   // Keep user state in sync when localStorage changes (e.g., in other tabs)
@@ -128,13 +123,13 @@ export default function Navbar() {
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, []);
+  }, [getCurrentUser]);
   // ^ Updates the chip if login/logout happens in another tab.
 
   // Refresh account chip when route changes (covers same-tab logins)
   React.useEffect(() => {
     setUser(getCurrentUser());
-  }, [location.pathname]);
+  }, [location.pathname, getCurrentUser]);
 
   // Simple avatar initial (first char of name/email)
   const avatarInitial = React.useMemo(() => {

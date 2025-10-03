@@ -54,7 +54,7 @@ export default function Home() {
       }
       return parsed.toString();
     } catch (err) {
-      console.log(err);
+      console.error("Failed to format map URL", err);
       return null;
     }
   };

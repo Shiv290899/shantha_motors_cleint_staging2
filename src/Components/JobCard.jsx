@@ -419,9 +419,11 @@ export default function JobCard() {
     form.setFieldsValue({ regNo: next });
   };
 
-  const labourRows = Form.useWatch("labourRows", form) || [];
+  const labourRowsRaw = Form.useWatch("labourRows", form);
+  const labourRows = useMemo(() => labourRowsRaw || [], [labourRowsRaw]);
   const gstLabour = Form.useWatch("gstLabour", form) ?? DEFAULT_GST_LABOUR;
-  const discounts = Form.useWatch("discounts", form) || { labour: 0 };
+  const discountsRaw = Form.useWatch("discounts", form);
+  const discounts = useMemo(() => discountsRaw || { labour: 0 }, [discountsRaw]);
 
   const totals = useMemo(() => {
     const labourSub = labourRows.reduce(

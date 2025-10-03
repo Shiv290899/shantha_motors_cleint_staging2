@@ -654,6 +654,11 @@ export default function Quotation() {
     }
   };
 
+  const handlePrintRef = useRef(handlePrint);
+  useEffect(() => {
+    handlePrintRef.current = handlePrint;
+  });
+
   // Capture Ctrl/Cmd + P and route to handlePrint
   useEffect(() => {
     const onKeyDown = (e) => {
@@ -661,12 +666,12 @@ export default function Quotation() {
         (e.ctrlKey || e.metaKey) && (e.key === "p" || e.key === "P");
       if (isPrintShortcut) {
         e.preventDefault();
-        handlePrint();
+        handlePrintRef.current?.();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []); // handlePrint uses stable inner functions/values
+  }, []);
 
   // Keep local state in sync with Form for fields we mirror (onRoadPrice)
   const onValuesChange = (_, all) => {

@@ -166,7 +166,9 @@ export default function BookingForm() {
       },
     };
 
-    console.log("Booking submitted:", payload);
+    if (import.meta.env.DEV) {
+      console.log("Booking submitted:", payload);
+    }
     message.success("✅ Booking submitted!");
     form.resetFields();
     setAadharList([]);
