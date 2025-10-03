@@ -1,7 +1,7 @@
 // JobCard.jsx
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
-  Card, Col, DatePicker, Form, Grid, Input,
+  Card, Col, DatePicker, Form, Input,
   InputNumber, Row, Typography, message, Select, Button, Segmented, Checkbox, Tooltip
 } from "antd";
 import dayjs from "dayjs";
@@ -13,7 +13,6 @@ import FetchJobcard from "./FetchJobcard";
 import ViewSheet from "./ViewSheet";
 
 const { Title, Text } = Typography;
-const { useBreakpoint } = Grid;
 const { Option } = Select;
 
 /* =========================
@@ -325,7 +324,6 @@ function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
 
 export default function JobCard() {
   const [form] = Form.useForm();
-  const screens = useBreakpoint();
 
   const [regDisplay, setRegDisplay] = useState("");
   const [serviceTypeLocal, setServiceTypeLocal] = useState(null);
@@ -610,16 +608,29 @@ export default function JobCard() {
   };
 
   return (
-    <div style={{ padding: screens.xs ? 8 : 16 }}>
-      {/* Screen UI (hidden when printing) */}
-      <div className="no-print">
-        <Card size="small" bordered>
-          <div style={{  display: "flex", justifyContent: "space-between", alignItems: "centre", gap: 8 }}>
+    <>
+      <style>{`
+        .wrap { max-width: 1000px; margin: 12px auto; padding: 0 12px; }
+        .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }
+        @media screen and (max-width: 600px) {
+          .brand-row2 { grid-template-columns: 1fr !important; row-gap: 8px; }
+          .brand-right { justify-content: flex-start !important; }
+        }
+        .print-sheet { display: none; }
+        @media print { .print-sheet { display: block; } .no-print { display: none !important; } }
+      `}</style>
+
+      <div className="wrap no-print">
+        <div className="card">
+          <div
+            className="brand-actions-row"
+            style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 12 }}
+          >
             <div>
               <Title level={4} style={{ margin: 0 }}>SHANTHA MOTORS — JOB CARD</Title>
               <Text type="secondary">Multi Brand Two Wheeler Sales & Service</Text>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+            <div className="brand-actions" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {/* Fetch button */}
               <FetchJobcard
                 form={form}
@@ -643,9 +654,8 @@ export default function JobCard() {
               />
             </div>
           </div>
-        </Card>
 
-        <Form
+          <Form
           form={form}
           layout="vertical"
           initialValues={initialValues}
@@ -654,7 +664,7 @@ export default function JobCard() {
         >
           {/* Job Details */}
           <Card size="small" bordered title="Job Details">
-            <Row gutter={12}>
+            <Row gutter={[12, 8]}>
               <Col xs={12} sm={2}>
                 <Form.Item label="JC No." name="jcNo" >
                   <Input placeholder="No Need to Enter" readOnly />
@@ -702,7 +712,7 @@ export default function JobCard() {
 
           {/* Vehicle & Customer */}
           <Card size="small" bordered style={{ marginTop: 12 }} title="Vehicle & Customer">
-            <Row gutter={12}>
+            <Row gutter={[12, 8]}>
               <Col xs={24} sm={4}>
                 <Form.Item
                   label="Vehicle No."
@@ -766,7 +776,7 @@ export default function JobCard() {
               </Col>
             </Row>
 
-            <Row gutter={12}>
+            <Row gutter={[12, 8]}>
               <Col xs={24} sm={6}>
                 <Form.Item label="Customer Name" name="custName" rules={[{ required: true }]}>
                   <Input />
@@ -817,7 +827,7 @@ export default function JobCard() {
 
           {/* Service */}
           <Card size="small" bordered style={{ marginTop: 12 }} title="Service">
-            <Row gutter={12}>
+            <Row gutter={[12, 8]}>
               <Col xs={24} md={6}>
                 <Form.Item
                   label="Service Type (tick one)"
@@ -996,6 +1006,7 @@ export default function JobCard() {
             </Col>
           </Row>
         </Form>
+        </div>
       </div>
 
       {/* PRINT SHEETS with refs */}
@@ -1015,6 +1026,6 @@ export default function JobCard() {
         vals={vals}
         totals={totals}
       />
-    </div>
+    </>
   );
 }
