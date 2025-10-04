@@ -1,0 +1,305 @@
+{
+  "brand": "Honda Motorcycle & Scooter India",
+  "last_updated": "2025-10-04",
+  "source": "https://www.honda2wheelersindia.com/",
+  "products": {
+    "motorcycles": [
+      {
+        "model": "Shine 100",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/shine100",
+        "variants": [],
+        "specs": {
+          "engine_cc": null,
+          "power": null,
+          "torque": null,
+          "mileage": null,
+          "kerb_weight": null
+        },
+        "image_url": null
+      },
+      {
+        "model": "Shine 100 DX",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/shine100-dx",
+        "variants": [],
+        "specs": {
+          "engine_cc": null,
+          "power": null,
+          "torque": null,
+          "mileage": null,
+          "kerb_weight": null
+        },
+        "image_url": null
+      },
+      {
+        "model": "Livo",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/livo",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Shine 125",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/shine-125",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "SP125",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/sp125",
+        "variants": [
+          { "name": "Standard" },
+          { "name": "25-year Anniversary Edition" }
+        ],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "SP125 Anniversary Edition",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/sp125-anniversary-edition",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CB125 Hornet",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cb125-hornet",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Unicorn",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/unicorn",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "SP160",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/sp160",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "NX200",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/nx-200",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Hornet 2.0",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/hornet-2-0",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CB300F",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cb300f",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CB300R",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cb300r",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CB350",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/CB350",
+        "variants": [],
+        "specs": {
+          "engine_cc": 348.36,
+          "power": null,
+          "torque": null,
+          "mileage": null,
+          "kerb_weight": null,
+          "notes": "OBD-2B compliant as per official page."
+        },
+        "image_url": null
+      },
+      {
+        "model": "CB350C",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/CB350C",
+        "variants": [
+          { "name": "Special Edition", "product_url": "https://www.honda2wheelersindia.com/motorcycle/CB350C-Special-Edition" }
+        ],
+        "specs": { "engine_cc": 348.36, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "H'ness CB350",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cb350-hness",
+        "variants": [],
+        "specs": { "engine_cc": 348.36, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CB350RS",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/CB350RS",
+        "variants": [],
+        "specs": { "engine_cc": 348.36, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "NX500",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/nx-500",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Rebel 500",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/rebel-500",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CB650R",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cb650r",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CBR650R",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cbr650r",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Hornet 750",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/hornet-750",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "XL750 Transalp",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/xl750-transalp",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "X-ADV",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/x-adv",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Hornet 1000 SP",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/hornet-1000-sp",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Gold Wing Tour",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/goldwing-tour",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "CBR1000RR-R SP",
+        "type": "Motorcycle",
+        "product_url": "https://www.honda2wheelersindia.com/motorcycle/cbr1000rr-r-sp",
+        "variants": [],
+        "specs": { "engine_cc": null, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      }
+    ],
+    "scooters": [
+      {
+        "model": "Activa 110",
+        "type": "Scooter",
+        "product_url": "https://www.honda2wheelersindia.com/scooter/activa110",
+        "variants": [
+          { "name": "Standard/Drum" },
+          { "name": "25-year Anniversary Edition", "product_url": "https://www.honda2wheelersindia.com/scooter/activa110-anniversary-edition" }
+        ],
+        "specs": { "engine_cc": 109.51, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Activa 125",
+        "type": "Scooter",
+        "product_url": "https://www.honda2wheelersindia.com/scooter/activa125",
+        "variants": [
+          { "name": "Standard" },
+          { "name": "25-year Anniversary Edition", "product_url": "https://www.honda2wheelersindia.com/scooter/activa125-anniversary-edition" }
+        ],
+        "specs": { "engine_cc": 124.0, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Dio 110",
+        "type": "Scooter",
+        "product_url": "https://www.honda2wheelersindia.com/scooter/dio110",
+        "variants": [],
+        "specs": { "engine_cc": 109.51, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      },
+      {
+        "model": "Dio 125",
+        "type": "Scooter",
+        "product_url": "https://www.honda2wheelersindia.com/scooter/dio125",
+        "variants": [],
+        "specs": { "engine_cc": 123.92, "power": null, "torque": null, "mileage": null, "kerb_weight": null },
+        "image_url": null
+      }
+    ],
+    "ev": [
+      {
+        "model": "Activa e:",
+        "type": "EV Scooter",
+        "product_url": "https://www.honda2wheelersindia.com/ev/activa-e",
+        "variants": [],
+        "specs": { "battery": null, "range_km": null, "charging_time": null },
+        "image_url": null
+      }
+    ]
+  },
+  "notes": [
+    "Model list captured from Honda’s official catalogue pages on 04 Oct 2025.",
+    "Specs and images on many product pages are rendered dynamically; fields set to null can be auto-filled by scraping the respective product_url endpoints.",
+    "CB350/H’ness/RS and Activa 110/125 pages confirm presence and compliance; some numeric specs required deeper parsing and are left null for now."
+  ]
+}
+

@@ -1,0 +1,422 @@
+[
+  {
+    "model": "Bajaj Freedom 125 NG04",
+    "type": "Motorcycle",
+    "variants": ["Disc", "Drum Led", "Drum"],
+    "specs": {
+      "engine_capacity": "124.58 cc",
+      "power": "9.5 PS @ 8000 rpm (CNG)",
+      "torque": "9.7 Nm @ 5000 rpm (CNG)",
+      "mileage": "NA",
+      "kerb_weight": "NA",
+      "seat_height": "NA",
+      "fuel_tank_capacity": "NA",
+      "top_speed": "NA"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/bajaj-freedom-125-ng04.png",
+    "price": {
+      "ex_showroom": "₹ 1,10,976",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/bajaj-freedom/bajaj-freedom-125-ng04"
+  },
+  {
+    "model": "Pulsar N125",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "124.45 cc",
+      "power": "12 PS @ 8500 rpm",
+      "torque": "11 Nm @ 7000 rpm",
+      "mileage": "50 kmpl",
+      "kerb_weight": "140 kg",
+      "seat_height": "805 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "99 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-n125.png",
+    "price": {
+      "ex_showroom": "₹ 91,692",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-n125"
+  },
+  {
+    "model": "Pulsar N160",
+    "type": "Motorcycle",
+    "variants": ["Single-Channel ABS", "Dual-Channel ABS"],
+    "specs": {
+      "engine_capacity": "164.82 cc",
+      "power": "16 PS @ 8750 rpm",
+      "torque": "14.65 Nm @ 6750 rpm",
+      "mileage": "44 kmpl",
+      "kerb_weight": "154 kg",
+      "seat_height": "805 mm",
+      "fuel_tank_capacity": "14 L",
+      "top_speed": "120 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-n160.png",
+    "price": {
+      "ex_showroom": "₹ 1,16,773",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-n160"
+  },
+  {
+    "model": "Pulsar N250",
+    "type": "Motorcycle",
+    "variants": ["N250 Standard"],
+    "specs": {
+      "engine_capacity": "249.07 cc",
+      "power": "24.5 PS @ 8750 rpm",
+      "torque": "21.5 Nm @ 6500 rpm",
+      "mileage": "40 kmpl",
+      "kerb_weight": "162 kg",
+      "seat_height": "795 mm",
+      "fuel_tank_capacity": "14 L",
+      "top_speed": "130 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-n250.png",
+    "price": {
+      "ex_showroom": "₹ 1,33,346",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-n250"
+  },
+  {
+    "model": "Pulsar NS125",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "124.45 cc",
+      "power": "12 PS @ 8500 rpm",
+      "torque": "11 Nm @ 7000 rpm",
+      "mileage": "50 kmpl",
+      "kerb_weight": "144 kg",
+      "seat_height": "805 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "100 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-ns125.png",
+    "price": {
+      "ex_showroom": "₹ 98,400",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-ns125"
+  },
+  {
+    "model": "Pulsar NS160",
+    "type": "Motorcycle",
+    "variants": ["NS160"],
+    "specs": {
+      "engine_capacity": "160.3 cc",
+      "power": "17.2 PS @ 9000 rpm",
+      "torque": "14.6 Nm @ 7250 rpm",
+      "mileage": "44 kmpl",
+      "kerb_weight": "152 kg",
+      "seat_height": "805 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "120 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-ns160.png",
+    "price": {
+      "ex_showroom": "₹ 1,20,171",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-ns160"
+  },
+  {
+    "model": "Pulsar NS200",
+    "type": "Motorcycle",
+    "variants": ["NS200 ABS"],
+    "specs": {
+      "engine_capacity": "199.5 cc",
+      "power": "24.5 PS @ 9750 rpm",
+      "torque": "18.7 Nm @ 8000 rpm",
+      "mileage": "36 kmpl",
+      "kerb_weight": "158 kg",
+      "seat_height": "805 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "136 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-ns200.png",
+    "price": {
+      "ex_showroom": "₹ 1,32,024",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-ns200"
+  },
+  {
+    "model": "Pulsar NS400Z",
+    "type": "Motorcycle",
+    "variants": ["NS400Z"],
+    "specs": {
+      "engine_capacity": "373 cc",
+      "power": "40 PS @ 8800 rpm",
+      "torque": "35 Nm @ 6500 rpm",
+      "mileage": "33 kmpl",
+      "kerb_weight": "174 kg",
+      "seat_height": "830 mm",
+      "fuel_tank_capacity": "15 L",
+      "top_speed": "150 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-ns400z.png",
+    "price": {
+      "ex_showroom": "₹ 1,92,328",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-ns400z"
+  },
+  {
+    "model": "Pulsar RS200",
+    "type": "Motorcycle",
+    "variants": ["RS200 ABS"],
+    "specs": {
+      "engine_capacity": "199.5 cc",
+      "power": "24.5 PS @ 9750 rpm",
+      "torque": "18.74 Nm @ 8000 rpm",
+      "mileage": "35 kmpl",
+      "kerb_weight": "167 kg",
+      "seat_height": "810 mm",
+      "fuel_tank_capacity": "13 L",
+      "top_speed": "140 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-rs200.png",
+    "price": {
+      "ex_showroom": "₹ 1,71,153",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-rs200"
+  },
+  {
+    "model": "Pulsar 125",
+    "type": "Motorcycle",
+    "variants": ["Neon (Single Seat)", "Carbon Fibre (Single Seat)", "Carbon Fibre (Split Seat)"],
+    "specs": {
+      "engine_capacity": "124.4 cc",
+      "power": "11.8 PS @ 8500 rpm",
+      "torque": "10.8 Nm @ 6500 rpm",
+      "mileage": "51.5 kmpl",
+      "kerb_weight": "140 kg",
+      "seat_height": "790 mm",
+      "fuel_tank_capacity": "11.5 L",
+      "top_speed": "99 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-125.png",
+    "price": {
+      "ex_showroom": "₹ 79,048 – 87,527",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-125"
+  },
+  {
+    "model": "Pulsar 150",
+    "type": "Motorcycle",
+    "variants": ["Single Disc", "Twin Disc"],
+    "specs": {
+      "engine_capacity": "149.5 cc",
+      "power": "14 PS @ 8500 rpm",
+      "torque": "13.25 Nm @ 6500 rpm",
+      "mileage": "49 kmpl",
+      "kerb_weight": "148 kg",
+      "seat_height": "790 mm",
+      "fuel_tank_capacity": "15 L",
+      "top_speed": "110 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-150.png",
+    "price": {
+      "ex_showroom": "₹ 1,05,144",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-150"
+  },
+  {
+    "model": "Pulsar 220F",
+    "type": "Motorcycle",
+    "variants": ["220F"],
+    "specs": {
+      "engine_capacity": "220 cc",
+      "power": "20.4 PS @ 8500 rpm",
+      "torque": "18.55 Nm @ 7000 rpm",
+      "mileage": "40 kmpl",
+      "kerb_weight": "160 kg",
+      "seat_height": "795 mm",
+      "fuel_tank_capacity": "15 L",
+      "top_speed": "134 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/pulsar-220f.png",
+    "price": {
+      "ex_showroom": "₹ 1,27,269",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/pulsar/pulsar-220f"
+  },
+  {
+    "model": "Dominar 250",
+    "type": "Motorcycle",
+    "variants": ["Dominar 250"],
+    "specs": {
+      "engine_capacity": "248.8 cc",
+      "power": "27 PS @ 8500 rpm",
+      "torque": "23.5 Nm @ 6500 rpm",
+      "mileage": "32 kmpl",
+      "kerb_weight": "180 kg",
+      "seat_height": "800 mm",
+      "fuel_tank_capacity": "13 L",
+      "top_speed": "132 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/dominar-250.png",
+    "price": {
+      "ex_showroom": "₹ 1,77,124",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/dominar/dominar-250"
+  },
+  {
+    "model": "Dominar 400",
+    "type": "Motorcycle",
+    "variants": ["Dominar 400"],
+    "specs": {
+      "engine_capacity": "373.3 cc",
+      "power": "40 PS @ 8800 rpm",
+      "torque": "35 Nm @ 6500 rpm",
+      "mileage": "29 kmpl",
+      "kerb_weight": "193 kg",
+      "seat_height": "800 mm",
+      "fuel_tank_capacity": "13 L",
+      "top_speed": "148 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/dominar-400.png",
+    "price": {
+      "ex_showroom": "₹ 2,39,176",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/dominar/dominar-400"
+  },
+  {
+    "model": "Avenger 220 Cruise",
+    "type": "Motorcycle",
+    "variants": ["Cruise 220"],
+    "specs": {
+      "engine_capacity": "220 cc",
+      "power": "19.03 PS @ 8500 rpm",
+      "torque": "17.55 Nm @ 7000 rpm",
+      "mileage": "39 kmpl",
+      "kerb_weight": "163 kg",
+      "seat_height": "737 mm",
+      "fuel_tank_capacity": "13 L",
+      "top_speed": "120 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/avenger-220-cruise.png",
+    "price": {
+      "ex_showroom": "₹ 1,36,691",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/avenger/avenger-220-cruise"
+  },
+  {
+    "model": "Avenger 160 Street",
+    "type": "Motorcycle",
+    "variants": ["Street 160"],
+    "specs": {
+      "engine_capacity": "160 cc",
+      "power": "15 PS @ 8500 rpm",
+      "torque": "13.7 Nm @ 7000 rpm",
+      "mileage": "45 kmpl",
+      "kerb_weight": "156 kg",
+      "seat_height": "737 mm",
+      "fuel_tank_capacity": "13 L",
+      "top_speed": "106 km/h"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/avenger-160-street.png",
+    "price": {
+      "ex_showroom": "₹ 1,11,569",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/avenger/avenger-160-street"
+  },
+  {
+    "model": "Platina 100",
+    "type": "Motorcycle",
+    "variants": ["ES Drum"],
+    "specs": {
+      "engine_capacity": "102 cc",
+      "power": "7.9 PS @ 7500 rpm",
+      "torque": "8.3 Nm @ 5500 rpm",
+      "mileage": "75 kmpl",
+      "kerb_weight": "117 kg",
+      "seat_height": "804 mm",
+      "fuel_tank_capacity": "11 L",
+      "top_speed": "90 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/platina-100.png",
+    "price": {
+      "ex_showroom": "₹ 65,407",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/platina/platina-100"
+  },
+  {
+    "model": "Platina 110",
+    "type": "Motorcycle",
+    "variants": ["110 Drum"],
+    "specs": {
+      "engine_capacity": "115.45 cc",
+      "power": "8.6 PS @ 7000 rpm",
+      "torque": "9.81 Nm @ 5000 rpm",
+      "mileage": "70 kmpl",
+      "kerb_weight": "119 kg",
+      "seat_height": "804 mm",
+      "fuel_tank_capacity": "11 L",
+      "top_speed": "90 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/platina-110.png",
+    "price": {
+      "ex_showroom": "₹ 69,284",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/platina/platina-110"
+  },
+  {
+    "model": "CT 110X",
+    "type": "Motorcycle",
+    "variants": ["110X"],
+    "specs": {
+      "engine_capacity": "115.45 cc",
+      "power": "8.6 PS @ 7000 rpm",
+      "torque": "9.81 Nm @ 5000 rpm",
+      "mileage": "70 kmpl",
+      "kerb_weight": "127 kg",
+      "seat_height": "812 mm",
+      "fuel_tank_capacity": "11 L",
+      "top_speed": "90 km/h (est)"
+    },
+    "image_url": "https://www.bajajauto.com/assets/images/ct-110x.png",
+    "price": {
+      "ex_showroom": "₹ 67,284",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.bajajauto.com/bikes/ct/ct-110x"
+  },
+  {
+    "model": "Chetak (Electric)",
+    "type": "EV",
+    "variants": ["3001 (3 kWh)", "3503", "3502", "3501 (3.5 kWh)"],
+    "specs": {
+      "engine_capacity": "N/A",
+      "power": "4.2 kW (peak)",
+      "torque": "20 Nm (peak)",
+      "mileage": "127 km/charge",
+      "kerb_weight": "132 kg",
+      "seat_height": "780 mm",
+      "fuel_tank_capacity": "N/A",
+      "top_speed": "62 km/h"
+    },
+    "image_url": "https://www.chetak.com/images/chetak-3501.png",
+    "price": {
+      "ex_showroom": "₹ 1,07,149 – ₹ 1,39,045",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.chetak.com"
+  }
+]

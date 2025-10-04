@@ -1,0 +1,254 @@
+[
+  {
+    "model": "Access 125",
+    "type": "Scooter",
+    "variants": ["Drum Brake", "Disc Brake", "Bluetooth Edition"],
+    "specs": {
+      "engine_capacity": "124 cc",
+      "power": "8.7 PS @ 6750 rpm",
+      "torque": "10 Nm @ 5500 rpm",
+      "mileage": "47 kmpl",
+      "kerb_weight": "106 kg",
+      "seat_height": "773 mm",
+      "fuel_tank_capacity": "5.0 L",
+      "top_speed": "90 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Access_125.png",
+    "price": {
+      "ex_showroom": "₹ 79,566 – ₹ 90,649",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/all-new-access-125-bluetooth-enabled"
+  },
+  {
+    "model": "Burgman Street 125",
+    "type": "Scooter",
+    "variants": ["Standard", "Ride Connect Edition"],
+    "specs": {
+      "engine_capacity": "124 cc",
+      "power": "8.7 PS @ 6750 rpm",
+      "torque": "10 Nm @ 5500 rpm",
+      "mileage": "50 kmpl",
+      "kerb_weight": "110 kg",
+      "seat_height": "780 mm",
+      "fuel_tank_capacity": "5.5 L",
+      "top_speed": "95 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Burgman_Street.png",
+    "price": {
+      "ex_showroom": "₹ 90,649",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/burgman-street"
+  },
+  {
+    "model": "Avenis 125",
+    "type": "Scooter",
+    "variants": ["Standard Edition", "Race Edition"],
+    "specs": {
+      "engine_capacity": "124.3 cc",
+      "power": "8.7 PS @ 6750 rpm",
+      "torque": "10 Nm @ 5500 rpm",
+      "mileage": "50 kmpl",
+      "kerb_weight": "106 kg",
+      "seat_height": "780 mm",
+      "fuel_tank_capacity": "5.2 L",
+      "top_speed": "90 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Avenis_125.png",
+    "price": {
+      "ex_showroom": "₹ 86,071",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/avenis-125"
+  },
+  {
+    "model": "Gixxer 155",
+    "type": "Motorcycle",
+    "variants": ["Standard (rear drum)", "Rear Disc"],
+    "specs": {
+      "engine_capacity": "155 cc",
+      "power": "13.6 PS @ 8000 rpm",
+      "torque": "13.8 Nm @ 6000 rpm",
+      "mileage": "45 kmpl",
+      "kerb_weight": "141 kg",
+      "seat_height": "795 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "115 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Gixxer.png",
+    "price": {
+      "ex_showroom": "₹ 1,28,708",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/gixxer"
+  },
+  {
+    "model": "Gixxer SF 155",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "155 cc",
+      "power": "13.6 PS @ 8000 rpm",
+      "torque": "13.8 Nm @ 6000 rpm",
+      "mileage": "45 kmpl",
+      "kerb_weight": "148 kg",
+      "seat_height": "795 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "115 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Gixxer_SF.png",
+    "price": {
+      "ex_showroom": "₹ 1,37,410",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/gixxer-sf"
+  },
+  {
+    "model": "Gixxer 250",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "249 cc",
+      "power": "26.5 PS @ 9300 rpm",
+      "torque": "22.2 Nm @ 7300 rpm",
+      "mileage": "35 kmpl",
+      "kerb_weight": "156 kg",
+      "seat_height": "800 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "150 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Gixxer_250.png",
+    "price": {
+      "ex_showroom": "₹ 1,83,825",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/gixxer-250"
+  },
+  {
+    "model": "Gixxer SF 250",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "249 cc",
+      "power": "26.5 PS @ 9300 rpm",
+      "torque": "22.2 Nm @ 7300 rpm",
+      "mileage": "36 kmpl",
+      "kerb_weight": "161 kg",
+      "seat_height": "800 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "150 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Gixxer_SF_250.png",
+    "price": {
+      "ex_showroom": "₹ 1,92,055",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/gixxer-sf-250"
+  },
+  {
+    "model": "Gixxer SF 250 (Flex Fuel)",
+    "type": "Motorcycle",
+    "variants": ["Flex Fuel Edition"],
+    "specs": {
+      "engine_capacity": "249 cc",
+      "power": "26.5 PS @ 9300 rpm",
+      "torque": "22.2 Nm @ 7300 rpm",
+      "mileage": "33 kmpl (E85)",
+      "kerb_weight": "161 kg",
+      "seat_height": "800 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "150 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Gixxer_SF_250_FlexFuel.png",
+    "price": {
+      "ex_showroom": "₹ 2,00,616",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/gixxer-sf-250-flex-fuel"
+  },
+  {
+    "model": "V-Strom SX (250)",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "249 cc",
+      "power": "26.5 PS @ 9300 rpm",
+      "torque": "22.2 Nm @ 7300 rpm",
+      "mileage": "36 kmpl",
+      "kerb_weight": "167 kg",
+      "seat_height": "835 mm",
+      "fuel_tank_capacity": "12 L",
+      "top_speed": "135 km/h (est)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/V-Strom_SX.png",
+    "price": {
+      "ex_showroom": "₹ 2,00,208",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/v-strom-sx"
+  },
+  {
+    "model": "Hayabusa",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "1340 cc",
+      "power": "190 PS @ 9700 rpm",
+      "torque": "150 Nm @ 7000 rpm",
+      "mileage": "17 kmpl",
+      "kerb_weight": "266 kg",
+      "seat_height": "800 mm",
+      "fuel_tank_capacity": "20 L",
+      "top_speed": "299 km/h (limited)"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/Hayabusa.png",
+    "price": {
+      "ex_showroom": "₹ 18,06,107",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/hayabusa"
+  },
+  {
+    "model": "GSX-8R",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "776 cc",
+      "power": "82 PS @ 8500 rpm",
+      "torque": "78 Nm @ 6800 rpm",
+      "mileage": "NA",
+      "kerb_weight": "205 kg",
+      "seat_height": "810 mm",
+      "fuel_tank_capacity": "16 L",
+      "top_speed": "NA"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/GSX-8R.png",
+    "price": {
+      "ex_showroom": "₹ 9,88,550",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/gsx-8r"
+  },
+  {
+    "model": "V-Strom 800 DE",
+    "type": "Motorcycle",
+    "variants": ["Standard"],
+    "specs": {
+      "engine_capacity": "776 cc",
+      "power": "83 PS @ 8500 rpm",
+      "torque": "78 Nm @ 6800 rpm",
+      "mileage": "NA",
+      "kerb_weight": "232 kg",
+      "seat_height": "855 mm",
+      "fuel_tank_capacity": "20 L",
+      "top_speed": "NA"
+    },
+    "image_url": "https://media.suzukimotorcycle.co.in/public/uploads/models/V-Strom_800DE.png",
+    "price": {
+      "ex_showroom": "₹ 11,00,763",
+      "on_road": "NA"
+    },
+    "product_page": "https://www.suzukimotorcycle.co.in/product-details/v-strom-800-de"
+  }
+]

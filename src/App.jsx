@@ -19,6 +19,7 @@ import Owner from "./Components/Owner";
 
 import User from "./Components/User";
 import Employees from "./Components/Employees";
+import Products from "./Components/Products";
 
 
 function App() {
@@ -49,6 +50,7 @@ function App() {
         <Route path="/about-us" element={<About />} />
         <Route path="/emicalculator" element={<ProtectedRoute><EmiCalculator /></ProtectedRoute>} />
         <Route path="/contact" element={<Contact />} />
+        <Route path="/products" element={<Products />} />
       </Routes>
     </>
   );
