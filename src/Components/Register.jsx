@@ -10,6 +10,8 @@ function Register() {
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const [loading, setLoading] = React.useState(false);
+  // Local message instance to guarantee context
+  const [msgApi, msgCtx] = message.useMessage();
 
   const onFinish = async (values) => {
     const payload = {
@@ -23,17 +25,28 @@ function Register() {
       setLoading(true);
       const data = await RegisterUser(payload);
       if (data?.success) {
-        message.success("Registration successful! Please login.");
+        msgApi.success("Registration successful! Please login.");
         navigate("/login");
+      } else if (data?.code === 409) {
+        // Friendly duplicate case from API helper
+        msgApi.warning(data?.message || "Email or mobile already registered.");
+      } else if (data && data.success === false) {
+        msgApi.error(data?.message || "Registration failed. Try again.");
       } else {
-        message.error(data?.message || "Registration failed. Try again.");
+        // Fallback when helper threw nothing but result is unexpected
+        msgApi.error("Registration failed. Please try again.");
       }
     } catch (err) {
+      const status = err?.response?.status;
       const apiMsg =
         err?.response?.data?.message ||
         err?.message ||
         "Registration failed. Please try again.";
-      message.error(apiMsg);
+      if (status === 409) {
+        msgApi.warning(apiMsg);
+      } else {
+        msgApi.error(apiMsg);
+      }
     } finally {
       setLoading(false);
     }
@@ -45,6 +58,7 @@ function Register() {
 
   return (
     <div className="auth-container">
+      {msgCtx}
       <div className="auth-box">
         <Title level={2} className="title">Create your account</Title>
         <Text type="secondary" className="subtitle">

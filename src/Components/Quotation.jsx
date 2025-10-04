@@ -1,11 +1,13 @@
 // QuotationOnePage.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import dayjs from "dayjs";
 import {
   Row, Col, Form, Input, InputNumber, Select, Button, Radio, message, Checkbox, Switch, Divider
 } from "antd";
 import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import ViewSheet from "./ViewSheet";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
+import { saveQuotationForm, getNextQuotationSerial } from "../apiCalls/forms";
 
 
 /* ======================
@@ -139,10 +141,10 @@ const BRANCHES = [
 ];
 
 /* ======================
-   SERIAL NUMBER (SEQUENTIAL) FROM SHEET
+   SERIAL NUMBER (SEQUENTIAL)
    ====================== */
 
-// Find the "Quotation No" column in sheet headers
+// Legacy helpers for reading the published Google Sheet when backend has no data yet
 const findSerialIdx = (header = []) => {
   const rx = /^(quotation\s*no\.?|quotation\s*number|serial\s*no\.?|serial|quote\s*id)$/i;
   let idx = header.findIndex((h) => rx.test(String(h || "").trim()));
@@ -156,8 +158,7 @@ const parseIntStrict = (s) => {
   return /^\d+$/.test(t) ? parseInt(t, 10) : null;
 };
 
-// Fast: scan from bottom; if none numeric, compute max; if still none, start at 1
-async function fetchNextSerialNumber() {
+async function computeNextSerialFromSheet() {
   const res = await fetch(RESPONSES_CSV_URL, { cache: "no-store" });
   if (!res.ok) throw new Error("Could not fetch responses sheet");
   const csv = await res.text();
@@ -168,19 +169,43 @@ async function fetchNextSerialNumber() {
   const idx = findSerialIdx(header);
   if (idx < 0) return "1";
 
-  // Scan from bottom to find the latest numeric serial quickly
   for (let i = rows.length - 1; i >= 1; i--) {
     const n = parseIntStrict(rows[i][idx]);
     if (n !== null && Number.isFinite(n)) return String(n + 1);
   }
 
-  // Fallback: compute max among numerics
   let max = 0;
   for (let i = 1; i < rows.length; i++) {
     const n = parseIntStrict(rows[i][idx]);
     if (n !== null && n > max) max = n;
   }
   return String(max + 1 || 1);
+}
+
+async function fetchNextSerialNumber() {
+  try {
+    const data = await getNextQuotationSerial();
+    const next = data?.nextSerial;
+    if (next && next !== "1") return String(next);
+    if (next) {
+      try {
+        const fallback = await computeNextSerialFromSheet();
+        if (fallback) return fallback;
+      } catch (sheetErr) {
+        console.warn('Sheet fallback failed', sheetErr);
+      }
+      return String(next);
+    }
+  } catch (err) {
+    console.error("Failed to fetch next quotation serial", err);
+  }
+  try {
+    const fallback = await computeNextSerialFromSheet();
+    if (fallback) return fallback;
+  } catch (sheetErr) {
+    console.error('Sheet fallback failed', sheetErr);
+  }
+  return dayjs().format("YYMMDDHHmmss");
 }
 
 const SCOOTER_OPTIONS = [
@@ -229,36 +254,16 @@ const inr0 = (n) =>
     maximumFractionDigits: 0,
   }).format(Math.max(0, Math.round(n || 0)));
 
-const submitToGoogleForm = (entries) => {
-  const iframeName = "gform_silent_target_" + Date.now();
-  const iframe = document.createElement("iframe");
-  iframe.name = iframeName;
-  iframe.style.display = "none";
-  document.body.appendChild(iframe);
-
-  const form = document.createElement("form");
-  form.action = `https://docs.google.com/forms/d/e/${GFORM_ID}/formResponse`;
-  form.method = "POST";
-  form.target = iframeName;
-  form.style.display = "none";
-
-  Object.entries(entries).forEach(([k, v]) => {
-    if (!k) return;
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = k;
-    input.value = String(v ?? "");
-    form.appendChild(input);
+const submitToGoogleForm = async (entries, payload) => {
+  const serialValue = entries?.[ENTRY.serial] ?? "";
+  return saveQuotationForm({
+    formId: GFORM_ID,
+    entries,
+    payload,
+    serialNo: serialValue,
+    serialEntryId: ENTRY.serial,
+    responsesCsvUrl: RESPONSES_CSV_URL,
   });
-
-  [["fvv","1"],["draftResponse","[]"],["pageHistory","0"]].forEach(([k,v]) => {
-    const i = document.createElement("input");
-    i.type = "hidden"; i.name = k; i.value = v; form.appendChild(i);
-  });
-
-  document.body.appendChild(form);
-  form.submit();
-  setTimeout(() => { form.remove(); iframe.remove(); }, 3000);
 };
 
 const toEntries = (v, executiveName) => ({
@@ -459,10 +464,10 @@ export default function Quotation() {
 
   const safeAutoSave = async () => {
     const now = Date.now();
-    if (now - lastSavedAt < 10000) return; // debounce 10s
-    const v = await handleSaveToForm();   // validates + saves
+    if (now - lastSavedAt < 10000) return null; // debounce 10s
+    const result = await handleSaveToForm();   // validates + saves
     setLastSavedAt(now);
-    return v;
+    return result;
   };
 
   // ---------- Android-proof A4 print ----------
@@ -809,8 +814,8 @@ export default function Quotation() {
       executiveName
     );
     entries[ENTRY.payload] = payloadStr;
-    submitToGoogleForm(entries);
-    return v;
+    const syncResponse = await submitToGoogleForm(entries, payload);
+    return { values: v, syncResponse };
   };
 
   // --------- WhatsApp deep-link ----------

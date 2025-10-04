@@ -11,6 +11,7 @@ import PreServiceSheet from "./PreServiceSheet";
 import PostServiceSheet from "./PostServiceSheet";
 import FetchJobcard from "./FetchJobcard";
 import ViewSheet from "./ViewSheet";
+import { saveJobCardForm, getNextJobcardSerial } from "../apiCalls/forms";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -28,6 +29,7 @@ const GFORM_BASE =
   "https://docs.google.com/forms/d/e/1FAIpQLScGtIO_uWXq30BUSP3Pgs1EQFiXTBcLLiTP69rAHcv4QPm8hA/viewform?usp=pp_url";
 const GFORM_POST =
   "https://docs.google.com/forms/d/e/1FAIpQLScGtIO_uWXq30BUSP3Pgs1EQFiXTBcLLiTP69rAHcv4QPm8hA/formResponse";
+const GFORM_ID = "1FAIpQLScGtIO_uWXq30BUSP3Pgs1EQFiXTBcLLiTP69rAHcv4QPm8hA";
 
 /** Field IDs from your Google Form */
 const GFORM_ENTRY = {
@@ -145,37 +147,54 @@ function findJCHeader(headers = []) {
   return headers.find((h) => JC_HEADER_RX.test(String(h || "").trim())) || null;
 }
 
-/** Fast: scan sheet bottom-up for last numeric JC No, return last+1. */
+async function computeNextJobCardFromSheet() {
+  const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error('Fetch failed');
+  const csv = await res.text();
+  const { headers, rows } = parseCSV(csv);
+  if (!rows.length) return '1';
+
+  const col = findJCHeader(headers);
+  if (col) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const n = parseIntStrict(rows[i][col]);
+      if (n !== null) return String(n + 1);
+    }
+    let max = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const n = parseIntStrict(rows[i][col]);
+      if (n !== null && n > max) max = n;
+    }
+    return String(max + 1 || 1);
+  }
+  return String(rows.length + 1);
+}
+
+/** Fetch next sequential JC number from backend. */
 async function fetchNextJobCardSerial() {
   try {
-    const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
-    if (!res.ok) throw new Error("Fetch failed");
-    const csv = await res.text();
-    const { headers, rows } = parseCSV(csv);
-    if (!rows.length) return "1";
-
-    const col = findJCHeader(headers);
-    if (col) {
-      // bottom-up first hit
-      for (let i = rows.length - 1; i >= 0; i--) {
-        const n = parseIntStrict(rows[i][col]);
-        if (n !== null) return String(n + 1);
+    const data = await getNextJobcardSerial();
+    const next = data?.nextSerial;
+    if (next && next !== '1') return String(next);
+    if (next) {
+      try {
+        const fallback = await computeNextJobCardFromSheet();
+        if (fallback) return fallback;
+      } catch (sheetErr) {
+        console.warn('Sheet fallback failed', sheetErr);
       }
-      // fallback: max numeric
-      let max = 0;
-      for (let i = 0; i < rows.length; i++) {
-        const n = parseIntStrict(rows[i][col]);
-        if (n !== null && n > max) max = n;
-      }
-      return String(max + 1 || 1);
+      return String(next);
     }
-
-    // No JC column detected → fallback to row count
-    return String(rows.length + 1);
-  } catch {
-    // If CSV not reachable, fallback to timestamp-like serial
-    return dayjs().format("YYMMDDHHmmss");
+  } catch (err) {
+    console.error('Failed to fetch next job card serial', err);
   }
+  try {
+    const fallback = await computeNextJobCardFromSheet();
+    if (fallback) return fallback;
+  } catch (sheetErr) {
+    console.error('Sheet fallback failed', sheetErr);
+  }
+  return dayjs().format('YYMMDDHHmmss');
 }
 
 /* Vehicle No. mask - KA05 DB 6000 */
@@ -205,47 +224,18 @@ const inr = (n) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 })
     .format(Math.max(0, Math.round(Number(n || 0))));
 
-/** Silently POST to Google Form via hidden form + iframe (bypasses CORS) */
-function autoSubmitToGoogle(entries) {
-  const iframe = document.createElement("iframe");
-  iframe.name = "gform_iframe";
-  iframe.style.display = "none";
-
-  const form = document.createElement("form");
-  form.action = GFORM_POST;
-  form.method = "POST";
-  form.target = "gform_iframe";
-  form.style.display = "none";
-
-  Object.entries(entries).forEach(([name, value]) => {
-    const input = document.createElement("input");
-    input.type = "hidden";
-    input.name = name;
-    input.value = value ?? "";
-    form.appendChild(input);
+/** Send JobCard data to backend so it can sync with Google Sheets */
+function autoSubmitToGoogle(entries, metadata) {
+  return saveJobCardForm({
+    formId: GFORM_ID,
+    entries,
+    metadata,
+    jcNo: entries?.[GFORM_ENTRY.jcNo],
+    jcEntryId: GFORM_ENTRY.jcNo,
+    responsesCsvUrl: SHEET_CSV_URL,
   });
-
-  // Optional Google params
-  const pageHistory = document.createElement("input");
-  pageHistory.type = "hidden";
-  pageHistory.name = "pageHistory";
-  pageHistory.value = "0";
-  form.appendChild(pageHistory);
-
-  document.body.appendChild(iframe);
-  document.body.appendChild(form);
-  form.submit();
-
-  // Clean up
-  setTimeout(() => {
-    try { document.body.removeChild(form); } catch {
-      // do nothing
-    }
-    try { document.body.removeChild(iframe); } catch {
-      // do nothing
-    }
-  }, 2000);
 }
+
 
 /* =========================
    WHATSAPP / SMS HELPERS
@@ -541,17 +531,17 @@ export default function JobCard() {
         [GFORM_ENTRY.jcNo]:          jc, // ✅ save-time serial
       };
 
-      autoSubmitToGoogle(entries);
-
       message.loading({ content: "Auto-saving to Google Sheet…", key: "autosave" });
-      await new Promise((res) => setTimeout(res, 1200));
-      message.success({
-        content: "All fields saved to Google Sheet via Google Form.",
-        key: "autosave",
-        duration: 2,
-      });
+      const syncResult = await autoSubmitToGoogle(entries, { totals, values: vals });
+      const autosaveMsg = syncResult?.message || "All fields saved to Google Sheet.";
+      message.success({ content: autosaveMsg, key: "autosave", duration: 2 });
     } catch (e) {
-      message.error("Please complete required fields before auto-saving.");
+      if (e?.errorFields) {
+        message.error("Please complete required fields before auto-saving.");
+      } else {
+        const apiMsg = e?.response?.data?.message || e?.message || "Failed to auto-save. Please try again.";
+        message.error(apiMsg);
+      }
       throw e;
     }
   };
