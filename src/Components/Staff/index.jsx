@@ -5,75 +5,63 @@ import { FileTextOutlined, ToolOutlined, CalendarOutlined, SoundOutlined, Appsto
 import Quotation from "../Quotation";
 import JobCard from "../JobCard";
 import BookingForm from "../BookingForm";
+import StockUpdate from "../StockUpdate";
 
 export default function Staff() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md; // < md considered mobile/tablet portrait
 
+  const container = { maxWidth: 1200, margin: "0 auto", padding: isMobile ? 12 : 16 };
+  const wrap = { paddingTop: 12, width: "100%", overflowX: "auto", minWidth: 0 };
+  const tabLabel = (icon, text) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      {icon}
+      <span>{text}</span>
+    </span>
+  );
+
   const items = [
     {
       key: "stock",
-      label: (
-        <span>
-          <AppstoreAddOutlined /> Stock Updates
-        </span>
-      ),
+      label: tabLabel(<AppstoreAddOutlined />, "Stock Updates"),
       children: (
-        <div style={{ paddingTop: 12 }}>
-          <div style={{ padding: 12, border: "1px dashed #d9d9d9", borderRadius: 8 }}>
-            Record vehicle stock changes and availability. (UI coming soon)
-          </div>
+        <div style={wrap}>
+         <StockUpdate/>
         </div>
       ),
     },
     {
       key: "quotation",
-      label: (
-        <span>
-          <FileTextOutlined /> Quotation
-        </span>
-      ),
+      label: tabLabel(<FileTextOutlined />, "Quotation"),
       children: (
-        <div style={{ paddingTop: 12, width: "100%", overflowX: "auto" }}>
+        <div style={wrap}>
           <Quotation />
         </div>
       ),
     },
     {
       key: "jobcard",
-      label: (
-        <span>
-          <ToolOutlined /> Job Card
-        </span>
-      ),
+      label: tabLabel(<ToolOutlined />, "Job Card"),
       children: (
-        <div style={{ paddingTop: 12, width: "100%", overflowX: "auto" }}>
+        <div style={wrap}>
           <JobCard />
         </div>
       ),
     },
     {
       key: "booking",
-      label: (
-        <span>
-          <CalendarOutlined /> Booking
-        </span>
-      ),
+      label: tabLabel(<CalendarOutlined />, "Booking"),
       children: (
-        <div style={{ paddingTop: 12, width: "100%", overflowX: "auto" }}>
+        <div style={wrap}>
           <BookingForm />
         </div>
       ),
     },
     {
       key: "announcements",
-      label: (
-        <span>
-          <SoundOutlined /> Announcements
-        </span>
-      ),
+      label: tabLabel(<SoundOutlined />, "Announcements"),
       children: (
-        <div style={{ paddingTop: 12 }}>
+        <div style={wrap}>
           <div style={{ padding: 12, border: "1px dashed #d9d9d9", borderRadius: 8 }}>
             Branch-wide messages and notices. (UI coming soon)
           </div>
@@ -83,7 +71,7 @@ export default function Staff() {
   ];
 
   return (
-    <div style={{ padding: isMobile ? 12 : 16 }}>
+    <div style={container}>
       <h2 style={{ marginTop: 0 }}>Staff Dashboard</h2>
       <Tabs
         defaultActiveKey="quotation"

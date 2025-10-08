@@ -16,10 +16,13 @@ import Mechanic from "./Components/Mechanic";
 import Executive from "./Components/Executive";
 import Staff from "./Components/Staff";
 import Owner from "./Components/Owner";
+import StockUpdate from "./Components/StockUpdate";
 
 import User from "./Components/User";
 import Employees from "./Components/Employees";
 import Products from "./Components/Products";
+import Service from "./Components/Service";
+import Gallery from "./Components/Gallery";
 
 
 function App() {
@@ -34,9 +37,10 @@ function App() {
         <Route path="/quotation" element={<ProtectedRoute><Quotation /></ProtectedRoute>} />
         <Route path="/register" element={<Register />} />
         <Route path="/jobcard" element={<ProtectedRoute><JobCard /></ProtectedRoute>} />
+        <Route path="/stock" element={<ProtectedRoute><StockUpdate /></ProtectedRoute>} />
 
         <Route path="/user" element={<ProtectedRoute><User /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute ><Admin /></ProtectedRoute>} />
+        <Route path="/admin" element={<ProtectedRoute roles={["admin","owner"]}><Admin /></ProtectedRoute>} />
         <Route path="/owner" element={<ProtectedRoute ><Owner /></ProtectedRoute>} />
         <Route path="/mechanic" element={<ProtectedRoute ><Mechanic /></ProtectedRoute>} />
         <Route path="/executive" element={<ProtectedRoute ><Executive /></ProtectedRoute>} />
@@ -51,6 +55,8 @@ function App() {
         <Route path="/emicalculator" element={<ProtectedRoute><EmiCalculator /></ProtectedRoute>} />
         <Route path="/contact" element={<Contact />} />
         <Route path="/products" element={<Products />} />
+        <Route path="/service" element={<Service />} />
+        <Route path="/gallery" element={<Gallery />} />
       </Routes>
     </>
   );

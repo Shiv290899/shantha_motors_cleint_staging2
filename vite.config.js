@@ -7,7 +7,7 @@ import { cwd } from 'node:process'
 export default ({ mode }) => {
   // Use Node's cwd via explicit import to satisfy linters
   const env = loadEnv(mode, cwd(), '')
-  const backendOrigin = env.VITE_BACKEND_ORIGIN 
+  const backendOrigin = env.VITE_BACKEND_ORIGIN || 'http://localhost:8082'
   return defineConfig({
     plugins: [react()],
     define: {
@@ -17,6 +17,8 @@ export default ({ mode }) => {
     },
     // Keep dev comfortable; production tweaks live in the build section below
     server: {
+      // Default dev port; can be overridden via VITE_PORT
+      port: parseInt(env.VITE_PORT || '5174', 10),
       proxy: {
         // Forward API calls during development
         '/api': {

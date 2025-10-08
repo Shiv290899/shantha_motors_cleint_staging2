@@ -8,6 +8,14 @@ const { Text } = Typography;
 export default function Employees() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const container = { maxWidth: 1200, margin: "0 auto", padding: isMobile ? 12 : 16 };
+  const wrap = { paddingTop: 12, width: "100%", overflowX: "auto", minWidth: 0 };
+  const tabLabel = (icon, text) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      {icon}
+      <span>{text}</span>
+    </span>
+  );
 
   const sampleTasks = [
     { title: "Follow up pending quotations", due: "Today" },
@@ -18,11 +26,9 @@ export default function Employees() {
   const items = [
     {
       key: "tasks",
-      label: (
-        <span><CheckSquareOutlined /> Tasks</span>
-      ),
+      label: tabLabel(<CheckSquareOutlined />, "Tasks"),
       children: (
-        <div style={{ paddingTop: 12 }}>
+        <div style={wrap}>
           <List
             bordered
             dataSource={sampleTasks}
@@ -38,11 +44,9 @@ export default function Employees() {
     },
     {
       key: "announcements",
-      label: (
-        <span><SoundOutlined /> Announcements</span>
-      ),
+      label: tabLabel(<SoundOutlined />, "Announcements"),
       children: (
-        <div style={{ paddingTop: 12 }}>
+        <div style={wrap}>
           <Announcements />
         </div>
       ),
@@ -50,7 +54,7 @@ export default function Employees() {
   ];
 
   return (
-    <div style={{ padding: isMobile ? 12 : 16 }}>
+    <div style={container}>
       <h2 style={{ marginTop: 0 }}>Employees Dashboard</h2>
       <Tabs
         defaultActiveKey="tasks"
@@ -58,6 +62,8 @@ export default function Employees() {
         destroyInactiveTabPane
         size={isMobile ? "small" : "middle"}
         tabBarGutter={isMobile ? 8 : 16}
+        tabBarStyle={{ marginBottom: isMobile ? 8 : 12 }}
+        style={{ width: "100%" }}
       />
     </div>
   );

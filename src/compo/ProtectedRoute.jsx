@@ -4,12 +4,25 @@ import { GetCurrentUser } from "../apiCalls/users";
 
 export default function ProtectedRoute({ children, roles }) {
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState(null);
+  // Seed from localStorage so UI can recover if token validation fails but we still know the role
+  const [user, setUser] = useState(() => {
+    try {
+      const raw = localStorage.getItem("user");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
 
   useEffect(() => {
     const init = async () => {
       const token = localStorage.getItem("token");
+
       if (!token) {
+        // No token: treat as unauthenticated (do not rely on cached user)
+        try { localStorage.removeItem("user"); } catch {
+          //ijhishd
+        }
         setUser(null);
         setLoading(false);
         return;
@@ -22,13 +35,13 @@ export default function ProtectedRoute({ children, roles }) {
           try { localStorage.setItem("user", JSON.stringify(result.data)); } catch {
             //ignore
           }
-        } else {
-          // Token present but validation failed (e.g., 401). Allow non-role routes.
-          setUser({});
         }
       } catch {
-        // Network or 401 error — allow non-role routes, but you may refresh login later
-        setUser({});
+        // On auth failure, clear user to force login again
+        try { localStorage.removeItem("user"); } catch {
+          //sdbf
+        }
+        setUser(null);
       } finally {
         setLoading(false);
       }

@@ -6,8 +6,9 @@ import React from "react";
 
 const useCatalogue = () => {
   const [data, setData] = React.useState({
-    honda: [],
+    
     tvs: [],
+    honda: [],
     bajaj: [],
     suzuki: [],
     hero: [],

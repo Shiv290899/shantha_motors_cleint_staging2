@@ -1,11 +1,15 @@
 import React from "react";
 import { Tabs, Grid, Typography } from "antd";
+import Branches from "./Branches";
+import StockUpdate from "../StockUpdate";
+import Users from "./Users";
 
 const { Title, Paragraph } = Typography;
 
 export default function Admin() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const container = { maxWidth: 1200, margin: "0 auto", padding: isMobile ? 12 : 16 };
 
   const Placeholder = ({ title, desc }) => (
     <div style={{ padding: 12 }}>
@@ -18,32 +22,17 @@ export default function Admin() {
     {
       key: "branches",
       label: "CRUD Branches",
-      children: (
-        <Placeholder
-          title="Manage Branches"
-          desc="Create, read, update, and delete branches. (UI coming soon)"
-        />
-      ),
+      children: <Branches />,
     },
     {
-      key: "staffs",
-      label: "CRUD Staffs",
-      children: (
-        <Placeholder
-          title="Manage Staff"
-          desc="Add, edit, or remove staff and assign roles. (UI coming soon)"
-        />
-      ),
+      key: "users",
+      label: "CRUD Users",
+      children: <Users />,
     },
     {
-      key: "employees",
-      label: "CRUD Employees",
-      children: (
-        <Placeholder
-          title="Manage Employees"
-          desc="Employee directory and access levels. (UI coming soon)"
-        />
-      ),
+      key: "stock",
+      label: "Stock Update",
+      children: <StockUpdate />,
     },
     {
       key: "analytics",
@@ -88,7 +77,7 @@ export default function Admin() {
   ];
 
   return (
-    <div style={{ padding: isMobile ? 12 : 16 }}>
+    <div style={container}>
       <h2 style={{ marginTop: 0 }}>Admin Dashboard</h2>
       <Tabs
         defaultActiveKey="branches"
@@ -97,6 +86,7 @@ export default function Admin() {
         size={isMobile ? "small" : "middle"}
         tabBarGutter={isMobile ? 8 : 16}
         tabBarStyle={{ marginBottom: isMobile ? 8 : 12 }}
+        style={{ width: "100%" }}
       />
     </div>
   );

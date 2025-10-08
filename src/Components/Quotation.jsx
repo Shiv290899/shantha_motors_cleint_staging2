@@ -7,6 +7,8 @@ import {
 import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import ViewSheet from "./ViewSheet";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
+import { GetCurrentUser } from "../apiCalls/users";
+import { getBranch } from "../apiCalls/branches";
 import { saveQuotationForm, getNextQuotationSerial } from "../apiCalls/forms";
 
 
@@ -353,8 +355,10 @@ export default function Quotation() {
   const [fittings, setFittings] = useState(["Side Stand", "Floor Mat", "ISI Helmet", "Grip Cover"]);
   const [docsReq, setDocsReq] = useState(DOCS_REQUIRED);
   const [extraVehicles, setExtraVehicles] = useState([]); // up to 2 records (V2, V3)
+  const [userStaffName, setUserStaffName] = useState();
+  const [userRole, setUserRole] = useState();
 
-  const executiveName = Form.useWatch("executive", form) || EXECUTIVES[0].name;
+  const executiveName = Form.useWatch("executive", form) || userStaffName || "";
 
   // ✅ antd message instance + helper to ensure popup shows before opening new tab/print
   const [msgApi, msgCtx] = message.useMessage();
@@ -382,9 +386,52 @@ export default function Quotation() {
 
   useEffect(() => {
     (async () => {
+      // Prefill executive + branch from logged-in user (staff)
+      try {
+        const readLocalUser = () => {
+          try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
+        };
+        const pickId = (v) => {
+          if (!v) return null;
+          if (typeof v === 'string') return v;
+          if (typeof v === 'object') return v._id || v.id || v.$oid || null;
+          return null;
+        };
+        let user = readLocalUser();
+        if (!user || !user.formDefaults) {
+          const res = await GetCurrentUser().catch(() => null);
+          if (res?.success && res.data) {
+            user = res.data;
+            try { localStorage.setItem('user', JSON.stringify(user)); } catch {
+              //uhy
+            }
+          }
+        }
+        if (user) {
+          const staffName = user?.formDefaults?.staffName || user?.name || undefined;
+          const role = user?.role ? String(user.role).toLowerCase() : undefined;
+          let branchName = user?.formDefaults?.branchName;
+          if (!branchName) {
+            const branchId = pickId(user?.formDefaults?.branchId) || pickId(user?.primaryBranch) || (Array.isArray(user?.branches) ? pickId(user.branches[0]) : undefined);
+            if (branchId) {
+              const br = await getBranch(String(branchId)).catch(() => null);
+              if (br?.success && br?.data?.name) branchName = br.data.name;
+            }
+          }
+          if (staffName) setUserStaffName(staffName);
+          if (role) setUserRole(role);
+          const patch = {};
+          if (staffName) patch.executive = staffName;
+          if (branchName) patch.branch = branchName;
+          if (Object.keys(patch).length) form.setFieldsValue(patch);
+        }
+      } catch {
+        //dj
+      }
+
       try {
         const raw = await fetchSheetRowsCSV(SHEET_CSV_URL);
-        const cleaned = raw
+      const cleaned = raw
           .map(normalizeSheetRow)
           .filter((r) => r.company && r.model && r.variant);
         if (!cleaned.length) {
@@ -1011,7 +1058,7 @@ export default function Quotation() {
           <Form
             layout="vertical"
             form={form}
-            initialValues={{ executive: EXECUTIVES[0].name }}
+            initialValues={{}}
             onValuesChange={onValuesChange}
           >
             <Row gutter={[12, 8]}>
@@ -1059,6 +1106,8 @@ export default function Quotation() {
                       sheetCsvUrl={RESPONSES_CSV_URL}
                       parseCSV={parseCsvForView}
                       dateColumn="Timestamp"
+                      forceBranch={wBranch}
+                      lockBranch={['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase())}
                       buttonText="View Sheet"
                       buttonProps={{ type: "primary" }}
                     />
@@ -1085,13 +1134,8 @@ export default function Quotation() {
                 </Form.Item>
               </Col>
               <Col xs={24} md={6}>
-                <Form.Item label="Branch" name="branch" rules={[{ required: true, message: "Select branch" }]}>
-                  <Select
-                    placeholder="Select branch"
-                    options={BRANCHES.map(b => ({ value: b, label: b }))}
-                    showSearch
-                    optionFilterProp="label"
-                  />
+                <Form.Item label="Branch" name="branch" rules={[{ required: true, message: "Branch is required" }]}>
+                  <Input readOnly placeholder="Auto-fetched from your profile" />
                 </Form.Item>
               </Col>
 
@@ -1099,9 +1143,9 @@ export default function Quotation() {
                 <Form.Item
                   label="Executive Name"
                   name="executive"
-                  rules={[{ required: true, message: "Select executive" }]}
+                  rules={[{ required: true, message: "Executive is required" }]}
                 >
-                  <Select options={EXECUTIVES.map((e) => ({ value: e.name, label: e.name }))} />
+                  <Input readOnly placeholder="Auto-fetched from your profile" />
                 </Form.Item>
               </Col>
 

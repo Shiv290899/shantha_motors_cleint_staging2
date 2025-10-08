@@ -12,6 +12,8 @@ import PostServiceSheet from "./PostServiceSheet";
 import FetchJobcard from "./FetchJobcard";
 import ViewSheet from "./ViewSheet";
 import { saveJobCardForm, getNextJobcardSerial } from "../apiCalls/forms";
+import { GetCurrentUser } from "../apiCalls/users";
+import { getBranch } from "../apiCalls/branches";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -314,6 +316,8 @@ function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
 
 export default function JobCard() {
   const [form] = Form.useForm();
+  const [userStaffName, setUserStaffName] = useState();
+  const [userRole, setUserRole] = useState();
 
   const [regDisplay, setRegDisplay] = useState("");
   const [serviceTypeLocal, setServiceTypeLocal] = useState(null);
@@ -381,7 +385,7 @@ export default function JobCard() {
       jcNo: "",
       createdAt: dayjs(),
       expectedDelivery: null,
-      branch: BRANCHES[0],
+      branch: undefined,
       executive: undefined,
       mechanic: "",
       serviceType: undefined,
@@ -402,6 +406,52 @@ export default function JobCard() {
     }),
     []
   );
+
+  // Prefill executive + branch from logged-in user (staff)
+  useEffect(() => {
+    (async () => {
+      try {
+        const readLocalUser = () => {
+          try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
+        };
+        const pickId = (v) => {
+          if (!v) return null;
+          if (typeof v === 'string') return v;
+          if (typeof v === 'object') return v._id || v.id || v.$oid || null;
+          return null;
+        };
+        let user = readLocalUser();
+        if (!user || !user.formDefaults) {
+          const res = await GetCurrentUser().catch(() => null);
+          if (res?.success && res.data) {
+            user = res.data;
+            try { localStorage.setItem('user', JSON.stringify(user)); } catch {}
+          }
+        }
+        if (user) {
+          const staffName = user?.formDefaults?.staffName || user?.name || undefined;
+          const role = user?.role ? String(user.role).toLowerCase() : undefined;
+          let branchName = user?.formDefaults?.branchName;
+          if (!branchName) {
+            const branchId = pickId(user?.formDefaults?.branchId) || pickId(user?.primaryBranch) || (Array.isArray(user?.branches) ? pickId(user.branches[0]) : undefined);
+            if (branchId) {
+              const br = await getBranch(String(branchId)).catch(() => null);
+              if (br?.success && br?.data?.name) branchName = br.data.name;
+            }
+          }
+          if (staffName) setUserStaffName(staffName);
+          if (role) setUserRole(role);
+          const patch = {};
+          if (staffName) patch.executive = staffName;
+          if (branchName) patch.branch = branchName;
+          if (Object.keys(patch).length) form.setFieldsValue(patch);
+        }
+      } catch {}
+    })();
+  }, []);
+
+  // Watch branch for locking ViewSheet to this value
+  const wBranch = Form.useWatch("branch", form);
 
   const handleRegChange = (e) => {
     const next = formatReg(e.target.value);
@@ -641,6 +691,8 @@ export default function JobCard() {
                 sheetCsvUrl={SHEET_CSV_URL}
                 parseCSV={parseCSV}
                 dateColumn="Timestamp"
+                forceBranch={wBranch}
+                lockBranch={['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase())}
                 buttonProps={{ type: "primary" }}
                 buttonText="View Sheet"
               />
@@ -671,11 +723,7 @@ export default function JobCard() {
 
               <Col xs={24} sm={10}>
                 <Form.Item label="Branch" name="branch" rules={[{ required: true }]}>
-                  <Select showSearch optionFilterProp="children" placeholder="Select branch">
-                    {BRANCHES.map((b) => (
-                      <Option key={b} value={b}>{b}</Option>
-                    ))}
-                  </Select>
+                  <Input readOnly placeholder="Auto-fetched from your profile" />
                 </Form.Item>
               </Col>
 
@@ -690,7 +738,7 @@ export default function JobCard() {
 
               <Col xs={24} md={4}>
                 <Form.Item label="Executive" name="executive" rules={[{ required: true }]}>
-                  <Select options={EXECUTIVES.map((e) => ({ value: e.name, label: e.name }))} />
+                  <Input readOnly placeholder="Auto-fetched from your profile" />
                 </Form.Item>
               </Col>
 

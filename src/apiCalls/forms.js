@@ -19,3 +19,18 @@ export const getNextJobcardSerial = async () => {
   const { data } = await axiosInstance.get("/forms/jobcard/next-serial");
   return data;
 };
+
+export const saveBookingForm = async (payload) => {
+  const { data } = await axiosInstance.post("/forms/booking", payload);
+  return data;
+};
+
+export const saveBookingViaWebhook = async ({ webhookUrl, payload, headers, method }) => {
+  const { data } = await axiosInstance.post("/forms/booking/webhook", { webhookUrl, payload, headers, method });
+  return data;
+};
+
+export const saveStockMovementForm = async (payload) => {
+  const { data } = await axiosInstance.post("/forms/stock", payload);
+  return data;
+};

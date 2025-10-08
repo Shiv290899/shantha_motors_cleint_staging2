@@ -394,9 +394,8 @@ export default function Navbar() {
   const navItems = [
     { label: "Home", path: "/" },
     { label: "Products", path: "/products" },
-    { label: "Quotation", path: "/quotation" },
-    { label: "JobCard", path: "/jobcard" },
-    { label: "BookingForm", path: "/bookingform" },
+    { label: "Service", path: "/service" },
+    { label: "Gallery", path: "/gallery" },
     { label: "EMICalculator", path: "/emicalculator" },
     { label: "Contact", path: "/contact" },
     { label: "About Us", path: "/about-us" },

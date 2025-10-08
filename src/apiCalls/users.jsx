@@ -41,7 +41,11 @@ export const LoginUser = async (values) => {
 // Get valid user
 export const GetCurrentUser = async () => {
   try {
-    const { data } = await axiosInstance.get("/users/get-valid-user");
+    const token = localStorage.getItem('token');
+    const { data } = await axiosInstance.get("/users/get-valid-user", {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      params: token ? { token } : undefined, // fallback path if a proxy strips headers
+    });
     return data;
   } catch (error) {
     console.error("GetCurrentUser failed", error);

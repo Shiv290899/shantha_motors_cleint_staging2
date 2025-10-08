@@ -102,8 +102,11 @@ const PRINT_STYLES = `
   }
 `;
 
-const writeDoc = (doc, bodyHtml) => {
+const writeDoc = (doc, bodyHtml, { inlineFallback = false } = {}) => {
   doc.open();
+  const fallbackScript = inlineFallback
+    ? `<script>setTimeout(function () { try { window.print(); } catch (e) {} }, 300);</script>`
+    : "";
   doc.write(`<!doctype html>
 <html>
 <head>
@@ -115,12 +118,7 @@ const writeDoc = (doc, bodyHtml) => {
 </head>
 <body class="print-host">
   <div class="print-wrap">${bodyHtml}</div>
-  <script>
-    // Fallback for mobile tabs where opener's print() is ignored or slow
-    setTimeout(function () {
-      try { window.print(); } catch (e) {}
-    }, 300);
-  </script>
+  ${fallbackScript}
 </body>
 </html>`);
   doc.close();
@@ -169,7 +167,8 @@ export async function handleSmartPrint(sourceNode) {
       alert("Please allow pop-ups to print.");
       return;
     }
-    writeDoc(win.document, cloned.outerHTML);
+    // Avoid double prints: do not include inline fallback; print explicitly after assets load
+    writeDoc(win.document, cloned.outerHTML, { inlineFallback: false });
     await waitForAssets(win.document);
     try { win.focus(); } catch { /* ignore */ }
     try { win.print(); } catch { /* inline fallback in the document will try */ }
@@ -189,7 +188,8 @@ export async function handleSmartPrint(sourceNode) {
 
   const win = iframe.contentWindow;
   const doc = win.document;
-  writeDoc(doc, cloned.outerHTML);
+  // Avoid double prints on desktop as well
+  writeDoc(doc, cloned.outerHTML, { inlineFallback: false });
   await waitForAssets(doc);
 
   try { win.focus(); } catch { /* ignore */ }

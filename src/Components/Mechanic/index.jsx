@@ -7,26 +7,30 @@ import Announcements from "../Announcements";
 export default function Mechanic() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const container = { maxWidth: 1200, margin: "0 auto", padding: isMobile ? 12 : 16 };
+  const wrap = { paddingTop: 12, width: "100%", overflowX: "auto", minWidth: 0 };
+  const tabLabel = (icon, text) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      {icon}
+      <span>{text}</span>
+    </span>
+  );
 
   const items = [
     {
       key: "jobcard",
-      label: (
-        <span><ToolOutlined /> Job Card</span>
-      ),
+      label: tabLabel(<ToolOutlined />, "Job Card"),
       children: (
-        <div style={{ paddingTop: 12, width: "100%", overflowX: "auto" }}>
+        <div style={wrap}>
           <JobCard />
         </div>
       ),
     },
     {
       key: "announcements",
-      label: (
-        <span><SoundOutlined /> Announcements</span>
-      ),
+      label: tabLabel(<SoundOutlined />, "Announcements"),
       children: (
-        <div style={{ paddingTop: 12 }}>
+        <div style={wrap}>
           <Announcements />
         </div>
       ),
@@ -34,7 +38,7 @@ export default function Mechanic() {
   ];
 
   return (
-    <div style={{ padding: isMobile ? 12 : 16 }}>
+    <div style={container}>
       <h2 style={{ marginTop: 0 }}>Mechanic Dashboard</h2>
       <Tabs
         defaultActiveKey="jobcard"
@@ -42,6 +46,8 @@ export default function Mechanic() {
         destroyInactiveTabPane
         size={isMobile ? "small" : "middle"}
         tabBarGutter={isMobile ? 8 : 16}
+        tabBarStyle={{ marginBottom: isMobile ? 8 : 12 }}
+        style={{ width: "100%" }}
       />
     </div>
   );

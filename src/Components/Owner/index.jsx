@@ -1,12 +1,14 @@
 import React from 'react'
-import { Tabs } from 'antd'
+import { Tabs, Grid } from 'antd'
 
 // Owner dashboard: Analytics & Reports in tabs
 export default function OwnerIndex() {
+  const screens = Grid.useBreakpoint()
+  const isMobile = !screens.md
   const styles = {
-    wrap: { maxWidth: 1100, margin: '32px auto', padding: '0 16px' },
-    h1: { fontSize: 28, marginBottom: 8 },
-    sub: { color: '#6b7280', marginBottom: 20 },
+    wrap: { maxWidth: 1200, margin: '0 auto', padding: isMobile ? 12 : 16 },
+    h1: { fontSize: 28, marginBottom: 4 },
+    sub: { color: '#6b7280', marginBottom: 16 },
     panel: { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 16 },
     h2: { fontSize: 18, fontWeight: 600, margin: '0 0 8px' },
     p: { color: '#4b5563', margin: 0 },
@@ -41,9 +43,17 @@ export default function OwnerIndex() {
 
   return (
     <div style={styles.wrap}>
-      <h1 style={styles.h1}>Analytics & Reports</h1>
+      <h2 style={styles.h1}>Analytics & Reports</h2>
       <div style={styles.sub}>Owner insights across all branches</div>
-      <Tabs defaultActiveKey="branch" items={items} animated />
+      <Tabs
+        defaultActiveKey="branch"
+        items={items}
+        animated
+        size={isMobile ? 'small' : 'middle'}
+        tabBarGutter={isMobile ? 8 : 16}
+        tabBarStyle={{ marginBottom: isMobile ? 8 : 12 }}
+        style={{ width: '100%' }}
+      />
     </div>
   )
 }

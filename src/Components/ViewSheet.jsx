@@ -86,6 +86,9 @@ export default function ViewSheet({
   highlightThreshold = 100000,
   presetsConfig,
   initialPreset = "Last 7 days",
+  // When set, auto-filter rows by this branch value and lock the branch selector
+  forceBranch,
+  lockBranch = false,
 }) {
   /* ------------------------------ UI / Data state ----------------------------- */
   const [open, setOpen] = useState(false);
@@ -110,7 +113,9 @@ export default function ViewSheet({
  
 
   // Branch filter state
-  const [selectedBranches, setSelectedBranches] = useState([]); // array of labels/values
+  const [selectedBranches, setSelectedBranches] = useState(() =>
+    forceBranch ? [String(forceBranch)] : []
+  ); // array of labels/values
 
   /* ------------------------------ Column detect ------------------------------- */
   const detectedDateKey = useMemo(() => {
@@ -141,6 +146,17 @@ export default function ViewSheet({
     }
     return null;
   }, [headers]);
+
+  // If forceBranch is provided and we have detected branch column, lock the selection
+  useEffect(() => {
+    if (!detectedBranchKey) return;
+    if (forceBranch) {
+      const val = String(forceBranch);
+      if (selectedBranches.length !== 1 || selectedBranches[0] !== val) {
+        setSelectedBranches([val]);
+      }
+    }
+  }, [forceBranch, detectedBranchKey]);
 
   /* ------------------------------- Helpers ----------------------------------- */
   const parseRowDate = useCallback(
@@ -418,22 +434,28 @@ export default function ViewSheet({
 
       {/* Right-aligned controls */}
       <div style={{ marginLeft: "auto", display: "flex", gap: 12, alignItems: "center" }}>
-        {/* Branch dropdown */}
-        <Select
-          style={{ minWidth: 220 }}
-          placeholder={
-            detectedBranchKey
-              ? `Filter by ${detectedBranchKey}…`
-              : "Branch column not found"
-          }
-          mode="multiple"
-          allowClear
-          disabled={!detectedBranchKey || branchOptions.length === 0}
-          value={selectedBranches}
-          onChange={(vals) => setSelectedBranches(vals)}
-          options={branchOptions.map((v) => ({ label: v, value: v }))}
-          maxTagCount="responsive"
-        />
+        {/* Branch filter: lock to user branch when forceBranch/lockBranch are provided */}
+        {lockBranch && forceBranch ? (
+          <span style={{ fontSize: 12, color: "#555" }}>
+            Branch: <b>{String(forceBranch)}</b>
+          </span>
+        ) : (
+          <Select
+            style={{ minWidth: 220 }}
+            placeholder={
+              detectedBranchKey
+                ? `Filter by ${detectedBranchKey}…`
+                : "Branch column not found"
+            }
+            mode="multiple"
+            allowClear
+            disabled={!detectedBranchKey || branchOptions.length === 0}
+            value={selectedBranches}
+            onChange={(vals) => setSelectedBranches(vals)}
+            options={branchOptions.map((v) => ({ label: v, value: v }))}
+            maxTagCount="responsive"
+          />
+        )}
 
         {/* Search box */}
         <Input.Search

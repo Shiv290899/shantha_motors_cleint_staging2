@@ -12,44 +12,91 @@ import {
   Typography,
   message,
   Grid,
-  Slider,
-  Space,
-  Tooltip,
   Radio,
-  Divider,
-  Statistic,
+  DatePicker,
 } from "antd";
-import {
-  InboxOutlined,
-  CreditCardOutlined,
-  InfoCircleOutlined,
-} from "@ant-design/icons";
+import { InboxOutlined, CreditCardOutlined } from "@ant-design/icons";
+import { saveBookingForm, saveBookingViaWebhook } from "../apiCalls/forms";
+import { GetCurrentUser } from "../apiCalls/users";
+import { getBranch } from "../apiCalls/branches";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
 const { useBreakpoint } = Grid;
 const { Option } = Select;
 
+// Finance options (for HP)
+const FINANCIERS = [
+  "IDFC",
+  "L&T FINANCE LIMITED",
+  "JANA SMALL FINANCE BANK",
+  "SHRIRAM FINANCE",
+  "TVS CREDIT",
+  "INDUSIND BANK",
+  "AXIS BANK",
+  "HINDHUJA FINANCE",
+];
+
 const phoneRule = [
   { required: true, message: "Mobile number is required" },
   { pattern: /^[6-9]\d{9}$/, message: "Enter a valid 10-digit Indian mobile number" },
 ];
 
-// Normalize keys from your Excel-exported JSON
-const normalizeRow = (row = {}) => ({
-  company: String(row["Company Name"] || "").trim(),
-  model: String(row["Model Name"] || "").trim(),
-  variant: String(row["Variant"] || "").trim(),
-  onRoadPrice: Number(String(row["On-Road Price"] || "0").replace(/[,₹\s]/g, "")) || 0,
+// ---- Vehicle data via Google Sheet (shared with Quotation) ----
+// CSV published from Google Sheets (same as in Quotation.jsx)
+const SHEET_CSV_URL =
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
+
+// Minimal CSV parser (copied from Quotation logic)
+const parseCsv = (text) => {
+  const rows = [];
+  let row = [], col = "", inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i], n = text[i + 1];
+    if (c === '"' && !inQuotes) { inQuotes = true; continue; }
+    if (c === '"' && inQuotes) {
+      if (n === '"') { col += '"'; i++; continue; }
+      inQuotes = false; continue;
+    }
+    if (c === "," && !inQuotes) { row.push(col); col = ""; continue; }
+    if ((c === "\n" || c === "\r") && !inQuotes) {
+      if (col !== "" || row.length) { row.push(col); rows.push(row); row = []; col = ""; }
+      if (c === "\r" && n === "\n") i++;
+      continue;
+    }
+    col += c;
+  }
+  if (col !== "" || row.length) { row.push(col); rows.push(row); }
+  return rows;
+};
+
+// Header aliases (copied from Quotation)
+const HEADERS = {
+  company: ["Company", "Company Name"],
+  model: ["Model", "Model Name"],
+  variant: ["Variant"],
+  price: ["On-Road Price", "On Road Price", "Price"],
+};
+
+const pick = (row, keys) =>
+  String(keys.map((k) => row[k] ?? "").find((v) => v !== "") || "").trim();
+
+const normalizeSheetRow = (row = {}) => ({
+  company: pick(row, HEADERS.company),
+  model: pick(row, HEADERS.model),
+  variant: pick(row, HEADERS.variant),
+  onRoadPrice:
+    Number(String(pick(row, HEADERS.price) || "0").replace(/[,\s₹]/g, "")) || 0,
 });
 
-// INR formatter
-const inr0 = (n) =>
-  new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(Math.max(0, Math.round(n || 0)));
+// Fallback normalize (for older static JSON shape if ever used)
+const normalizeFallbackRow = (row = {}) => ({
+  company: String(row["Company Name"] || row.company || "").trim(),
+  model: String(row["Model Name"] || row.model || "").trim(),
+  variant: String(row["Variant"] || row.variant || "").trim(),
+  onRoadPrice: Number(String(row["On-Road Price"] || row.onRoadPrice || "0").replace(/[,₹\s]/g, "")) || 0,
+});
+
 
 export default function BookingForm() {
   const screens = useBreakpoint();
@@ -59,32 +106,96 @@ export default function BookingForm() {
   const [form] = Form.useForm();
   const [aadharList, setAadharList] = useState([]);
   const [panList, setPanList] = useState([]);
+  const [otherList, setOtherList] = useState([]); // optional extra attachment
   const [bikeData, setBikeData] = useState([]);
+  const [userRole, setUserRole] = useState();
+  const [userStaffName, setUserStaffName] = useState();
 
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const purchaseType = Form.useWatch("purchaseType", form);
 
-  // ---- EMI sample STATE (driven by form fields) ----
-  const fixedProcessingFee = 8000;
-  const [emiPrice, setEmiPrice] = useState(0);          // on-road price
-  const [emiDown, setEmiDown] = useState(0);            // down payment (booking amount)
-  const [emiRate, setEmiRate] = useState(11);
-  const [tenureType, setTenureType] = useState("months"); // "months" | "years"
-  const [tenure, setTenure] = useState(24);
+  // On-road price of selected variant (for display only)
+  const [emiPrice, setEmiPrice] = useState(0);
 
-  // Load & normalize from /public/bikeData.json
+  // Load vehicle data from Google Sheet (same dataset as Quotation). Fallback to /bikeData.json
   useEffect(() => {
-    fetch("/bikeData.json")
-      .then((res) => res.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          const cleaned = data.map(normalizeRow).filter(r => r.company && r.model && r.variant);
-          setBikeData(cleaned);
-        } else {
-          message.error("Invalid bike data format");
+    let cancelled = false;
+    const load = async () => {
+      // Prefill executive + branch from logged-in user (staff-like roles)
+      try {
+        const readLocalUser = () => {
+          try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
+        };
+        const pickId = (v) => {
+          if (!v) return null;
+          if (typeof v === 'string') return v;
+          if (typeof v === 'object') return v._id || v.id || v.$oid || null;
+          return null;
+        };
+        let user = readLocalUser();
+        if (!user || !user.formDefaults) {
+          const res = await GetCurrentUser().catch(() => null);
+          if (res?.success && res.data) {
+            user = res.data;
+            try { localStorage.setItem('user', JSON.stringify(user)); } catch {}
+          }
         }
-      })
-      .catch(() => message.error("Failed to load bike data"));
+        if (user && !cancelled) {
+          const staffName = user?.formDefaults?.staffName || user?.name || undefined;
+          const role = user?.role ? String(user.role).toLowerCase() : undefined;
+          let branchName = user?.formDefaults?.branchName;
+          if (!branchName) {
+            const branchId = pickId(user?.formDefaults?.branchId) || pickId(user?.primaryBranch) || (Array.isArray(user?.branches) ? pickId(user.branches[0]) : undefined);
+            if (branchId) {
+              const br = await getBranch(String(branchId)).catch(() => null);
+              if (br?.success && br?.data?.name) branchName = br.data.name;
+            }
+          }
+          if (!cancelled) {
+            if (staffName) setUserStaffName(staffName);
+            if (role) setUserRole(role);
+            const patch = {};
+            if (staffName) patch.executive = staffName;
+            if (branchName) patch.branch = branchName;
+            if (Object.keys(patch).length) form.setFieldsValue(patch);
+          }
+        }
+      } catch {}
+
+      try {
+        const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error("sheet fetch failed");
+        const csv = await res.text();
+        if (csv.trim().startsWith("<")) throw new Error("expected CSV, got HTML");
+        const rows = parseCsv(csv);
+        if (!rows.length) throw new Error("empty sheet");
+        const headers = rows[0].map((h) => (h || "").trim());
+        const data = rows.slice(1).map((r) => {
+          const obj = {};
+          headers.forEach((h, i) => (obj[h] = r[i] ?? ""));
+          return obj;
+        });
+        const cleaned = data.map(normalizeSheetRow).filter((r) => r.company && r.model && r.variant);
+        if (!cancelled) setBikeData(cleaned);
+      } catch  {
+        // Fallback to a static file if present
+        try {
+          const res2 = await fetch("/bikeData.json", { cache: "no-store" });
+          if (!res2.ok) throw new Error("fallback missing");
+          const data = await res2.json();
+          const cleaned = (Array.isArray(data) ? data : [])
+            .map(normalizeFallbackRow)
+            .filter((r) => r.company && r.model && r.variant);
+          if (!cancelled) setBikeData(cleaned);
+          if (!Array.isArray(data)) message.warning("Loaded fallback bikeData.json");
+        } catch {
+          message.error("Could not load vehicle data. Please try again later.");
+        }
+      }
+    };
+    load();
+    return () => { cancelled = true; };
   }, []);
 
   // Dropdown lists
@@ -121,11 +232,7 @@ export default function BookingForm() {
     setEmiPrice(price);
   };
 
-  // Keep EMI Down Payment in sync with "Booking Amount"
-  const handleBookingAmountChange = (val) => {
-    const clean = Number(val || 0);
-    setEmiDown(clean);
-  };
+  // No EMI syncing needed; booking amount is independent now
 
   // Upload rules
   const beforeUpload = (file) => {
@@ -145,39 +252,116 @@ export default function BookingForm() {
     return false;
   };
 
-  const onFinish = (values) => {
+  // --- Google Form integration (configure IDs) ---
+  const BOOKING_GFORM_ID = import.meta.env.VITE_BOOKING_GFORM_ID || "";
+  const BOOKING_GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || ""; // optional Apps Script Web App URL
+  const ENTRY = {
+    customerName: import.meta.env.VITE_BOOKING_ENTRY_CUSTOMER_NAME || "",
+    mobileNumber: import.meta.env.VITE_BOOKING_ENTRY_MOBILE || "",
+    company: import.meta.env.VITE_BOOKING_ENTRY_COMPANY || "",
+    model: import.meta.env.VITE_BOOKING_ENTRY_MODEL || "",
+    variant: import.meta.env.VITE_BOOKING_ENTRY_VARIANT || "",
+    onRoadPrice: import.meta.env.VITE_BOOKING_ENTRY_ONROAD || "",
+    address: import.meta.env.VITE_BOOKING_ENTRY_ADDRESS || "",
+    rtoOffice: import.meta.env.VITE_BOOKING_ENTRY_RTO || "",
+    purchaseType: import.meta.env.VITE_BOOKING_ENTRY_PURCHASE_TYPE || "",
+    financier: import.meta.env.VITE_BOOKING_ENTRY_FINANCIER || "",
+    executive: import.meta.env.VITE_BOOKING_ENTRY_EXECUTIVE || "",
+    branch: import.meta.env.VITE_BOOKING_ENTRY_BRANCH || "",
+    onlineMethod: import.meta.env.VITE_BOOKING_ENTRY_ONLINE_METHOD || "",
+    utr: import.meta.env.VITE_BOOKING_ENTRY_UTR || "",
+    onlineBank: import.meta.env.VITE_BOOKING_ENTRY_ONLINE_BANK || "",
+    onlineDate: import.meta.env.VITE_BOOKING_ENTRY_ONLINE_DATE || "",
+    cardType: import.meta.env.VITE_BOOKING_ENTRY_CARD_TYPE || "",
+    cardBank: import.meta.env.VITE_BOOKING_ENTRY_CARD_BANK || "",
+    cardLast4: import.meta.env.VITE_BOOKING_ENTRY_CARD_LAST4 || "",
+    posTxnId: import.meta.env.VITE_BOOKING_ENTRY_POS_TXN || "",
+    cardDate: import.meta.env.VITE_BOOKING_ENTRY_CARD_DATE || "",
+    payload: import.meta.env.VITE_BOOKING_ENTRY_PAYLOAD || "",
+  };
+
+  const toEntries = (v) => {
+    const out = {};
+    const setIf = (key, val) => {
+      if (!ENTRY[key]) return; // skip if not configured
+      if (val === undefined || val === null || val === "") return;
+      out[ENTRY[key]] = String(val);
+    };
+    setIf("customerName", v.customerName);
+    setIf("mobileNumber", v.mobileNumber);
+    setIf("company", v.company);
+    setIf("model", v.bikeModel);
+    setIf("variant", v.variant);
+    setIf("onRoadPrice", v.onRoadPrice);
+    setIf("address", v.address);
+    setIf("rtoOffice", v.rtoOffice);
+    setIf("purchaseType", v.purchaseType);
+    setIf("financier", v.financier);
+    setIf("executive", v.executive);
+    setIf("branch", v.branch);
+    setIf("onlineMethod", v.onlineMethod);
+    setIf("utr", v.utr);
+    setIf("onlineBank", v.onlineBank);
+    if (v.onlineDate) setIf("onlineDate", v.onlineDate?.format?.("YYYY-MM-DD") || v.onlineDate);
+    setIf("cardType", v.cardType);
+    setIf("cardBank", v.cardBank);
+    setIf("cardLast4", v.cardLast4);
+    setIf("posTxnId", v.posTxnId);
+    if (v.cardDate) setIf("cardDate", v.cardDate?.format?.("YYYY-MM-DD") || v.cardDate);
+    if (ENTRY.payload) {
+      try { out[ENTRY.payload] = JSON.stringify(v); } catch {}
+    }
+    return out;
+  };
+
+  const onFinish = async (values) => {
     const aadhar = aadharList[0]?.originFileObj || null;
     const pan = panList[0]?.originFileObj || null;
+    const other = otherList[0]?.originFileObj || null;
 
     const payload = {
       ...values,
       mobileNumber: values.mobileNumber?.trim(),
-      alternateMobileNumber: values.alternateMobileNumber?.trim() || undefined,
-      documents: { aadhar, pan },
+      // removed alternate mobile
+      documents: { aadhar, pan, other },
 
-      // Helpful to include EMI snapshot in submission:
-      emiSnapshot: {
-        onRoadPrice: emiPrice,
-        downPayment: emiDown,
-        interestRate: emiRate,
-        tenureType,
-        tenure,
-        ...emiCalc, // from memo below
-      },
+      // EMI details removed from booking submission
     };
 
-    if (import.meta.env.DEV) {
-      console.log("Booking submitted:", payload);
+    try {
+      if (BOOKING_GAS_URL) {
+        // Prefer Apps Script webhook if provided (writes directly to the sheet)
+        const payloadToSend = {
+          ...payload,
+          // Don't send binary File objects; send filenames only
+          documents: {
+            aadharName: aadhar?.name || "",
+            panName: pan?.name || "",
+            otherName: other?.name || "",
+          },
+        };
+        await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, payload: payloadToSend });
+      } else if (BOOKING_GFORM_ID) {
+        // Fallback to Google Form submission if configured
+        const entries = toEntries(payload);
+        await saveBookingForm({ formId: BOOKING_GFORM_ID, entries });
+      } else {
+        message.error("Booking not configured. Set VITE_BOOKING_GAS_URL or VITE_BOOKING_GFORM_ID.");
+        return;
+      }
+      message.success("✅ Booking submitted!");
+    } catch (e) {
+      message.error("Failed to submit booking. Please try again.");
+      return;
     }
-    message.success("✅ Booking submitted!");
     form.resetFields();
     setAadharList([]);
     setPanList([]);
+    setOtherList([]);
     setSelectedCompany("");
     setSelectedModel("");
-    // reset emi
+    // reset price display
     setEmiPrice(0);
-    setEmiDown(0);
   };
 
   const onFinishFailed = ({ errorFields }) => {
@@ -186,29 +370,7 @@ export default function BookingForm() {
     }
   };
 
-  // -------- EMI CALC (Flat/Simple interest) --------
-  const emiCalc = useMemo(() => {
-    const base = Math.max(Number(emiPrice || 0) - Number(emiDown || 0), 0);
-    const p = base + fixedProcessingFee;
-    const m = tenureType === "years"
-      ? Math.max(1, Number(tenure || 0)) * 12
-      : Math.max(1, Number(tenure || 0));
-    const y = m / 12;
-    const r = Number(emiRate || 0) / 100;
-
-    const interest = p * r * y;
-    const total = p + interest;
-    const monthly = m > 0 ? total / m : 0;
-
-    return {
-      principal: isFinite(p) ? p : 0,
-      months: isFinite(m) ? m : 0,
-      years: isFinite(y) ? y : 0,
-      totalInterest: isFinite(interest) ? interest : 0,
-      totalPayable: isFinite(total) ? total : 0,
-      monthlyPay: isFinite(monthly) ? monthly : 0,
-    };
-  }, [emiPrice, emiDown, emiRate, tenure, tenureType]);
+  // EMI calculator removed
 
   // Header badge
   const headerBadge = (
@@ -269,6 +431,28 @@ export default function BookingForm() {
           onFinishFailed={onFinishFailed}
           requiredMark="optional"
         >
+          {/* Branch + Executive (auto from user) */}
+          <Row gutter={[16, 0]}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label="Branch"
+                name="branch"
+                rules={[{ required: ['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase()), message: "Branch is required" }]}
+              >
+                <Input size="large" placeholder="Auto-fetched from your profile" readOnly />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label="Executive Name"
+                name="executive"
+                rules={[{ required: ['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase()), message: "Executive is required" }]}
+              >
+                <Input size="large" placeholder="Auto-fetched from your profile" readOnly />
+              </Form.Item>
+            </Col>
+          </Row>
+
           {/* 1) Customer Name */}
           <Form.Item
             label="Customer Name"
@@ -290,16 +474,7 @@ export default function BookingForm() {
                 <Input size="large" placeholder="10-digit number" maxLength={10} inputMode="numeric" allowClear />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
-              <Form.Item
-                label="Alternate Mobile Number"
-                name="alternateMobileNumber"
-                rules={[{ pattern: /^$|^[6-9]\d{9}$/, message: "Enter a valid 10-digit number" }]}
-                normalize={(v) => (v ? v.replace(/\D/g, "").slice(0, 10) : v)}
-              >
-                <Input size="large" placeholder="Optional" maxLength={10} inputMode="numeric" allowClear />
-              </Form.Item>
-            </Col>
+            {/* Alternate Mobile removed */}
           </Row>
 
           {/* 3) Booking Amount (syncs to EMI Down Payment) */}
@@ -317,11 +492,107 @@ export default function BookingForm() {
                   step={500}
                   prefix={<CreditCardOutlined />}
                   placeholder="Enter amount paid"
-                  onChange={handleBookingAmountChange}
                 />
               </Form.Item>
             </Col>
           </Row>
+
+          {/* Payment Mode & Financier (if HP) */}
+          <Row gutter={[16, 0]}>
+            <Col xs={24} md={12}>
+              <Form.Item
+                label="Payment Mode"
+                name="purchaseType"
+                initialValue="cash"
+                rules={[{ required: true, message: "Choose payment mode" }]}
+              >
+                <Radio.Group>
+                  <Radio.Button value="cash">Cash (No Hypothecation)</Radio.Button>
+                  <Radio.Button value="hp">HP (Hypothecation)</Radio.Button>
+                  <Radio.Button value="online">Online (UPI/NEFT/RTGS)</Radio.Button>
+                  <Radio.Button value="card">Card (Debit/Credit)</Radio.Button>
+                </Radio.Group>
+              </Form.Item>
+            </Col>
+            {purchaseType === "hp" && (
+              <Col xs={24} md={12}>
+                <Form.Item
+                  label="Financier"
+                  name="financier"
+                  rules={[{ required: true, message: "Select financier" }]}
+                >
+                  <Select size="large" placeholder="Select Financier" showSearch optionFilterProp="children">
+                    {FINANCIERS.map((f) => (
+                      <Option key={f} value={f}>{f}</Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </Col>
+            )}
+          </Row>
+          {purchaseType === "online" && (
+            <Row gutter={[16, 0]}>
+              <Col xs={24} md={6}>
+                <Form.Item label="Method" name="onlineMethod" rules={[{ required: true }]}>
+                  <Select size="large" placeholder="Select">
+                    <Option value="UPI">UPI</Option>
+                    <Option value="IMPS">IMPS</Option>
+                    <Option value="NEFT">NEFT</Option>
+                    <Option value="RTGS">RTGS</Option>
+                    <Option value="NetBanking">NetBanking</Option>
+                  </Select>
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="UTR / Txn No" name="utr" rules={[{ required: true }]}>
+                  <Input size="large" placeholder="Transaction/UTR number" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="Bank" name="onlineBank" rules={[{ required: true }]}>
+                  <Input size="large" placeholder="Bank name" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="Date" name="onlineDate" rules={[{ required: true }]}>
+                  <DatePicker size="large" style={{ width: "100%" }} />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
+
+          {purchaseType === "card" && (
+            <Row gutter={[16, 0]}>
+              <Col xs={24} md={6}>
+                <Form.Item label="Card Type" name="cardType" rules={[{ required: true }]}>
+                  <Radio.Group>
+                    <Radio.Button value="debit">Debit</Radio.Button>
+                    <Radio.Button value="credit">Credit</Radio.Button>
+                  </Radio.Group>
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="Bank" name="cardBank" rules={[{ required: true }]}>
+                  <Input size="large" placeholder="Bank name" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="Last 4 digits" name="cardLast4" rules={[{ required: true, pattern: /^\d{4}$/, message: "Enter 4 digits" }]}>
+                  <Input size="large" maxLength={4} inputMode="numeric" placeholder="1234" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="POS Txn ID" name="posTxnId" rules={[{ required: true }]}>
+                  <Input size="large" placeholder="POS transaction id" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item label="Date" name="cardDate" rules={[{ required: true }]}>
+                  <DatePicker size="large" style={{ width: "100%" }} />
+                </Form.Item>
+              </Col>
+            </Row>
+          )}
 
           {/* 4) Company → Model → Variant (sets On-Road Price) */}
           <Row gutter={[16, 0]}>
@@ -410,193 +681,20 @@ export default function BookingForm() {
             </Col>
           </Row>
 
-          {/* 5) EMI CALCULATOR (inline) */}
-          <Card
-            size="small"
-            style={{ borderRadius: 12, marginTop: 4, marginBottom: 12 }}
-            bodyStyle={{ padding: isMobile ? 12 : 20 }}
-            title={
-              <Space>
-                <Text strong>EMI Calculator</Text>
-                <Tooltip title="Uses On-Road Price from the selected variant and Booking Amount as Down Payment.">
-                  <InfoCircleOutlined />
-                </Tooltip>
-              </Space>
-            }
-          >
-            <Row gutter={[16, 16]}>
-              {/* On-Road Price (locked to selection) */}
-              <Col xs={24} md={12}>
-                <Form.Item label="On-Road Price (₹)">
-                  <InputNumber
-                    size={isMobile ? "large" : "middle"}
-                    style={{ width: "100%" }}
-                    readOnly
-                    value={emiPrice}
-                    formatter={(val) => `₹ ${String(val ?? "0").replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`}
-                  />
-                  <Slider
-                    disabled
-                    tooltip={{ open: false }}
-                    min={0}
-                    max={Math.max(emiPrice, 100000)}
-                    value={emiPrice}
-                    style={{ marginTop: 8 }}
-                  />
-                </Form.Item>
-              </Col>
+          {/* RTO (after vehicle details, before documents) */}
+          <Row gutter={[16, 0]}>
+            <Col xs={24} md={12}>
+              <Form.Item
+                label="RTO (Office)"
+                name="rtoOffice"
+                rules={[{ required: true, message: "Enter RTO office" }]}
+              >
+                <Input size="large" placeholder="e.g., KA-41 Muddimapalya" allowClear />
+              </Form.Item>
+            </Col>
+          </Row>
 
-              {/* Down Payment (kept in sync with Booking Amount) */}
-              <Col xs={24} md={12}>
-                <Form.Item label="Down Payment (₹)">
-                  <InputNumber
-                    size={isMobile ? "large" : "middle"}
-                    style={{ width: "100%" }}
-                    min={0}
-                    max={emiPrice}
-                    step={1000}
-                    value={emiDown}
-                    onChange={(v) => {
-                      const n = Math.min(Number(v || 0), emiPrice || 0);
-                      setEmiDown(n);
-                      // keep Form's bookingAmount in sync
-                      form.setFieldsValue({ bookingAmount: n });
-                    }}
-                    formatter={(val) => `₹ ${String(val ?? "0").replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`}
-                    parser={(val) => String(val || "0").replace(/[₹,\s,]/g, "")}
-                  />
-                  <Slider
-                    tooltip={{ open: false }}
-                    min={0}
-                    max={emiPrice || 0}
-                    step={1000}
-                    value={Math.min(emiDown, emiPrice || 0)}
-                    onChange={(v) => {
-                      setEmiDown(v);
-                      form.setFieldsValue({ bookingAmount: v });
-                    }}
-                    style={{ marginTop: 8 }}
-                  />
-                </Form.Item>
-              </Col>
-
-              {/* Interest Rate (Flat) */}
-              <Col xs={24} md={12}>
-                <Form.Item label="Interest Rate (% p.a., flat)">
-                  <InputNumber
-                    size={isMobile ? "large" : "middle"}
-                    min={0}
-                    max={36}
-                    step={0.1}
-                    value={emiRate}
-                    onChange={(v) => setEmiRate(Number(v || 0))}
-                    style={{ width: "100%" }}
-                  />
-                  <Slider
-                    tooltip={{ open: false }}
-                    min={0}
-                    max={36}
-                    step={0.1}
-                    value={emiRate}
-                    onChange={(v) => setEmiRate(Number(v))}
-                    style={{ marginTop: 8 }}
-                  />
-                </Form.Item>
-              </Col>
-
-              {/* Tenure */}
-              <Col xs={24} md={12}>
-                <Form.Item label="Tenure">
-                  <Radio.Group
-                    value={tenureType}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setTenureType(next);
-                      if (next === "years") setTenure(Math.max(1, Math.round(tenure / 12)));
-                      else setTenure(Math.max(1, Math.round(tenure * 12)));
-                    }}
-                    style={{ marginBottom: 8, display: "flex", gap: 8, flexWrap: "wrap" }}
-                  >
-                    <Radio.Button value="months">Months</Radio.Button>
-                    <Radio.Button value="years">Years</Radio.Button>
-                  </Radio.Group>
-
-                  {tenureType === "months" ? (
-                    <>
-                      <InputNumber
-                        min={1}
-                        max={120}
-                        step={1}
-                        value={tenure}
-                        onChange={(v) => setTenure(Number(v || 0))}
-                        style={{ width: "100%" }}
-                      />
-                      <Slider
-                        tooltip={{ open: false }}
-                        min={1}
-                        max={120}
-                        step={1}
-                        value={tenure}
-                        onChange={(v) => setTenure(Number(v))}
-                        style={{ marginTop: 8 }}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <InputNumber
-                        min={1}
-                        max={10}
-                        step={1}
-                        value={tenure}
-                        onChange={(v) => setTenure(Number(v || 0))}
-                        style={{ width: "100%" }}
-                      />
-                      <Slider
-                        tooltip={{ open: false }}
-                        min={1}
-                        max={10}
-                        step={1}
-                        value={tenure}
-                        onChange={(v) => setTenure(Number(v))}
-                        style={{ marginTop: 8 }}
-                      />
-                    </>
-                  )}
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Divider style={{ margin: isMobile ? "12px 0" : "16px 0" }} />
-
-            {/* EMI Results */}
-            <Row gutter={[16, 16]}>
-             
-
-              <Col xs={24} sm={12} lg={6}>
-                <Card size="small" bordered style={{ borderRadius: 12 }}>
-                  <Statistic title="Monthly Payment" value={inr0(emiCalc.monthlyPay)} />
-                  <Text type="secondary" style={{ display: "block" }}>
-                    over {emiCalc.months} months
-                  </Text>
-                </Card>
-              </Col>
-
-              <Col xs={24} sm={12} lg={6}>
-                <Card size="small" bordered style={{ borderRadius: 12 }}>
-                  <Statistic title="Total Interest (flat)" value={inr0(emiCalc.totalInterest)} />
-                  <Text type="secondary" style={{ display: "block" }}>
-                    {emiRate}% p.a. × {(emiCalc.years).toFixed(2)} yrs
-                  </Text>
-                </Card>
-              </Col>
-
-              <Col xs={24} sm={12} lg={6}>
-                <Card size="small" bordered style={{ borderRadius: 12 }}>
-                  <Statistic title="Total Payable" value={inr0(emiCalc.totalPayable)} />
-                </Card>
-              </Col>
-            </Row>
-          </Card>
+          {/* EMI calculator removed */}
 
           {/* 6) Address */}
           <Form.Item
@@ -673,6 +771,25 @@ export default function BookingForm() {
                   </Dragger>
                 </Form.Item>
               </Col>
+
+              <Col xs={24} md={12}>
+                <Form.Item
+                  label="Additional Document (PDF/JPG/PNG) — Optional"
+                >
+                  <Dragger
+                    multiple={false}
+                    beforeUpload={beforeUpload}
+                    fileList={otherList}
+                    onChange={({ fileList }) => setOtherList(fileList)}
+                    maxCount={1}
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    itemRender={(origin) => origin}
+                  >
+                    <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+                    <p className="ant-upload-text">Click or drag file to this area to upload</p>
+                  </Dragger>
+                </Form.Item>
+              </Col>
             </Row>
           </Card>
 
@@ -687,4 +804,3 @@ export default function BookingForm() {
     </div>
   );
 }
-
