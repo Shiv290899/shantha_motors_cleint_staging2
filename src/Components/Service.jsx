@@ -396,27 +396,27 @@ export default function Service() {
               style={{ marginTop: 12 }}
             >
               <Row gutter={[12, 12]}>
-                <Col xs={24} md={8}>
+                <Col xs={24} sm={12} md={8}>
                   <Form.Item name="name" label={<Text style={{ color: "#fff" }}>Full Name</Text>} rules={[{ required: true }]}>
                     <Input placeholder="Full Name" />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={8}>
+                <Col xs={24} sm={12} md={8}>
                   <Form.Item name="mobile" label={<Text style={{ color: "#fff" }}>Mobile Number</Text>} rules={[{ required: true }]}>
                     <Input placeholder="Mobile Number" />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={8}>
+                <Col xs={24} sm={12} md={8}>
                   <Form.Item name="model" label={<Text style={{ color: "#fff" }}>Vehicle Model</Text>}>
                     <Input placeholder="Vehicle Model" />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={16}>
+                <Col xs={24} sm={12} md={16}>
                   <Form.Item name="date" label={<Text style={{ color: "#fff" }}>Preferred Date</Text>}>
                     <Input placeholder="YYYY-MM-DD" />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={8}>
+                <Col xs={24} sm={12} md={8}>
                   <Form.Item label={<span />} colon={false}>
                     <Button htmlType="submit" size="large">Submit Request</Button>
                   </Form.Item>

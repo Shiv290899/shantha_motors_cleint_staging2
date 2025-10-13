@@ -1,0 +1,35 @@
+/* Global responsive enhancements */
+
+html, body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+img, video, canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Ant Design helpers */
+.ant-form-item-label > label {
+  white-space: normal; /* allow labels to wrap on mobile */
+}
+
+/* Tables: allow horizontal scroll on small screens */
+@media (max-width: 768px) {
+  .ant-table {
+    font-size: 13px;
+  }
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+}
+
+/* Controls comfortable tap targets on mobile */
+@media (max-width: 480px) {
+  .ant-btn, .ant-input, .ant-select-selector, .ant-input-number, .ant-segmented, .ant-radio-group {
+    min-height: 36px;
+  }
+}
+

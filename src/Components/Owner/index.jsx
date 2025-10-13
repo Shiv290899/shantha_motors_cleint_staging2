@@ -1,5 +1,10 @@
 import React from 'react'
 import { Tabs, Grid } from 'antd'
+import InStockUpdate from '../InStockUpdate'
+import Bookings from '../Bookings'
+import Quotations from '../Quotations'
+import Branches from '../Admin/Branches'
+import Users from '../Admin/Users'
 
 // Owner dashboard: Analytics & Reports in tabs
 export default function OwnerIndex() {
@@ -36,6 +41,11 @@ export default function OwnerIndex() {
   )
 
   const items = [
+    { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
+    { key: 'bookings', label: 'Bookings', children: <Bookings /> },
+    { key: 'quotations', label: 'Quotations', children: <Quotations /> },
+    { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
+    { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'branch', label: 'Branch-level Sales', children: <BranchSales /> },
     { key: 'compare', label: 'Multi-branch Compare', children: <MultiBranchCompare /> },
     { key: 'performance', label: 'Sales Performance', children: <SalesPerformance /> },
@@ -46,7 +56,7 @@ export default function OwnerIndex() {
       <h2 style={styles.h1}>Analytics & Reports</h2>
       <div style={styles.sub}>Owner insights across all branches</div>
       <Tabs
-        defaultActiveKey="branch"
+        defaultActiveKey="branches"
         items={items}
         animated
         size={isMobile ? 'small' : 'middle'}

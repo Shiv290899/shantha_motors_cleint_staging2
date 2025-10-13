@@ -16,9 +16,6 @@ import {
   DatePicker,
 } from "antd";
 import { InboxOutlined, CreditCardOutlined } from "@ant-design/icons";
-import { saveBookingForm, saveBookingViaWebhook } from "../apiCalls/forms";
-import { GetCurrentUser } from "../apiCalls/users";
-import { getBranch } from "../apiCalls/branches";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
@@ -106,10 +103,7 @@ export default function BookingForm() {
   const [form] = Form.useForm();
   const [aadharList, setAadharList] = useState([]);
   const [panList, setPanList] = useState([]);
-  const [otherList, setOtherList] = useState([]); // optional extra attachment
   const [bikeData, setBikeData] = useState([]);
-  const [userRole, setUserRole] = useState();
-  const [userStaffName, setUserStaffName] = useState();
 
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
@@ -122,47 +116,6 @@ export default function BookingForm() {
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      // Prefill executive + branch from logged-in user (staff-like roles)
-      try {
-        const readLocalUser = () => {
-          try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
-        };
-        const pickId = (v) => {
-          if (!v) return null;
-          if (typeof v === 'string') return v;
-          if (typeof v === 'object') return v._id || v.id || v.$oid || null;
-          return null;
-        };
-        let user = readLocalUser();
-        if (!user || !user.formDefaults) {
-          const res = await GetCurrentUser().catch(() => null);
-          if (res?.success && res.data) {
-            user = res.data;
-            try { localStorage.setItem('user', JSON.stringify(user)); } catch {}
-          }
-        }
-        if (user && !cancelled) {
-          const staffName = user?.formDefaults?.staffName || user?.name || undefined;
-          const role = user?.role ? String(user.role).toLowerCase() : undefined;
-          let branchName = user?.formDefaults?.branchName;
-          if (!branchName) {
-            const branchId = pickId(user?.formDefaults?.branchId) || pickId(user?.primaryBranch) || (Array.isArray(user?.branches) ? pickId(user.branches[0]) : undefined);
-            if (branchId) {
-              const br = await getBranch(String(branchId)).catch(() => null);
-              if (br?.success && br?.data?.name) branchName = br.data.name;
-            }
-          }
-          if (!cancelled) {
-            if (staffName) setUserStaffName(staffName);
-            if (role) setUserRole(role);
-            const patch = {};
-            if (staffName) patch.executive = staffName;
-            if (branchName) patch.branch = branchName;
-            if (Object.keys(patch).length) form.setFieldsValue(patch);
-          }
-        }
-      } catch {}
-
       try {
         const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
         if (!res.ok) throw new Error("sheet fetch failed");
@@ -252,112 +205,26 @@ export default function BookingForm() {
     return false;
   };
 
-  // --- Google Form integration (configure IDs) ---
-  const BOOKING_GFORM_ID = import.meta.env.VITE_BOOKING_GFORM_ID || "";
-  const BOOKING_GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || ""; // optional Apps Script Web App URL
-  const ENTRY = {
-    customerName: import.meta.env.VITE_BOOKING_ENTRY_CUSTOMER_NAME || "",
-    mobileNumber: import.meta.env.VITE_BOOKING_ENTRY_MOBILE || "",
-    company: import.meta.env.VITE_BOOKING_ENTRY_COMPANY || "",
-    model: import.meta.env.VITE_BOOKING_ENTRY_MODEL || "",
-    variant: import.meta.env.VITE_BOOKING_ENTRY_VARIANT || "",
-    onRoadPrice: import.meta.env.VITE_BOOKING_ENTRY_ONROAD || "",
-    address: import.meta.env.VITE_BOOKING_ENTRY_ADDRESS || "",
-    rtoOffice: import.meta.env.VITE_BOOKING_ENTRY_RTO || "",
-    purchaseType: import.meta.env.VITE_BOOKING_ENTRY_PURCHASE_TYPE || "",
-    financier: import.meta.env.VITE_BOOKING_ENTRY_FINANCIER || "",
-    executive: import.meta.env.VITE_BOOKING_ENTRY_EXECUTIVE || "",
-    branch: import.meta.env.VITE_BOOKING_ENTRY_BRANCH || "",
-    onlineMethod: import.meta.env.VITE_BOOKING_ENTRY_ONLINE_METHOD || "",
-    utr: import.meta.env.VITE_BOOKING_ENTRY_UTR || "",
-    onlineBank: import.meta.env.VITE_BOOKING_ENTRY_ONLINE_BANK || "",
-    onlineDate: import.meta.env.VITE_BOOKING_ENTRY_ONLINE_DATE || "",
-    cardType: import.meta.env.VITE_BOOKING_ENTRY_CARD_TYPE || "",
-    cardBank: import.meta.env.VITE_BOOKING_ENTRY_CARD_BANK || "",
-    cardLast4: import.meta.env.VITE_BOOKING_ENTRY_CARD_LAST4 || "",
-    posTxnId: import.meta.env.VITE_BOOKING_ENTRY_POS_TXN || "",
-    cardDate: import.meta.env.VITE_BOOKING_ENTRY_CARD_DATE || "",
-    payload: import.meta.env.VITE_BOOKING_ENTRY_PAYLOAD || "",
-  };
-
-  const toEntries = (v) => {
-    const out = {};
-    const setIf = (key, val) => {
-      if (!ENTRY[key]) return; // skip if not configured
-      if (val === undefined || val === null || val === "") return;
-      out[ENTRY[key]] = String(val);
-    };
-    setIf("customerName", v.customerName);
-    setIf("mobileNumber", v.mobileNumber);
-    setIf("company", v.company);
-    setIf("model", v.bikeModel);
-    setIf("variant", v.variant);
-    setIf("onRoadPrice", v.onRoadPrice);
-    setIf("address", v.address);
-    setIf("rtoOffice", v.rtoOffice);
-    setIf("purchaseType", v.purchaseType);
-    setIf("financier", v.financier);
-    setIf("executive", v.executive);
-    setIf("branch", v.branch);
-    setIf("onlineMethod", v.onlineMethod);
-    setIf("utr", v.utr);
-    setIf("onlineBank", v.onlineBank);
-    if (v.onlineDate) setIf("onlineDate", v.onlineDate?.format?.("YYYY-MM-DD") || v.onlineDate);
-    setIf("cardType", v.cardType);
-    setIf("cardBank", v.cardBank);
-    setIf("cardLast4", v.cardLast4);
-    setIf("posTxnId", v.posTxnId);
-    if (v.cardDate) setIf("cardDate", v.cardDate?.format?.("YYYY-MM-DD") || v.cardDate);
-    if (ENTRY.payload) {
-      try { out[ENTRY.payload] = JSON.stringify(v); } catch {}
-    }
-    return out;
-  };
-
-  const onFinish = async (values) => {
+  const onFinish = (values) => {
     const aadhar = aadharList[0]?.originFileObj || null;
     const pan = panList[0]?.originFileObj || null;
-    const other = otherList[0]?.originFileObj || null;
 
     const payload = {
       ...values,
       mobileNumber: values.mobileNumber?.trim(),
       // removed alternate mobile
-      documents: { aadhar, pan, other },
+      documents: { aadhar, pan },
 
       // EMI details removed from booking submission
     };
 
-    try {
-      if (BOOKING_GAS_URL) {
-        // Prefer Apps Script webhook if provided (writes directly to the sheet)
-        const payloadToSend = {
-          ...payload,
-          // Don't send binary File objects; send filenames only
-          documents: {
-            aadharName: aadhar?.name || "",
-            panName: pan?.name || "",
-            otherName: other?.name || "",
-          },
-        };
-        await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, payload: payloadToSend });
-      } else if (BOOKING_GFORM_ID) {
-        // Fallback to Google Form submission if configured
-        const entries = toEntries(payload);
-        await saveBookingForm({ formId: BOOKING_GFORM_ID, entries });
-      } else {
-        message.error("Booking not configured. Set VITE_BOOKING_GAS_URL or VITE_BOOKING_GFORM_ID.");
-        return;
-      }
-      message.success("✅ Booking submitted!");
-    } catch (e) {
-      message.error("Failed to submit booking. Please try again.");
-      return;
+    if (import.meta.env.DEV) {
+      console.log("Booking submitted:", payload);
     }
+    message.success("✅ Booking submitted!");
     form.resetFields();
     setAadharList([]);
     setPanList([]);
-    setOtherList([]);
     setSelectedCompany("");
     setSelectedModel("");
     // reset price display
@@ -431,28 +298,6 @@ export default function BookingForm() {
           onFinishFailed={onFinishFailed}
           requiredMark="optional"
         >
-          {/* Branch + Executive (auto from user) */}
-          <Row gutter={[16, 0]}>
-            <Col xs={24} md={8}>
-              <Form.Item
-                label="Branch"
-                name="branch"
-                rules={[{ required: ['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase()), message: "Branch is required" }]}
-              >
-                <Input size="large" placeholder="Auto-fetched from your profile" readOnly />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item
-                label="Executive Name"
-                name="executive"
-                rules={[{ required: ['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase()), message: "Executive is required" }]}
-              >
-                <Input size="large" placeholder="Auto-fetched from your profile" readOnly />
-              </Form.Item>
-            </Col>
-          </Row>
-
           {/* 1) Customer Name */}
           <Form.Item
             label="Customer Name"
@@ -535,7 +380,7 @@ export default function BookingForm() {
               <Col xs={24} md={6}>
                 <Form.Item label="Method" name="onlineMethod" rules={[{ required: true }]}>
                   <Select size="large" placeholder="Select">
-                    <Option value="UPI">UPI</Option>
+                    <Option value="UPI"> UPI </Option>
                     <Option value="IMPS">IMPS</Option>
                     <Option value="NEFT">NEFT</Option>
                     <Option value="RTGS">RTGS</Option>
@@ -689,7 +534,7 @@ export default function BookingForm() {
                 name="rtoOffice"
                 rules={[{ required: true, message: "Enter RTO office" }]}
               >
-                <Input size="large" placeholder="e.g., KA-41 Muddimapalya" allowClear />
+                <Input size="large" placeholder="e.g., KA-41 Muddinapalya" allowClear />
               </Form.Item>
             </Col>
           </Row>
@@ -762,25 +607,6 @@ export default function BookingForm() {
                     beforeUpload={beforeUpload}
                     fileList={panList}
                     onChange={({ fileList }) => setPanList(fileList)}
-                    maxCount={1}
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    itemRender={(origin) => origin}
-                  >
-                    <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-                    <p className="ant-upload-text">Click or drag file to this area to upload</p>
-                  </Dragger>
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} md={12}>
-                <Form.Item
-                  label="Additional Document (PDF/JPG/PNG) — Optional"
-                >
-                  <Dragger
-                    multiple={false}
-                    beforeUpload={beforeUpload}
-                    fileList={otherList}
-                    onChange={({ fileList }) => setOtherList(fileList)}
                     maxCount={1}
                     accept=".pdf,.jpg,.jpeg,.png"
                     itemRender={(origin) => origin}

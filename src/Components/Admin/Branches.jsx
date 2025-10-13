@@ -1,5 +1,5 @@
 import React from "react";
-import { Table, Button, Space, Modal, Form, Input, Select, message, Tag } from "antd";
+import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Row, Col } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { listBranches, listBranchesPublic, createBranch, updateBranch, deleteBranch } from "../../apiCalls/branches";
 
@@ -15,7 +15,7 @@ const STATUS_OPTIONS = [
   { label: "Under Maintenance", value: "under_maintenance" },
 ];
 
-export default function Branches() {
+export default function Branches({ readOnly = false }) {
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [items, setItems] = React.useState([]);
@@ -27,31 +27,40 @@ export default function Branches() {
   const fetchList = React.useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listBranches({ limit: 200 });
-      if (res?._status === 401 || res?._status === 403) {
-        // Fallback to public list so at least read-only data is visible
+      if (readOnly) {
         const pub = await listBranchesPublic({ limit: 200 });
         if (pub?.success) {
-          message.info("Showing public branch list (read-only). Sign in for management.");
           setItems(pub.data.items || []);
           setTotal(pub.data.total || 0);
         } else {
-          message.warning("Please login again to manage branches.");
-          setItems([]);
-          setTotal(0);
+          message.error(pub?.message || "Failed to load branches");
         }
-      } else if (res?.success) {
-        setItems(res.data.items || []);
-        setTotal(res.data.total || 0);
       } else {
-        message.error(res?.message || "Failed to load branches");
+        const res = await listBranches({ limit: 200 });
+        if (res?._status === 401 || res?._status === 403) {
+          const pub = await listBranchesPublic({ limit: 200 });
+          if (pub?.success) {
+            message.info("Showing public branch list (read-only). Sign in for management.");
+            setItems(pub.data.items || []);
+            setTotal(pub.data.total || 0);
+          } else {
+            message.warning("Please login again to manage branches.");
+            setItems([]);
+            setTotal(0);
+          }
+        } else if (res?.success) {
+          setItems(res.data.items || []);
+          setTotal(res.data.total || 0);
+        } else {
+          message.error(res?.message || "Failed to load branches");
+        }
       }
     } catch (e) {
       message.error(e?.message || "Failed to load branches");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [readOnly]);
 
   React.useEffect(() => { fetchList(); }, [fetchList]);
 
@@ -175,7 +184,7 @@ export default function Branches() {
     { title: "Status", dataIndex: "status", key: "status", width: 160, render: (v) => (
       v === "active" ? <Tag color="green">Active</Tag> : v === "inactive" ? <Tag>Inactive</Tag> : <Tag color="orange">Under Maintenance</Tag>
     ) },
-    {
+    ...(!readOnly ? [{
       title: "Actions",
       key: "actions",
       width: 180,
@@ -185,7 +194,7 @@ export default function Branches() {
           <Button size="small" danger onClick={() => onDelete(row)}>Delete</Button>
         </Space>
       ),
-    },
+    }] : []),
   ];
 
   return (
@@ -194,9 +203,11 @@ export default function Branches() {
         <div>
           <strong>Total:</strong> {total}
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
-          New Branch
-        </Button>
+        {!readOnly && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
+            New Branch
+          </Button>
+        )}
       </div>
       <Table
         rowKey={(r) => r.id}
@@ -218,65 +229,107 @@ export default function Branches() {
         destroyOnClose
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="code" label="Code" rules={[{ required: true, message: "Code is required" }]}>
-            <Input placeholder="e.g., BDRH" maxLength={10} />
-          </Form.Item>
-          <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
-            <Input placeholder="e.g., Byadarahalli Branch" />
-          </Form.Item>
-          <Form.Item name="type" label="Type" initialValue="sales & services" rules={[{ required: true }]}>
-            <Select options={TYPE_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="status" label="Status" initialValue="active" rules={[{ required: true }]}>
-            <Select options={STATUS_OPTIONS} />
-          </Form.Item>
+          <Row gutter={[12, 8]}>
+            <Col xs={24} sm={12}>
+              <Form.Item name="code" label="Code" rules={[{ required: true, message: "Code is required" }]}>
+                <Input placeholder="e.g., BDRH" maxLength={10} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
+                <Input placeholder="e.g., Byadarahalli Branch" />
+              </Form.Item>
+            </Col>
 
-          <Form.Item name="phone" label="Phone">
-            <Input placeholder="Branch phone" />
-          </Form.Item>
-          <Form.Item name="email" label="Email">
-            <Input placeholder="Branch email" type="email" />
-          </Form.Item>
+            <Col xs={24} sm={12}>
+              <Form.Item name="type" label="Type" initialValue="sales & services" rules={[{ required: true }]}>
+                <Select options={TYPE_OPTIONS} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="status" label="Status" initialValue="active" rules={[{ required: true }]}>
+                <Select options={STATUS_OPTIONS} />
+              </Form.Item>
+            </Col>
 
-          <Form.Item name="address_line1" label="Address Line 1">
-            <Input />
-          </Form.Item>
-          <Form.Item name="address_line2" label="Address Line 2">
-            <Input />
-          </Form.Item>
-          <Form.Item name="area" label="Area">
-            <Input />
-          </Form.Item>
-          <Form.Item name="city" label="City" rules={[{ required: true, message: "City is required" }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="state" label="State">
-            <Input />
-          </Form.Item>
-          <Form.Item name="pincode" label="Pincode">
-            <Input />
-          </Form.Item>
+            <Col xs={24} sm={12}>
+              <Form.Item name="phone" label="Phone">
+                <Input placeholder="Branch phone" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="email" label="Email">
+                <Input placeholder="Branch email" type="email" />
+              </Form.Item>
+            </Col>
 
-          <Form.Item name="lat" label="Latitude">
-            <Input type="number" step="any" />
-          </Form.Item>
-          <Form.Item name="lng" label="Longitude">
-            <Input type="number" step="any" />
-          </Form.Item>
+            <Col span={24}>
+              <Form.Item name="address_line1" label="Address Line 1">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item name="address_line2" label="Address Line 2">
+                <Input />
+              </Form.Item>
+            </Col>
 
-          {/* Associations (IDs). In a future iteration, replace with searchable pickers. */}
-          <Form.Item name="manager" label="Manager (User ID)">
-            <Input placeholder="24-char user id (optional)" />
-          </Form.Item>
-          <Form.Item name="staffIds" label="Staff (comma-separated User IDs)">
-            <Input placeholder="id1,id2,id3" />
-          </Form.Item>
-          <Form.Item name="boysIds" label="Boys (comma-separated User IDs)">
-            <Input placeholder="id1,id2" />
-          </Form.Item>
-          <Form.Item name="mechanicsIds" label="Mechanics (comma-separated User IDs)">
-            <Input placeholder="id1,id2" />
-          </Form.Item>
+            <Col xs={24} sm={12}>
+              <Form.Item name="area" label="Area">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="city" label="City" rules={[{ required: true, message: "City is required" }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} sm={12}>
+              <Form.Item name="state" label="State">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="pincode" label="Pincode">
+                <Input />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} sm={12}>
+              <Form.Item name="lat" label="Latitude">
+                <Input type="number" step="any" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="lng" label="Longitude">
+                <Input type="number" step="any" />
+              </Form.Item>
+            </Col>
+
+            {/* Associations (IDs). In a future iteration, replace with searchable pickers. */}
+            <Col xs={24} sm={12}>
+              <Form.Item name="manager" label="Manager (User ID)">
+                <Input placeholder="24-char user id (optional)" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="staffIds" label="Staff (comma-separated User IDs)">
+                <Input placeholder="id1,id2,id3" />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} sm={12}>
+              <Form.Item name="boysIds" label="Boys (comma-separated User IDs)">
+                <Input placeholder="id1,id2" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="mechanicsIds" label="Mechanics (comma-separated User IDs)">
+                <Input placeholder="id1,id2" />
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
     </div>

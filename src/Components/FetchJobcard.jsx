@@ -1,6 +1,7 @@
 // FetchJobcard.jsx
 import React, { useMemo, useState } from "react";
 import { Button, Modal, Radio, Input, List, Space, Spin, message } from "antd";
+import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
 
@@ -19,8 +20,6 @@ import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
  */
 export default function FetchJobcard({
   form,
-  sheetUrl,
-  parseCSV,
   formatReg,
   buildRows,
   defaultGstLabour = 0,
@@ -28,6 +27,10 @@ export default function FetchJobcard({
   setServiceTypeLocal,
   setVehicleTypeLocal,
   setRegDisplay,
+  webhookUrl, // NEW: Apps Script Web App URL
+  setFollowUpEnabled,
+  setFollowUpAt,
+  setFollowUpNotes,
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState("jc"); // 'jc' | 'mobile'
@@ -44,9 +47,9 @@ export default function FetchJobcard({
       Branch: ["Branch"],
       Mechanic: ["Allotted Mechanic", "Mechanic", "Allocated Mechanic"],
       Executive: ["Executive"],
-      ExpectedDelivery: ["Expected Delivery Date", "Expected Delivery"],
+      ExpectedDelivery: ["Expected Delivery Date", "Expected Delivery", "Expected_Delivery_Date"],
       RegNo: [
-        "Vehicle No",
+        "Vehicle No", "Vehicle_No",
         "Vehicle Number",
         "Registration Number",
         "Reg No",
@@ -55,11 +58,11 @@ export default function FetchJobcard({
       Model: ["Model"],
       Colour: ["Colour", "Color"],
       KM: ["Odometer Reading", "Odomete Reading", "KM", "Odometer"],
-      CustName: ["Customer Name", "Name"],
+      CustName: ["Customer Name", "Name", "Customer_Name"],
       Mobile: ["Mobile", "Mobile No", "Mobile Number", "Phone", "Phone Number"],
-      Obs: ["Customer Observation", "Observation", "Notes"],
-      VehicleType: ["Vehicle Type", "Type of Vehicle"],
-      ServiceType: ["Service Type", "Service"],
+      Obs: ["Customer Observation", "Customer_Observation", "Observation", "Notes"],
+      VehicleType: ["Vehicle Type", "Type of Vehicle", "Vehicle_Type"],
+      ServiceType: ["Service Type", "Service", "Service_Type"],
       FloorMat: ["Floor Mat"],
       Amount: ["Collected Amount", "Amount"],
       JCNo: ["JC No", "JCNo", "Job Card No", "JC Number", "JC No."],
@@ -144,14 +147,53 @@ export default function FetchJobcard({
     return chooseBest(VEHICLE_TYPES || [], val);
   };
 
-  // ---------- CSV fetch ----------
+  // ---------- Fetch rows (Webhook only) ----------
   const fetchRows = async () => {
-    if (!sheetUrl) throw new Error("Missing sheetUrl for FetchJobcard");
-    const res = await fetch(sheetUrl, { cache: "no-store" });
-    if (!res.ok) throw new Error("Failed to download sheet CSV");
-    const csv = await res.text();
-    const parsed = parseCSV(csv);
-    return parsed?.rows || [];
+    if (webhookUrl) {
+      try {
+        // Try GET first; some deployments allow only GET
+        let resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode, query: String(query || '') } });
+        let j = resp?.data || resp;
+        let rows = Array.isArray(j?.rows) ? j.rows : [];
+        if (!rows.length) {
+          // Fallback to POST
+          resp = await saveJobcardViaWebhook({ webhookUrl, method: 'POST', payload: { action: 'search', mode, query: String(query || '') } });
+          j = resp?.data || resp;
+          rows = Array.isArray(j?.rows) ? j.rows : [];
+        }
+        // Normalize rows: merge sheet values into payload.formValues so all fields reflect
+        const norm = rows.map((r) => {
+          const v = r && r.values ? r.values : {};
+          const fvFromValues = {
+            jcNo: String(v['JC No.'] || ''),
+            branch: String(v.Branch || ''),
+            regNo: String(v.Vehicle_No || v['Vehicle No'] || ''),
+            model: String(v.Model || ''),
+            colour: String(v.Colour || v.Color || ''),
+            km: String(v.KM || v['Odometer Reading'] || v['Odomete Reading'] || '').replace(/\D/g,'') || '',
+            serviceType: String(v.Service_Type || v['Service Type'] || ''),
+            custName: String(v.Customer_Name || ''),
+            custMobile: String(v.Mobile || ''),
+            obs: String(v.Customer_Observation || ''),
+            expectedDelivery: String(v.Expected_Delivery_Date || ''),
+            amount: String(v.Collected_Amount || ''),
+          };
+          if (r && r.payload && typeof r.payload === 'object') {
+            const p = r.payload || {};
+            // Prefer payload values (they represent what the app saved),
+            // fill only missing keys from the sheet values
+            const merged = { ...fvFromValues, ...(p.formValues || {}) };
+            return { payload: { ...p, formValues: merged } };
+          }
+          return { payload: { formValues: fvFromValues, labourRows: [], totals: {} } };
+        });
+        return { mode: 'webhook', rows: norm };
+      } catch (e) {
+        console.warn('Webhook search failed:', e);
+        throw e;
+      }
+    }
+    throw new Error("Webhook URL not configured");
   };
 
   // ---------- map & apply ----------
@@ -241,6 +283,59 @@ export default function FetchJobcard({
     setQuery("");
   };
 
+  // Apply using our saved payload JSON (when fetched via webhook)
+  const applyPayloadToForm = (p) => {
+    try {
+      const fv = p?.formValues || {};
+      const serviceType = fv.serviceType || null;
+      const vehicleType = fv.vehicleType || null;
+
+      setServiceTypeLocal?.(serviceType);
+      setVehicleTypeLocal?.(vehicleType);
+
+      form.setFieldsValue({
+        jcNo: fv.jcNo || '',
+        branch: fv.branch || undefined,
+        mechanic: fv.mechanic || undefined,
+        executive: fv.executive || undefined,
+        expectedDelivery: fv.expectedDelivery ? dayjs(fv.expectedDelivery, ["DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true) : null,
+        regNo: fv.regNo || '',
+        model: fv.model || '',
+        colour: fv.colour || '',
+        km: fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '',
+        fuelLevel: fv.fuelLevel || undefined,
+        callStatus: fv.callStatus || '',
+        custName: fv.custName || '',
+        custMobile: String(fv.custMobile || '').replace(/\D/g,'').slice(-10),
+        obs: (fv.obs || '').replace(/\s*#\s*/g, "\n"),
+        vehicleType: vehicleType || undefined,
+        serviceType: serviceType || undefined,
+        floorMat: fv.floorMat === 'Yes' ? 'Yes' : fv.floorMat === 'No' ? 'No' : undefined,
+        discounts: { labour: 0 },
+        gstLabour: defaultGstLabour,
+        labourRows: Array.isArray(p?.labourRows) && p.labourRows.length ? p.labourRows : buildRows(serviceType, vehicleType),
+      });
+      setRegDisplay?.(fv.regNo || '');
+      // Restore follow-up settings if provided in saved payload
+      if (p?.followUp) {
+        try {
+          const fu = p.followUp;
+          if (typeof fu.enabled !== 'undefined') setFollowUpEnabled?.(!!fu.enabled);
+          if (fu.at) {
+            const d = dayjs(fu.at);
+            if (d.isValid()) setFollowUpAt?.(d);
+          }
+          if (typeof fu.notes !== 'undefined') setFollowUpNotes?.(String(fu.notes || ''));
+        } catch { /* noop */ }
+      }
+      message.success('Details filled from saved Job Card.');
+      setOpen(false); setMatches([]); setQuery('');
+    } catch (e) {
+      console.warn('applyPayloadToForm error:', e);
+      message.error('Could not apply fetched Job Card.');
+    }
+  };
+
   // ---------- search ----------
   const runSearch = async () => {
     const raw = (query || "").trim();
@@ -250,7 +345,25 @@ export default function FetchJobcard({
     }
     setLoading(true);
     try {
-      const rows = await fetchRows();
+      const result = await fetchRows();
+      if (!result) throw new Error('No result');
+      if (result.mode === 'webhook') {
+        const rows = result.rows || [];
+        if (!rows.length) {
+          message.warning('No matching record found.');
+          setMatches([]);
+          return;
+        }
+        if (rows.length === 1) {
+          const p = rows[0]?.payload || rows[0];
+          applyPayloadToForm(p);
+          return;
+        }
+        setMatches(rows.map(r => r.payload || r).slice(0, 10));
+        message.info(`Found ${rows.length} matches. Pick one.`);
+        return;
+      }
+      const rows = result.rows;
       let candidates = [];
       if (mode === "jc") {
         // exact JC match
@@ -286,7 +399,7 @@ export default function FetchJobcard({
       message.info(`Found ${candidates.length} matches. Pick one.`);
     } catch (e) {
       console.error(e);
-      message.error("Could not fetch the sheet. Check the published CSV link.");
+      message.error("Could not fetch job cards. Check the Apps Script/CSV link.");
     } finally {
       setLoading(false);
     }
@@ -304,7 +417,7 @@ export default function FetchJobcard({
 
 
       <Modal
-        title="Fetch Details from Google Sheet"
+        title="Fetch Job Card"
         open={open}
         onCancel={() => {
           setOpen(false);
@@ -357,15 +470,18 @@ export default function FetchJobcard({
               bordered
               dataSource={matches}
               renderItem={(item) => {
-                const jc = pick(item, COL.JCNo) || "—";
-                const nm = pick(item, COL.CustName) || "—";
-                const mb = tenDigits(pick(item, COL.Mobile)) || "—";
-                const rn = pick(item, COL.RegNo) || "—";
-                const ts = parseTimestamp(item).format("DD/MM/YYYY HH:mm");
+                // item may be a row object (CSV) or payload (webhook)
+                const isPayload = item && item.formValues;
+                const fv = isPayload ? item.formValues : null;
+                const jc = isPayload ? (fv.jcNo || '—') : (pick(item, COL.JCNo) || '—');
+                const nm = isPayload ? (fv.custName || '—') : (pick(item, COL.CustName) || '—');
+                const mb = isPayload ? (String(fv.custMobile || '').replace(/\D/g,'').slice(-10) || '—') : (tenDigits(pick(item, COL.Mobile)) || '—');
+                const rn = isPayload ? (fv.regNo || '—') : (pick(item, COL.RegNo) || '—');
+                const ts = isPayload ? (fv.expectedDelivery || '-') : (parseTimestamp(item).format("DD/MM/YYYY HH:mm"));
                 return (
                   <List.Item
                     actions={[
-                      <Button type="link" onClick={() => applyRowToForm(item)}>
+                      <Button type="link" onClick={() => (isPayload ? applyPayloadToForm(item) : applyRowToForm(item))}>
                         Use
                       </Button>,
                     ]}
@@ -374,7 +490,7 @@ export default function FetchJobcard({
                       <div><b>JC:</b> {jc} &nbsp; <b>Name:</b> {nm}</div>
                       <div><b>Mobile:</b> {mb} &nbsp; <b>Vehicle:</b> {rn}</div>
                       <div style={{ gridColumn: "1 / span 2", color: "#999" }}>
-                        <b>Timestamp:</b> {ts}
+                        <b>{isPayload ? 'Expected Delivery' : 'Timestamp'}:</b> {ts}
                       </div>
                     </div>
                   </List.Item>

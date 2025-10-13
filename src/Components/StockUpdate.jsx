@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag } from "antd";
+import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip } from "antd";
 // Stock updates now use MongoDB backend only
 import { listStocks, listCurrentStocks, createStock } from "../apiCalls/stocks";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
@@ -60,6 +60,9 @@ const normalizeCatalogRow = (row = {}) => ({
 // We keep a local state array of names
 
 export default function StockUpdate() {
+  const { useBreakpoint } = Grid;
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [form] = Form.useForm();
   const [catalog, setCatalog] = useState([]);
   const [company, setCompany] = useState("");
@@ -119,10 +122,36 @@ export default function StockUpdate() {
   const companies = useMemo(() => [...new Set(catalog.map((r) => r.company))], [catalog]);
   const models = useMemo(() => [...new Set(catalog.filter((r) => r.company === company).map((r) => r.model))], [catalog, company]);
   const variants = useMemo(() => [...new Set(catalog.filter((r) => r.company === company && r.model === model).map((r) => r.variant))], [catalog, company, model]);
+  // Preset color choices with hex samples for quick pick
+  const PRESET_COLORS = useMemo(() => ([
+    { name: "Black", hex: "#111827" },
+    { name: "White", hex: "#ffffff", border: "#e5e7eb" },
+    { name: "Red", hex: "#ef4444" },
+    { name: "Blue", hex: "#2563eb" },
+    { name: "Grey / Silver", hex: "#9ca3af" },
+    { name: "Green", hex: "#10b981" },
+    { name: "Yellow", hex: "#f59e0b" },
+    { name: "Orange", hex: "#f97316" },
+    { name: "Maroon / Wine Red", hex: "#800000" },
+    { name: "Matte Black", hex: "#0f172a" },
+  ]), []);
+
   const colors = useMemo(() => {
-    const list = catalog.filter((r) => r.company === company && r.model === model && r.variant === variant).map((r) => r.color).filter(Boolean);
-    return [...new Set(list.length ? list : [""])]
-  }, [catalog, company, model, variant]);
+    const dyn = catalog
+      .filter((r) => r.company === company && r.model === model && r.variant === variant)
+      .map((r) => r.color)
+      .filter(Boolean);
+    const map = new Map();
+    PRESET_COLORS.forEach((c) => map.set(c.name.toLowerCase(), c.name));
+    dyn.forEach((c) => map.set(String(c).toLowerCase(), c));
+    const out = Array.from(map.values());
+    return out.length ? out : PRESET_COLORS.map((c) => c.name);
+  }, [catalog, company, model, variant, PRESET_COLORS]);
+
+  const swatch = (name) => {
+    const m = PRESET_COLORS.find((x) => x.name.toLowerCase() === String(name || '').toLowerCase());
+    return { bg: m?.hex || '#d1d5db', border: m?.border || '#d1d5db' };
+  };
 
   const onCompany = (v) => { setCompany(v); setModel(""); setVariant(""); form.setFieldsValue({ model: undefined, variant: undefined, color: undefined }); };
   const onModel = (v) => { setModel(v); setVariant(""); form.setFieldsValue({ variant: undefined, color: undefined }); };
@@ -160,6 +189,9 @@ export default function StockUpdate() {
   };
 
   const label = (s) => <strong style={{ fontWeight: 700 }}>{s}</strong>;
+  const isVehicleLocked = action !== 'add';
+  const isChassisLocked = action !== 'add';
+  const isSourceLocked = lockSourceBranch || action !== 'add';
 
   const fetchList = async () => {
     setLoadingList(true);
@@ -230,20 +262,20 @@ export default function StockUpdate() {
   };
 
   const columns = [
-    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 180 },
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 150 },
-    { title: "Company", dataIndex: "company", key: "company", width: 130 },
-    { title: "Model", dataIndex: "model", key: "model", width: 130 },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 140 },
-    { title: "Color", dataIndex: "color", key: "color", width: 120 },
+    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 180, ellipsis: true, responsive: ['md'] },
+    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 150, ellipsis: true },
+    { title: "Company", dataIndex: "company", key: "company", width: 130, ellipsis: true, responsive: ['md'] },
+    { title: "Model", dataIndex: "model", key: "model", width: 130, ellipsis: true, responsive: ['md'] },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 140, ellipsis: true, responsive: ['md'] },
+    { title: "Color", dataIndex: "color", key: "color", width: 120, ellipsis: true, responsive: ['md'] },
     { title: "Action", dataIndex: "action", key: "action", width: 120, render: (v) => {
       const t = String(v || "").toLowerCase();
       const color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
       return <Tag color={color}>{v || '-'}</Tag>;
     } },
-    { title: "Target/Return/Customer", key: "dest", render: (_, r) => r.targetBranch || r.returnTo || r.customerName || "—" },
-    { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 140 },
-    { title: "Notes", dataIndex: "notes", key: "notes" },
+    { title: "Target/Return/Customer", key: "dest", ellipsis: true, render: (_, r) => r.targetBranch || r.returnTo || r.customerName || "—" },
+    { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 140, ellipsis: true },
+    { title: "Notes", dataIndex: "notes", key: "notes", ellipsis: true, responsive: ['md'] },
     { title: "Actions", key: "actions", width: 220, render: (_, r) => (
       <Space size="small">
         <Button size="small" onClick={() => openWithAction(r, 'transfer')}>Transfer</Button>
@@ -284,7 +316,8 @@ export default function StockUpdate() {
         columns={columns}
         loading={loadingList}
         pagination={{ pageSize: 10 }}
-        size="middle"
+        size={isMobile ? "small" : "middle"}
+        scroll={{ x: isMobile ? 900 : undefined }}
         rowKey={(r) => `${r.ts}-${r.chassis}-${r.key}`}
       />
 
@@ -303,17 +336,21 @@ export default function StockUpdate() {
           <Row gutter={[12, 8]}>
             <Col xs={24} md={12}>
               <Form.Item name="chassis" label={label("Chassis No.")} rules={[{ required: true, message: "Chassis number is required" }]}>
-                <Input placeholder="Enter chassis number" onChange={(e)=>{ const v = (e.target.value||"").toUpperCase(); form.setFieldsValue({ chassis: v }); }} />
+                <Input
+                  placeholder={isChassisLocked ? "Chassis fixed for this movement" : "Enter chassis number"}
+                  disabled={isChassisLocked}
+                  onChange={(e)=>{ const v = (e.target.value||"").toUpperCase(); form.setFieldsValue({ chassis: v }); }}
+                />
               </Form.Item>
             </Col>
 
             <Col xs={24} md={12}>
               <Form.Item name="sourceBranch" label={label("Source Branch")}> 
                 <Select
-                  allowClear={!lockSourceBranch}
-                  disabled={lockSourceBranch}
-                  placeholder={lockSourceBranch ? myBranch || "Your branch" : "(Optional) Select current branch"}
-                  value={lockSourceBranch ? myBranch : undefined}
+                  allowClear={!isSourceLocked}
+                  disabled={isSourceLocked}
+                  placeholder={isSourceLocked ? (form.getFieldValue('sourceBranch') || myBranch || "Current branch") : "(Optional) Select current branch"}
+                  value={isSourceLocked ? (form.getFieldValue('sourceBranch') || myBranch) : undefined}
                 >
                   {branchNames.map((b) => <Select.Option key={b} value={b}>{b}</Select.Option>)}
                 </Select>
@@ -328,37 +365,72 @@ export default function StockUpdate() {
             </Col>
 
             <Col xs={24} md={12}>
-              <Form.Item name="company" label={label("Company")} rules={[{ required: true, message: "Company is required" }]}> 
-                <Select placeholder={sheetOk ? "Select company" : "Sheet unavailable"} disabled={!sheetOk} onChange={onCompany} showSearch optionFilterProp="children">
+              <Form.Item name="company" label={label("Company")} rules={isVehicleLocked ? [] : [{ required: true, message: "Company is required" }]}> 
+                <Select placeholder={sheetOk ? "Select company" : "Sheet unavailable"} disabled={!sheetOk || isVehicleLocked} onChange={onCompany} showSearch optionFilterProp="children">
                   {companies.map((c) => <Select.Option key={c} value={c}>{c}</Select.Option>)}
                 </Select>
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="model" label={label("Model")} rules={[{ required: true, message: "Model is required" }]}> 
-                <Select placeholder="Select model" disabled={!sheetOk || !company} onChange={onModel} showSearch optionFilterProp="children">
+              <Form.Item name="model" label={label("Model")} rules={isVehicleLocked ? [] : [{ required: true, message: "Model is required" }]}> 
+                <Select placeholder="Select model" disabled={!sheetOk || !company || isVehicleLocked} onChange={onModel} showSearch optionFilterProp="children">
                   {models.map((m) => <Select.Option key={m} value={m}>{m}</Select.Option>)}
                 </Select>
               </Form.Item>
             </Col>
 
             <Col xs={24} md={12}>
-              <Form.Item name="variant" label={label("Variant")} rules={[{ required: true, message: "Variant is required" }]}> 
-                <Select placeholder="Select variant" disabled={!sheetOk || !model} onChange={onVariant} showSearch optionFilterProp="children">
+              <Form.Item name="variant" label={label("Variant")} rules={isVehicleLocked ? [] : [{ required: true, message: "Variant is required" }]}> 
+                <Select placeholder="Select variant" disabled={!sheetOk || !model || isVehicleLocked} onChange={onVariant} showSearch optionFilterProp="children">
                   {variants.map((v) => <Select.Option key={v} value={v}>{v}</Select.Option>)}
                 </Select>
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="color" label={label("Color")} rules={[{ required: true, message: "Color is required" }]}> 
+              <Form.Item name="color" label={label("Color")} rules={isVehicleLocked ? [] : [{ required: true, message: "Color is required" }]}> 
                 {colors.filter(Boolean).length ? (
-                  <Select placeholder="Select color" disabled={!sheetOk || !variant} showSearch optionFilterProp="children">
-                    {colors.filter(Boolean).map((c) => <Select.Option key={c} value={c}>{c}</Select.Option>)}
+                  <Select placeholder="Select color" disabled={!sheetOk || !variant || isVehicleLocked} showSearch optionFilterProp="children">
+                    {colors.filter(Boolean).map((c) => {
+                      const s = swatch(c);
+                      return (
+                        <Select.Option key={c} value={c}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ width: 12, height: 12, borderRadius: 3, background: s.bg, border: `1px solid ${s.border}` }} />
+                            {c}
+                          </span>
+                        </Select.Option>
+                      );
+                    })}
                   </Select>
                 ) : (
-                  <Input placeholder="Type color" />
+                  <Input placeholder="Type color" disabled={isVehicleLocked} />
                 )}
               </Form.Item>
+              {!isVehicleLocked && (
+                <Space wrap size="small" style={{ marginTop: -8, marginBottom: 8 }}>
+                  {PRESET_COLORS.map((c) => (
+                    <Tooltip title={c.name} key={c.name}>
+                      <Button
+                        size="small"
+                        onClick={() => form.setFieldsValue({ color: c.name })}
+                        style={{
+                          height: 28,
+                          borderRadius: 14,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '0 10px',
+                          border: `1px solid ${c.border || '#d1d5db'}`,
+                          background: '#fff'
+                        }}
+                      >
+                        <span style={{ width: 14, height: 14, borderRadius: 7, background: c.hex, border: `1px solid ${c.border || '#d1d5db'}` }} />
+                        <span>{c.name}</span>
+                      </Button>
+                    </Tooltip>
+                  ))}
+                </Space>
+              )}
             </Col>
 
             <Col span={24}>

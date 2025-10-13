@@ -2,7 +2,9 @@ import React from "react";
 import { Tabs, Grid, Typography } from "antd";
 import Branches from "./Branches";
 import StockUpdate from "../StockUpdate";
+import InStockUpdate from "../InStockUpdate";
 import Users from "./Users";
+import Bookings from "../Bookings";
 
 const { Title, Paragraph } = Typography;
 
@@ -19,20 +21,22 @@ export default function Admin() {
   );
 
   const items = [
-    {
-      key: "branches",
-      label: "CRUD Branches",
-      children: <Branches />,
-    },
-    {
-      key: "users",
-      label: "CRUD Users",
-      children: <Users />,
-    },
+    { key: "branches", label: "Branches", children: <Branches /> },
+    { key: "users", label: "Users", children: <Users /> },
     {
       key: "stock",
       label: "Stock Update",
       children: <StockUpdate />,
+    },
+    {
+      key: "bookings",
+      label: "Bookings",
+      children: <Bookings />,
+    },
+    {
+      key: "in-stock",
+      label: "In-Stock Update",
+      children: <InStockUpdate />,
     },
     {
       key: "analytics",

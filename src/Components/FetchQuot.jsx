@@ -1,12 +1,12 @@
 // FetchQuot.jsx
 import React, { useState } from "react";
+import dayjs from "dayjs";
+import { saveBookingViaWebhook } from "../apiCalls/forms";
 import { Button, Modal, Radio, Input, List, Space, Spin, message } from "antd";
 
 /**
  * Props:
  * - form
- * - responsesCsvUrl
- * - parseCsv
  * - EXECUTIVES
  * - setBrand, setMode, setVehicleType, setFittings, setDocsReq, setEmiSet,
  *   setDownPayment, setOnRoadPrice, setCompany, setModel, setVariant, setExtraVehicles
@@ -14,8 +14,7 @@ import { Button, Modal, Radio, Input, List, Space, Spin, message } from "antd";
  */
 export default function FetchQuot({
   form,
-  responsesCsvUrl,
-  parseCsv,
+  webhookUrl, // NEW: Apps Script Web App URL (preferred over CSV)
   EXECUTIVES = [],
   setBrand,
   setMode,
@@ -29,6 +28,9 @@ export default function FetchQuot({
   setModel,
   setVariant,
   setExtraVehicles,
+  setFollowUpEnabled,
+  setFollowUpAt,
+  setFollowUpNotes,
   buttonText = "Fetch Details",
   buttonProps = {},
 }) {
@@ -42,57 +44,20 @@ export default function FetchQuot({
   const tenDigits = (x) =>
     String(x || "").replace(/\D/g, "").replace(/^0+/, "").slice(-10);
 
-  const findHeader = (headers = [], needle) =>
-    headers.findIndex((h) =>
-      String(h || "").toLowerCase().includes(String(needle).toLowerCase())
-    );
-
-  const payloadColIndex = (headers) => findHeader(headers, "payload");
-  const serialColIndex = (headers) => {
-    for (const k of ["quotation no", "quotation number", "quote no", "serial"]) {
-      const i = findHeader(headers, k);
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
-  const phoneColIndex = (headers) => {
-    for (const k of ["phone", "mobile", "contact"]) {
-      const i = findHeader(headers, k);
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
-  // NEW: branch column picker
-  const branchColIndex = (headers) => {
-    for (const k of ["branch", "branches"]) {
-      const i = findHeader(headers, k);
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
-
-  const safeJson = (txt) => {
-    try {
-      const obj = JSON.parse(String(txt || "{}"));
-      return obj && typeof obj === "object" ? obj : null;
-    } catch {
-      return null;
-    }
-  };
+  // CSV parsing helpers are removed; webhook is the only source
 
   const fetchRows = async () => {
-    const res = await fetch(responsesCsvUrl, { cache: "no-store" });
-    if (!res.ok) throw new Error("Failed to download responses CSV");
-    const csv = await res.text();
-    if (csv.trim().startsWith("<")) throw new Error("Expected CSV, got HTML");
-    return parseCsv(csv);
-  };
-
-  // newest first using a loose timestamp guess (first col often is Timestamp)
-  const toTime = (row) => {
-    const t = row?.[0];
-    const ms = Date.parse(t);
-    return Number.isFinite(ms) ? ms : 0;
+    if (!webhookUrl) {
+      throw new Error("Quotation search webhook is not configured");
+    }
+    const resp = await saveBookingViaWebhook({
+      webhookUrl,
+      method: 'GET',
+      payload: { action: 'search', mode, query: String(query || '') },
+    });
+    const j = resp?.data || resp;
+    const rows = Array.isArray(j?.rows) ? j.rows : [];
+    return { mode: 'webhook', rows };
   };
 
   const normalizePayloadShape = (raw) => {
@@ -114,6 +79,7 @@ export default function FetchQuot({
       model: "",
       variant: "",
       branch: "", // may be injected from sheet later
+      followUp: { enabled: false, at: null, notes: "", status: 'pending' },
       formValues: {
         serialNo: "",
         name: "",
@@ -131,21 +97,52 @@ export default function FetchQuot({
     };
   };
 
-  // Try payload column first, then scan entire row for JSON-looking cell
-  const parseAnyJsonCell = (row, pIdx) => {
-    if (pIdx >= 0) {
-      const maybe = safeJson(row[pIdx]);
-      if (maybe) return maybe;
-    }
-    for (let j = 0; j < row.length; j++) {
-      const cell = row[j];
-      if (cell && typeof cell === "string" && cell.trim().startsWith("{")) {
-        const maybe = safeJson(cell);
-        if (maybe) return maybe;
+  // Convert a webhook row into a usable payload
+  const payloadFromWebhook = (row) => {
+    const pv = row && typeof row === 'object' ? row.payload : null;
+    const values = row && typeof row === 'object' ? (row.values || {}) : {};
+    if (pv && typeof pv === 'object') {
+      const branch = values.branch || values.Branch || '';
+      if (branch) {
+        pv.branch = pv.branch || branch;
+        pv.formValues = { ...(pv.formValues || {}), branch: (pv.formValues && pv.formValues.branch) || branch };
       }
+      return pv;
     }
-    return null;
+    const toNumber = (x) => Number(String(x || 0).replace(/[,₹\s]/g, '')) || 0;
+    return {
+      version: 0,
+      brand: 'SHANTHA',
+      mode: 'cash',
+      vehicleType: 'scooter',
+      fittings: [],
+      docsReq: [],
+      emiSet: '12',
+      downPayment: 0,
+      onRoadPrice: toNumber(values.onRoadPrice || values.OnRoadPrice || values['On-Road Price']),
+      company: values.company || values.Company || '',
+      model: values.bikeModel || values.Model || '',
+      variant: values.variant || values.Variant || '',
+      branch: values.branch || values.Branch || '',
+      formValues: {
+        serialNo: values.serialNo || values.Quotation_ID || values['Quotation_ID'] || values['Quotation No'] || '',
+        name: values.name || values.Customer_Name || values['Customer_Name'] || '',
+        mobile: values.mobile || values.Mobile || values['Mobile'] || '',
+        address: values.address || values.Address || '',
+        company: values.company || values.Company || '',
+        bikeModel: values.bikeModel || values.Model || '',
+        variant: values.variant || values.Variant || '',
+        onRoadPrice: toNumber(values.onRoadPrice || values.OnRoadPrice || values['On-Road Price']),
+        executive: values.executive || values.Executive_Name || EXECUTIVES[0]?.name || '',
+        remarks: values.remarks || values.Remarks || '',
+        branch: values.branch || values.Branch || '',
+      },
+      extraVehicles: [],
+    };
   };
+
+  // Try payload column first, then scan entire row for JSON-looking cell
+  // Legacy CSV cell parsing removed
 
   // apply into form + local states
   const applyToForm = (dataRaw) => {
@@ -164,6 +161,10 @@ export default function FetchQuot({
       setModel?.(data.model || "");
       setVariant?.(data.variant || "");
       setExtraVehicles?.(Array.isArray(data.extraVehicles) ? data.extraVehicles : []);
+      const fu = data.followUp || {};
+      setFollowUpEnabled?.(Boolean(fu.enabled));
+      setFollowUpAt?.(fu.at ? dayjs(fu.at) : null);
+      setFollowUpNotes?.(fu.notes || "");
 
       const fv = data.formValues || {};
       form.setFieldsValue({
@@ -203,79 +204,26 @@ export default function FetchQuot({
 
     setLoading(true);
     try {
-      const rows = await fetchRows(); // array of arrays
-      if (!rows?.length) throw new Error("Empty CSV");
+      const result = await fetchRows();
+      if (!result) throw new Error("No result");
 
-      const headers = (rows[0] || []).map((h) => (h || "").trim());
-      const body = rows.slice(1);
-
-      const pIdx = payloadColIndex(headers);
-      const sIdx = serialColIndex(headers);
-      const mIdx = phoneColIndex(headers);
-      const bIdx = branchColIndex(headers); // NEW
-
-      const candidates = [];
-      const qMobile = tenDigits(q);
-
-      // scan newest first
-      for (let i = body.length - 1; i >= 0; i--) {
-        const r = body[i];
-        const payload = parseAnyJsonCell(r, pIdx);
-
-        const serial = payload?.formValues?.serialNo
-          ? String(payload.formValues.serialNo).trim()
-          : (sIdx >= 0 ? String(r[sIdx] || "").trim() : "");
-
-        const mobInPayload = tenDigits(payload?.formValues?.mobile);
-        const phoneCell = mIdx >= 0 ? tenDigits(r[mIdx]) : "";
-        const branchCell = bIdx >= 0 ? String(r[bIdx] || "").trim() : ""; // NEW
-
-        // Merge the branch from sheet into payload so UI can use it
-        const mergedPayload = (() => {
-          const base = payload ? { ...payload } : {};
-          base.branch = base.branch || branchCell;
-          base.formValues = {
-            ...(base.formValues || {}),
-            branch: (base.formValues && base.formValues.branch) || branchCell,
-          };
-          return base;
-        })();
-
-        const isSerialMatch = mode === "serial" && serial && serial === q;
-
-        const isMobileMatch =
-          mode === "mobile" &&
-          ((mobInPayload && mobInPayload === qMobile) ||
-            (phoneCell && phoneCell === qMobile) ||
-            (qMobile.length < 10 &&
-              ((mobInPayload && mobInPayload.endsWith(qMobile)) ||
-                (phoneCell && phoneCell.endsWith(qMobile)))));
-
-        if (isSerialMatch || isMobileMatch) {
-          candidates.push({ row: r, payload: mergedPayload, ts: toTime(r) });
-        }
-      }
-
-      if (!candidates.length) {
+      const rows = (result.rows || []).map(r => ({ payload: payloadFromWebhook(r) }));
+      if (!rows.length) {
         message.warning("No matching record found.");
         setMatches([]);
         return;
       }
 
-      // latest first
-      candidates.sort((a, b) => b.ts - a.ts);
-
-      if (candidates.length === 1) {
-        applyToForm(candidates[0].payload);
+      if (rows.length === 1) {
+        applyToForm(rows[0].payload);
         return;
       }
-
-      setMatches(candidates.slice(0, 10));
-      message.info(`Found ${candidates.length} matches. Pick one.`);
+      setMatches(rows.slice(0, 10));
+      message.info(`Found ${rows.length} matches. Pick one.`);
 
     } catch (e) {
       console.warn("FetchQuot search error:", e);
-      message.error("Could not fetch the responses CSV. Check the published link.");
+      message.error("Could not fetch quotations. Check the Apps Script/Webhook.");
     } finally {
       setLoading(false);
     }
@@ -320,7 +268,7 @@ export default function FetchQuot({
       </Button>
 
       <Modal
-        title="Fetch Quotation (Google Form Responses)"
+        title="Fetch Quotation"
         open={open}
         onCancel={() => {
           setOpen(false);

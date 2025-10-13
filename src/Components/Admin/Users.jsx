@@ -1,5 +1,5 @@
 import React from "react";
-import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Checkbox } from "antd";
+import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Checkbox, Row, Col } from "antd";
 import { listUsers, listUsersPublic, updateUser, deleteUser } from "../../apiCalls/adminUsers";
 import { listBranchesPublic } from "../../apiCalls/branches";
 
@@ -18,7 +18,7 @@ const STATUS_OPTIONS = [
   { label: "Suspended", value: "suspended" },
 ];
 
-export default function Users() {
+export default function Users({ readOnly = false }) {
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [items, setItems] = React.useState([]);
@@ -43,19 +43,7 @@ export default function Users() {
   const fetchList = React.useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listUsers({
-        limit: 100000,
-        page: 1,
-        ...(q ? { q } : {}),
-        ...(roleFilter ? { role: roleFilter } : {}),
-        ...(statusFilter ? { status: statusFilter } : {}),
-        ...(branchFilter ? { branch: branchFilter } : {}),
-      });
-      if (res?.success) {
-        setItems(res.data.items || []);
-        setTotal(res.data.total || 0);
-      } else if (res?._status === 401 || res?._status === 403) {
-        // Fallback to public list (read-only) similar to branches
+      if (readOnly) {
         const pub = await listUsersPublic({
           limit: 100000,
           page: 1,
@@ -63,24 +51,54 @@ export default function Users() {
           ...(roleFilter ? { role: roleFilter } : {}),
           ...(statusFilter ? { status: statusFilter } : {}),
           ...(branchFilter ? { branch: branchFilter } : {}),
-        })
+        });
         if (pub?.success) {
-          message.info("Showing public user list (read-only). Sign in for management.");
           setItems(pub.data.items || []);
           setTotal(pub.data.total || 0);
         } else {
-          message.error(res?.message || "Failed to load users");
+          message.error(pub?.message || "Failed to load users");
           setItems([]); setTotal(0);
         }
       } else {
-        message.error(res?.message || "Failed to load users");
+        const res = await listUsers({
+          limit: 100000,
+          page: 1,
+          ...(q ? { q } : {}),
+          ...(roleFilter ? { role: roleFilter } : {}),
+          ...(statusFilter ? { status: statusFilter } : {}),
+          ...(branchFilter ? { branch: branchFilter } : {}),
+        });
+        if (res?.success) {
+          setItems(res.data.items || []);
+          setTotal(res.data.total || 0);
+        } else if (res?._status === 401 || res?._status === 403) {
+          // Fallback to public list (read-only) similar to branches
+          const pub = await listUsersPublic({
+            limit: 100000,
+            page: 1,
+            ...(q ? { q } : {}),
+            ...(roleFilter ? { role: roleFilter } : {}),
+            ...(statusFilter ? { status: statusFilter } : {}),
+            ...(branchFilter ? { branch: branchFilter } : {}),
+          })
+          if (pub?.success) {
+            message.info("Showing public user list (read-only). Sign in for management.");
+            setItems(pub.data.items || []);
+            setTotal(pub.data.total || 0);
+          } else {
+            message.error(res?.message || "Failed to load users");
+            setItems([]); setTotal(0);
+          }
+        } else {
+          message.error(res?.message || "Failed to load users");
+        }
       }
     } catch (e) {
       message.error(e?.message || "Failed to load users");
     } finally {
       setLoading(false);
     }
-  }, [q, roleFilter, statusFilter, branchFilter]);
+  }, [q, roleFilter, statusFilter, branchFilter, readOnly]);
 
   React.useEffect(() => { fetchBranches(); }, [fetchBranches]);
   React.useEffect(() => { fetchList(); }, [fetchList]);
@@ -179,7 +197,7 @@ export default function Users() {
       v === "active" ? <Tag color="green">Active</Tag> : v === "inactive" ? <Tag>Inactive</Tag> : <Tag color="orange">Suspended</Tag>
     ) },
     { title: "Last Login", dataIndex: "lastLoginAt", key: "lastLoginAt", width: 180, render: (v) => v ? new Date(v).toLocaleString() : "—" },
-    {
+    ...(!readOnly ? [{
       title: "Actions",
       key: "actions",
       width: 180,
@@ -189,7 +207,7 @@ export default function Users() {
           <Button size="small" danger onClick={() => onDelete(row)}>Delete</Button>
         </Space>
       ),
-    },
+    }] : []),
   ];
 
   return (
@@ -257,39 +275,64 @@ export default function Users() {
         destroyOnClose
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
-            <Input placeholder="Full name" />
-          </Form.Item>
-          <Form.Item name="email" label="Email" rules={[{ required: true, message: "Email is required" }, { type: 'email', message: 'Enter a valid email' }]}>
-            <Input placeholder="name@example.com" />
-          </Form.Item>
-          <Form.Item name="phone" label="Phone">
-            <Input placeholder="Mobile number" />
-          </Form.Item>
-          {/* No user creation here; password changes are handled elsewhere */}
-          <Form.Item name="role" label="Role" initialValue="user" rules={[{ required: true }]}>
-            <Select options={ROLE_OPTIONS} />
-          </Form.Item>
-          <Form.Item name="status" label="Status" initialValue="active" rules={[{ required: true }]}>
-            <Select options={STATUS_OPTIONS} />
-          </Form.Item>
+          <Row gutter={[12, 8]}>
+            <Col xs={24} sm={12}>
+              <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
+                <Input placeholder="Full name" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="email" label="Email" rules={[{ required: true, message: "Email is required" }, { type: 'email', message: 'Enter a valid email' }]}>
+                <Input placeholder="name@example.com" />
+              </Form.Item>
+            </Col>
 
-          <Form.Item name="jobTitle" label="Job Title">
-            <Input placeholder="e.g., Sales Executive" />
-          </Form.Item>
-          <Form.Item name="employeeCode" label="Employee Code">
-            <Input placeholder="Unique within primary branch" />
-          </Form.Item>
+            <Col xs={24} sm={12}>
+              <Form.Item name="phone" label="Phone">
+                <Input placeholder="Mobile number" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              {/* No user creation here; password changes are handled elsewhere */}
+              <Form.Item name="role" label="Role" initialValue="user" rules={[{ required: true }]}>
+                <Select options={ROLE_OPTIONS} />
+              </Form.Item>
+            </Col>
 
-          <Form.Item name="primaryBranch" label="Primary Branch">
-            <Select allowClear options={branchOptions} placeholder="Select primary branch" />
-          </Form.Item>
-          <Form.Item name="branches" label="Additional Branches">
-            <Select mode="multiple" allowClear options={branchOptions} placeholder="Select additional branches" />
-          </Form.Item>
-          <Form.Item name="canSwitchBranch" valuePropName="checked">
-            <Checkbox>Can switch branches</Checkbox>
-          </Form.Item>
+            <Col xs={24} sm={12}>
+              <Form.Item name="status" label="Status" initialValue="active" rules={[{ required: true }]}>
+                <Select options={STATUS_OPTIONS} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="jobTitle" label="Job Title">
+                <Input placeholder="e.g., Sales Executive" />
+              </Form.Item>
+            </Col>
+
+            <Col xs={24} sm={12}>
+              <Form.Item name="employeeCode" label="Employee Code">
+                <Input placeholder="Unique within primary branch" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item name="primaryBranch" label="Primary Branch">
+                <Select allowClear options={branchOptions} placeholder="Select primary branch" />
+              </Form.Item>
+            </Col>
+
+            <Col span={24}>
+              <Form.Item name="branches" label="Additional Branches">
+                <Select mode="multiple" allowClear options={branchOptions} placeholder="Select additional branches" />
+              </Form.Item>
+            </Col>
+
+            <Col span={24}>
+              <Form.Item name="canSwitchBranch" valuePropName="checked">
+                <Checkbox>Can switch branches</Checkbox>
+              </Form.Item>
+            </Col>
+          </Row>
         </Form>
       </Modal>
     </div>

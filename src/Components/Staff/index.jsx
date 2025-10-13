@@ -1,11 +1,12 @@
 import React from "react";
 import { Tabs, Grid } from "antd";
-import { FileTextOutlined, ToolOutlined, CalendarOutlined, SoundOutlined, AppstoreAddOutlined } from "@ant-design/icons";
+import { FileTextOutlined, ToolOutlined, CalendarOutlined, SoundOutlined, AppstoreAddOutlined, PhoneOutlined } from "@ant-design/icons";
 
 import Quotation from "../Quotation";
 import JobCard from "../JobCard";
 import BookingForm from "../BookingForm";
 import StockUpdate from "../StockUpdate";
+import FollowUpsTabs from "../FollowUpsTabs";
 
 export default function Staff() {
   const screens = Grid.useBreakpoint();
@@ -22,15 +23,6 @@ export default function Staff() {
 
   const items = [
     {
-      key: "stock",
-      label: tabLabel(<AppstoreAddOutlined />, "Stock Updates"),
-      children: (
-        <div style={wrap}>
-         <StockUpdate/>
-        </div>
-      ),
-    },
-    {
       key: "quotation",
       label: tabLabel(<FileTextOutlined />, "Quotation"),
       children: (
@@ -39,6 +31,16 @@ export default function Staff() {
         </div>
       ),
     },
+    {
+      key: "followups",
+      label: tabLabel(<PhoneOutlined />, "Follow-ups"),
+      children: (
+        <div style={wrap}>
+          <FollowUpsTabs />
+        </div>
+      ),
+    },
+    
     {
       key: "jobcard",
       label: tabLabel(<ToolOutlined />, "Job Card"),
@@ -54,6 +56,15 @@ export default function Staff() {
       children: (
         <div style={wrap}>
           <BookingForm />
+        </div>
+      ),
+    },
+    {
+      key: "stock",
+      label: tabLabel(<AppstoreAddOutlined />, "Stock Updates"),
+      children: (
+        <div style={wrap}>
+         <StockUpdate/>
         </div>
       ),
     },

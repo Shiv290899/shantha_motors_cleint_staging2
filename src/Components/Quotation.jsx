@@ -2,41 +2,24 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import {
-  Row, Col, Form, Input, InputNumber, Select, Button, Radio, message, Checkbox, Switch, Divider
+  Row, Col, Form, Input, InputNumber, Select, Button, Radio, message, Checkbox, Divider, DatePicker, Switch
 } from "antd";
 import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
-import ViewSheet from "./ViewSheet";
-import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
+import FetchQuot from "./FetchQuot"; // for fetching saved quotations
 import { GetCurrentUser } from "../apiCalls/users";
 import { getBranch } from "../apiCalls/branches";
-import { saveQuotationForm, getNextQuotationSerial } from "../apiCalls/forms";
+import { saveBookingViaWebhook, reserveQuotationSerial } from "../apiCalls/forms";
+// GAS webhook for Quotation save/search/nextSerial
+const QUOT_GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || "";
 
 
 /* ======================
-   GOOGLE FORM INTEGRATION
+   APPS SCRIPT INTEGRATION
    ====================== */
-const GFORM_ID = "1FAIpQLSf12moQr3-6sXFvF4FbA_9h94gwIz-dW_QbT-yFlVsa2wYByg";
 
-const ENTRY = {
-  name: "entry.1495914891",
-  phone: "entry.606711946",
-  company: "entry.561486211",
-  model: "entry.772364163",
-  variant: "entry.219611581",
-  executive: "entry.1594794173",
-  remarks: "entry.1055001846",
-  branch: "entry.1916584531",
-  serial: "entry.606127962",
-  payload: "entry.26252975",
-};
-
-const RESPONSES_CSV_URL =
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vRXJ4xTMWJVv7v-U9SD8R5X2z4Lt0EBUeOOo6_leF-75-gToGJV1yxBk3YUooCtMAJ410quZN7UrhnO/pub?output=csv";
-
-/* ======================
-   GOOGLE SHEETS (VEHICLE DATA) CSV LOADER
-   ====================== */
-const SHEET_CSV_URL =
+// Vehicle catalog CSV (for auto Company/Model/Variant/On-Road Price)
+const CATALOG_CSV_URL =
+  import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
 
 const HEADERS = {
@@ -46,7 +29,7 @@ const HEADERS = {
   price: ["On-Road Price", "On Road Price", "Price"],
 };
 
-// Minimal CSV parser
+// Minimal CSV parser (RFC4180-ish)
 const parseCsv = (text) => {
   const rows = [];
   let row = [], col = "", inQuotes = false;
@@ -67,19 +50,6 @@ const parseCsv = (text) => {
   }
   if (col !== "" || row.length) { row.push(col); rows.push(row); }
   return rows;
-};
-
-// Adapter for ViewSheet
-const parseCsvForView = (text) => {
-  const rows = parseCsv(text);
-  if (!rows.length) return { headers: [], rows: [] };
-  const headers = rows[0].map((h, i) => h || `Col ${i + 1}`);
-  const body = rows.slice(1).map((r) => {
-    const obj = {};
-    headers.forEach((h, i) => (obj[h] = r[i] ?? ""));
-    return obj;
-  });
-  return { headers, rows: body };
 };
 
 const fetchSheetRowsCSV = async (url) => {
@@ -105,8 +75,10 @@ const normalizeSheetRow = (row = {}) => ({
   model: pick(row, HEADERS.model),
   variant: pick(row, HEADERS.variant),
   onRoadPrice:
-    Number(String(pick(row, HEADERS.price) || "0").replace(/[,\s₹]/g, "")) || 0,
+    Number(String(pick(row, HEADERS.price) || "0").replace(/[",\s₹]/g, "")) || 0,
 });
+
+// CSV vehicle sheet integration removed
 
 /* ======================
    CONFIG + STATIC OPTIONS
@@ -130,82 +102,25 @@ const EXECUTIVES = [
   { name: "Narasimha", phone: "9900887666" },
   { name: "Kavya", phone: "8073165374" },
 ];
-const BRANCHES = [
-  "Byadarahalli",
-  "Kadabagere",
-  "Muddinapalya",
-  "D-Group Layout",
-  "Andrahalli",
-  "Tavarekere",
-  "Hegganahalli",
-  "Channenahalli",
-  "Nelagadrahalli",
-];
+
 
 /* ======================
    SERIAL NUMBER (SEQUENTIAL)
    ====================== */
 
-// Legacy helpers for reading the published Google Sheet when backend has no data yet
-const findSerialIdx = (header = []) => {
-  const rx = /^(quotation\s*no\.?|quotation\s*number|serial\s*no\.?|serial|quote\s*id)$/i;
-  let idx = header.findIndex((h) => rx.test(String(h || "").trim()));
-  if (idx >= 0) return idx;
-  idx = header.findIndex((h) => /serial/i.test(String(h || "")));
-  return idx >= 0 ? idx : -1;
-};
 
-const parseIntStrict = (s) => {
-  const t = String(s || "").trim();
-  return /^\d+$/.test(t) ? parseInt(t, 10) : null;
-};
 
-async function computeNextSerialFromSheet() {
-  const res = await fetch(RESPONSES_CSV_URL, { cache: "no-store" });
-  if (!res.ok) throw new Error("Could not fetch responses sheet");
-  const csv = await res.text();
-  const rows = parseCsv(csv);
-  if (!rows.length) return "1";
 
-  const header = rows[0] || [];
-  const idx = findSerialIdx(header);
-  if (idx < 0) return "1";
 
-  for (let i = rows.length - 1; i >= 1; i--) {
-    const n = parseIntStrict(rows[i][idx]);
-    if (n !== null && Number.isFinite(n)) return String(n + 1);
-  }
 
-  let max = 0;
-  for (let i = 1; i < rows.length; i++) {
-    const n = parseIntStrict(rows[i][idx]);
-    if (n !== null && n > max) max = n;
-  }
-  return String(max + 1 || 1);
-}
 
-async function fetchNextSerialNumber() {
+// Reserve a server serial tied to the customer's mobile (idempotent)
+async function reserveNextQuotationSerial(mobile, branchCode, branchId) {
   try {
-    const data = await getNextQuotationSerial();
-    const next = data?.nextSerial;
-    if (next && next !== "1") return String(next);
-    if (next) {
-      try {
-        const fallback = await computeNextSerialFromSheet();
-        if (fallback) return fallback;
-      } catch (sheetErr) {
-        console.warn('Sheet fallback failed', sheetErr);
-      }
-      return String(next);
-    }
+    const resp = await reserveQuotationSerial(mobile, branchCode, branchId);
+    if (resp?.success && resp?.serial) return String(resp.serial);
   } catch (err) {
-    console.error("Failed to fetch next quotation serial", err);
-  }
-  try {
-    const fallback = await computeNextSerialFromSheet();
-    if (fallback) return fallback;
-  } catch (sheetErr) {
-    console.error('Sheet fallback failed', sheetErr);
+    console.error("Failed to reserve quotation serial via API", err);
   }
   return dayjs().format("YYMMDDHHmmss");
 }
@@ -256,29 +171,18 @@ const inr0 = (n) =>
     maximumFractionDigits: 0,
   }).format(Math.max(0, Math.round(n || 0)));
 
-const submitToGoogleForm = async (entries, payload) => {
-  const serialValue = entries?.[ENTRY.serial] ?? "";
-  return saveQuotationForm({
-    formId: GFORM_ID,
-    entries,
-    payload,
-    serialNo: serialValue,
-    serialEntryId: ENTRY.serial,
-    responsesCsvUrl: RESPONSES_CSV_URL,
+// Save via Apps Script Web App (proxied through backend to avoid CORS)
+const submitToWebhook = async (data) => {
+  if (!QUOT_GAS_URL) throw new Error("VITE_QUOTATION_GAS_URL not configured");
+  const resp = await saveBookingViaWebhook({
+    webhookUrl: QUOT_GAS_URL,
+    method: "POST",
+    payload: { action: "save", data },
   });
+  return resp;
 };
 
-const toEntries = (v, executiveName) => ({
-  [ENTRY.serial]: v.serialNo ?? "",
-  [ENTRY.name]: v.name ?? "",
-  [ENTRY.phone]: v.mobile ?? "",
-  [ENTRY.company]: v.company ?? "",
-  [ENTRY.model]: v.bikeModel ?? "",
-  [ENTRY.variant]: v.variant ?? "",
-  [ENTRY.executive]: executiveName ?? "",
-  [ENTRY.remarks]: v.remarks ?? "",
-  [ENTRY.branch]: v.branch ?? "",
-});
+
 
 /* ======================
    SMALL UTIL FOR VEHICLE RECORDS
@@ -304,6 +208,7 @@ const CORE_KEYS = [
   "bikeModel",
   "variant",
   "onRoadPrice",
+  
 ];
 
 const scrollToFirstError = (form, errInfo) => {
@@ -341,9 +246,10 @@ export default function Quotation() {
   const [lastSavedAt, setLastSavedAt] = useState(0);
 
   const [onRoadPrice, setOnRoadPrice] = useState(0);
+  // Manual mode can be toggled; default to auto (sheet) when available
   const [manual, setManual] = useState(false);
   const [sheetOk, setSheetOk] = useState(false);
-  const [mode, setMode] = useState("cash");
+  const [mode, setMode] = useState("loan");
   const [emiSet, setEmiSet] = useState("12");
   const tenures = useMemo(
     () => (emiSet === "12" ? [12, 18, 24, 36] : [24, 30, 36, 48]),
@@ -356,9 +262,62 @@ export default function Quotation() {
   const [docsReq, setDocsReq] = useState(DOCS_REQUIRED);
   const [extraVehicles, setExtraVehicles] = useState([]); // up to 2 records (V2, V3)
   const [userStaffName, setUserStaffName] = useState();
-  const [userRole, setUserRole] = useState();
+  const [, setUserRole] = useState();
+  // Defaults for restore if fields get cleared
+  const [defaultBranchName, setDefaultBranchName] = useState("");
+  const [defaultExecutiveName, setDefaultExecutiveName] = useState("");
+  const [branchCode, setBranchCode] = useState("");
+  const [branchId, setBranchId] = useState("");
+  // Follow-up
+  const [followUpEnabled, setFollowUpEnabled] = useState(true);
+  const [followUpAt, setFollowUpAt] = useState(() => dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
+  const [followUpNotes, setFollowUpNotes] = useState("");
+
+  // Outbox for optimistic background submission (local-only)
+  const OUTBOX_KEY = 'Quotation:outbox';
+  const readJson = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
+  const writeJson = (k, obj) => { try { localStorage.setItem(k, JSON.stringify(obj)); } catch {
+    //sdjkkd
+  } };
+  const enqueueOutbox = (job) => { const box = readJson(OUTBOX_KEY, []); const item = { id: Date.now()+':' + Math.random().toString(36).slice(2), job }; box.push(item); writeJson(OUTBOX_KEY, box); return item.id; };
+  const removeOutboxById = (id) => { const box = readJson(OUTBOX_KEY, []); writeJson(OUTBOX_KEY, box.filter(x=>x.id!==id)); };
+
+  const retryOutbox = async () => {
+    try {
+      const box = readJson(OUTBOX_KEY, []);
+      if (!Array.isArray(box) || !box.length) return;
+      for (const item of box) {
+        const j = item.job || {};
+        try {
+          if (j.type === 'quot' && QUOT_GAS_URL) {
+            const resp = await saveBookingViaWebhook({ webhookUrl: QUOT_GAS_URL, method: 'POST', payload: { action: 'save', data: j.data } });
+            const ok = (resp?.data || resp)?.success !== false;
+            if (!ok) throw new Error('Webhook save failed');
+            removeOutboxById(item.id);
+          }
+        } catch {
+          // keep for next retry
+        }
+      }
+    } catch {
+      //hiasfhahsf
+      }
+  };
+
+  useEffect(() => { setTimeout(() => { retryOutbox(); }, 0); }, []);
+  useEffect(() => { const onOnline = () => retryOutbox(); window.addEventListener('online', onOnline); return () => window.removeEventListener('online', onOnline); }, []);
 
   const executiveName = Form.useWatch("executive", form) || userStaffName || "";
+  // Restore defaults if branch/executive get cleared by a reset or fetch
+  const watchedBranch = Form.useWatch('branch', form);
+  const watchedExec = Form.useWatch('executive', form);
+  useEffect(() => {
+    const patch = {};
+    if (!watchedBranch && defaultBranchName) patch.branch = defaultBranchName;
+    if (!watchedExec && defaultExecutiveName) patch.executive = defaultExecutiveName;
+    if (Object.keys(patch).length) form.setFieldsValue(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchedBranch, watchedExec, defaultBranchName, defaultExecutiveName]);
 
   // ✅ antd message instance + helper to ensure popup shows before opening new tab/print
   const [msgApi, msgCtx] = message.useMessage();
@@ -391,7 +350,7 @@ export default function Quotation() {
         const readLocalUser = () => {
           try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
         };
-        const pickId = (v) => {
+        const _pickId = (v) => {
           if (!v) return null;
           if (typeof v === 'string') return v;
           if (typeof v === 'object') return v._id || v.id || v.$oid || null;
@@ -411,12 +370,30 @@ export default function Quotation() {
           const staffName = user?.formDefaults?.staffName || user?.name || undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
           let branchName = user?.formDefaults?.branchName;
-          if (!branchName) {
-            const branchId = pickId(user?.formDefaults?.branchId) || pickId(user?.primaryBranch) || (Array.isArray(user?.branches) ? pickId(user.branches[0]) : undefined);
-            if (branchId) {
-              const br = await getBranch(String(branchId)).catch(() => null);
-              if (br?.success && br?.data?.name) branchName = br.data.name;
-            }
+          const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
+          if (codeFromUser) { setBranchCode(codeFromUser); try { form.setFieldsValue({ branchCode: codeFromUser }); } catch {
+            //iuf
+          } }
+          // Always try to resolve branch code via branchId if available
+          const branchIdLocal = (user?.formDefaults && (user.formDefaults.branchId?._id || user.formDefaults.branchId || null))
+            || (user?.primaryBranch && (user.primaryBranch?._id || user.primaryBranch || null))
+            || (Array.isArray(user?.branches) && user.branches.length ? (user.branches[0]?._id || user.branches[0] || null) : null);
+
+          if (branchIdLocal) {
+            try {
+              const br = await getBranch(String(branchIdLocal)).catch(() => null);
+              if (br?.success && br?.data) {
+                if (!branchName) branchName = br.data.name;
+                if (br?.data?.code && !branchCode) {
+                  const code = String(br.data.code).toUpperCase();
+                  setBranchCode(code);
+                  setBranchId(String(br.data.id || branchIdLocal));
+                  try { form.setFieldsValue({ branchCode: code }); } catch {
+                    //gufg
+                  }
+                }
+              }
+            } catch { /* ignore */ }
           }
           if (staffName) setUserStaffName(staffName);
           if (role) setUserRole(role);
@@ -424,14 +401,17 @@ export default function Quotation() {
           if (staffName) patch.executive = staffName;
           if (branchName) patch.branch = branchName;
           if (Object.keys(patch).length) form.setFieldsValue(patch);
+          if (branchName) setDefaultBranchName(branchName);
+          if (staffName) setDefaultExecutiveName(staffName);
         }
       } catch {
-        //dj
+        // ignore
       }
 
+      // Load vehicle catalog sheet
       try {
-        const raw = await fetchSheetRowsCSV(SHEET_CSV_URL);
-      const cleaned = raw
+        const raw = await fetchSheetRowsCSV(CATALOG_CSV_URL);
+        const cleaned = raw
           .map(normalizeSheetRow)
           .filter((r) => r.company && r.model && r.variant);
         if (!cleaned.length) {
@@ -442,6 +422,7 @@ export default function Quotation() {
         }
         setBikeData(cleaned);
         setSheetOk(true);
+        setManual(false);
       } catch {
         msgApi.warning("Could not load vehicle sheet. Switched to manual entry.");
         setManual(true);
@@ -449,6 +430,8 @@ export default function Quotation() {
       }
     })();
   }, [msgApi]);
+
+  // Removed serial prefetch to avoid accidental increments on refresh
 
   useEffect(() => {
     if (brand === "NH") {
@@ -511,8 +494,8 @@ export default function Quotation() {
 
   const safeAutoSave = async () => {
     const now = Date.now();
-    if (now - lastSavedAt < 10000) return null; // debounce 10s
-    const result = await handleSaveToForm();   // validates + saves
+    if (now - lastSavedAt < 3000) return null; // tighter debounce for UX
+    const result = await handleSaveToForm();   // validates + queues background save
     setLastSavedAt(now);
     return result;
   };
@@ -522,7 +505,7 @@ export default function Quotation() {
     try {
       await validateCore(form);
       await safeAutoSave();
-      await toastSaved("Saved successfully. Preparing print…");
+      await toastSaved("Saved (background sync). Preparing print…");
 
       const page = pageRef.current;
       if (!page) { window.print(); return; }
@@ -733,6 +716,11 @@ export default function Quotation() {
         setDownPayment(Number(all.onRoadPrice || 0));
       }
     }
+    if (typeof all?.downPayment !== "undefined") {
+      // keep form field and local state in sync
+      const n = Number(all.downPayment || 0);
+      setDownPayment(n);
+    }
   };
 
   /* ======================
@@ -776,6 +764,7 @@ export default function Quotation() {
     const v = await form.validateFields([
       "name", "mobile", "address",
       "company", "bikeModel", "variant", "onRoadPrice", "executive", "remarks", "branch",
+      ...(mode === 'loan' ? ["downPayment"] : []),
     ]);
 
     // validate extra vehicles if present
@@ -784,18 +773,31 @@ export default function Quotation() {
       if (!ev.company || !ev.model || !ev.variant || !ev.onRoadPrice) {
         throw new Error(`Please complete Vehicle ${i + 2} before saving.`);
       }
+      if (mode === 'loan') {
+        const dp = Number(ev.downPayment || 0);
+        if (!(dp > 0)) throw new Error(`Enter down payment for Vehicle ${i + 2} (loan)`);
+        if (dp > Number(ev.onRoadPrice || 0)) throw new Error(`Down payment for Vehicle ${i + 2} cannot exceed its on-road price`);
+      }
     }
 
-    // Always fetch next serial from sheet and assign
-    let nextSerial;
-    try {
-      nextSerial = await fetchNextSerialNumber();
-    } catch (err) {
-      message.error("Couldn't fetch last quotation number. Please try again.");
-      throw err;
+    // Ensure we have a server-issued serial (branch-coded). Replace stale numeric serials.
+    let serial = String(form.getFieldValue('serialNo') || '').trim();
+    const qPattern = /^Q-[A-Z]+-[A-Z0-9]{6}$/;
+    if (!serial || !qPattern.test(serial)) {
+      try {
+        const next = await reserveNextQuotationSerial(
+          v.mobile,
+          branchCode || (form.getFieldValue('branchCode') || '').toUpperCase(),
+          branchId
+        );
+        serial = next;
+        form.setFieldsValue({ serialNo: serial });
+      } catch {
+        serial = dayjs().format('YYMMDDHHmmss');
+        form.setFieldsValue({ serialNo: serial });
+      }
     }
-    v.serialNo = nextSerial;
-    form.setFieldsValue({ serialNo: nextSerial });
+    v.serialNo = serial;
 
     // Build compact Remarks
     const labelOf = (c, m, vv) => [c, m, vv].filter(Boolean).join(" ");
@@ -835,6 +837,15 @@ export default function Quotation() {
       company,              // Vehicle 1 (mirror states)
       model,
       variant,
+      followUp: {
+        enabled: Boolean(followUpEnabled),
+        at: followUpEnabled && followUpAt && dayjs(followUpAt).isValid() ? dayjs(followUpAt).toISOString() : null,
+        notes: String(followUpNotes || ""),
+        assignedTo: v.executive || userStaffName || "",
+        branch: v.branch || "",
+        customer: { name: v.name || "", mobile: v.mobile || "" },
+        status: 'pending',
+      },
       formValues: {
         serialNo: v.serialNo,
         name: v.name,
@@ -850,19 +861,35 @@ export default function Quotation() {
       },
       extraVehicles,        // [{company, model, variant, onRoadPrice, downPayment, emiSet}, ...]
     };
-    const payloadStr = JSON.stringify(payload);
-
-    const entries = toEntries(
-      {
-        ...v,
-        branch: v.branch ?? form.getFieldValue("branch"),
+     // kept in case of debugging
+    // Queue background save to Apps Script via webhook
+    const data = {
+      serialNo: v.serialNo,
+      formValues: {
+        name: v.name,
+        mobile: v.mobile,
+        address: v.address,
+        company: v.company,
+        bikeModel: v.bikeModel,
+        variant: v.variant,
+        onRoadPrice: v.onRoadPrice,
+        executive: v.executive,
         remarks: mergedRemarks,
+        branch: v.branch || "",
       },
-      executiveName
-    );
-    entries[ENTRY.payload] = payloadStr;
-    const syncResponse = await submitToGoogleForm(entries, payload);
-    return { values: v, syncResponse };
+      payload,
+    };
+    const outboxId = enqueueOutbox({ type: 'quot', data });
+    setTimeout(async () => {
+      try {
+        const resp = await submitToWebhook(data);
+        const ok = (resp?.data || resp)?.success !== false;
+        if (ok) removeOutboxById(outboxId);
+      } catch {
+        // keep queued
+      }
+    }, 0);
+    return { values: v, queued: true };
   };
 
   // --------- WhatsApp deep-link ----------
@@ -878,7 +905,7 @@ export default function Quotation() {
       await validateCore(form);
       // validate + save first (will assign serial)
       await safeAutoSave();
-      await toastSaved("Saved successfully. Opening WhatsApp…");
+      await toastSaved("Saved (background sync). Opening WhatsApp…");
 
       const v = form.getFieldsValue(true);
       const phone = toE164NoPlusIndia(v.mobile);
@@ -1041,9 +1068,10 @@ export default function Quotation() {
       <style>{`
         .wrap { max-width: 1000px; margin: 12px auto; padding: 0 12px; }
         .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; }
+        /* Make header actions stack on small screens */
         @media screen and (max-width: 600px) {
-          .brand-row2 { grid-template-columns: 1fr !important; row-gap: 8px; }
-          .brand-right { justify-content: flex-start !important; }
+          .brand-actions-row { grid-template-columns: 1fr !important; row-gap: 8px; }
+          .brand-actions { align-items: flex-start !important; }
         }
         .print-sheet { display: none; }
         @media print { .print-sheet { display: block; } .no-print { display: none !important; } }
@@ -1082,8 +1110,7 @@ export default function Quotation() {
                   <div className="brand-actions" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <FetchQuot
                       form={form}
-                      responsesCsvUrl={RESPONSES_CSV_URL}
-                      parseCsv={parseCsv}
+                      webhookUrl={QUOT_GAS_URL}
                       EXECUTIVES={EXECUTIVES}
                       setBrand={setBrand}
                       setMode={setMode}
@@ -1097,24 +1124,19 @@ export default function Quotation() {
                       setModel={setModel}
                       setVariant={setVariant}
                       setExtraVehicles={setExtraVehicles}
+                      setFollowUpEnabled={setFollowUpEnabled}
+                      setFollowUpAt={setFollowUpAt}
+                      setFollowUpNotes={setFollowUpNotes}
                       buttonText="Fetch Details"
                       buttonProps={{
                         style: { background: "#2ECC71", borderColor: "#2ECC71", color: "#fff" },
                       }}
                     />
-                    <ViewSheet
-                      sheetCsvUrl={RESPONSES_CSV_URL}
-                      parseCSV={parseCsvForView}
-                      dateColumn="Timestamp"
-                      forceBranch={wBranch}
-                      lockBranch={['staff','mechanic','employees'].includes(String(userRole || '').toLowerCase())}
-                      buttonText="View Sheet"
-                      buttonProps={{ type: "primary" }}
-                    />
                   </div>
                 </div>
               </Col>
 
+              {/* Toggle manual/sheet mode for vehicle selection */}
               <Col span={24}>
                 <Form.Item label="Type manually (no sheet)" valuePropName="checked">
                   <Switch checked={manual} onChange={setManual} />
@@ -1125,7 +1147,7 @@ export default function Quotation() {
               </Col>
 
               {/* Quotation No. + Branch */}
-              <Col xs={24} md={8}>
+              <Col xs={24} sm={12} md={6}>
                 <Form.Item
                   label="Quotation No."
                   name="serialNo"
@@ -1133,13 +1155,13 @@ export default function Quotation() {
                   <Input placeholder="Auto at save" readOnly />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={6}>
+              <Col xs={24} sm={12} md={6}>
                 <Form.Item label="Branch" name="branch" rules={[{ required: true, message: "Branch is required" }]}>
                   <Input readOnly placeholder="Auto-fetched from your profile" />
                 </Form.Item>
               </Col>
 
-              <Col xs={24} md={6}>
+              <Col xs={24} sm={12} md={6}>
                 <Form.Item
                   label="Executive Name"
                   name="executive"
@@ -1149,22 +1171,22 @@ export default function Quotation() {
                 </Form.Item>
               </Col>
 
-              <Col xs={24} md={4}>
+              <Col xs={24} sm={12} md={6}>
                 <Form.Item label="Payment Mode">
                   <Radio.Group optionType="button" buttonStyle="solid" value={mode} onChange={(e)=>setMode(e.target.value)}>
-                    <Radio.Button value="cash">Cash</Radio.Button>
                     <Radio.Button value="loan">Loan</Radio.Button>
+                    <Radio.Button value="cash">Cash</Radio.Button>
                   </Radio.Group>
                 </Form.Item>
               </Col>
 
               {/* Customer */}
-              <Col xs={24} md={12}>
+              <Col xs={24} sm={12} md={12}>
                 <Form.Item label="Customer Name" name="name" rules={[{ required: true, message: "Enter name" }]}>
                   <Input placeholder="Customer name" />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={12}>
+              <Col xs={24} sm={12} md={12}>
                 <Form.Item
                   label="Mobile Number"
                   name="mobile"
@@ -1187,7 +1209,7 @@ export default function Quotation() {
               </Col>
 
               {/* Vehicle selection */}
-              <Col xs={24} md={8}>
+              <Col xs={24} sm={12} md={8}>
                 <Form.Item label="Company" name="company" rules={[{ required: true, message: "Enter company" }]}>
                   {manual ? (
                     <Input placeholder="Type company" onChange={(e)=>setCompany(e.target.value)} />
@@ -1205,7 +1227,7 @@ export default function Quotation() {
                 </Form.Item>
               </Col>
 
-              <Col xs={24} md={8}>
+              <Col xs={24} sm={12} md={8}>
                 <Form.Item label="Model" name="bikeModel" rules={[{ required: true, message: "Enter model" }]}>
                   {manual ? (
                     <Input placeholder="Type model" onChange={(e)=>setModel(e.target.value)} />
@@ -1224,7 +1246,7 @@ export default function Quotation() {
                 </Form.Item>
               </Col>
 
-              <Col xs={24} md={8}>
+              <Col xs={24} sm={12} md={8}>
                 <Form.Item label="Variant" name="variant" rules={[{ required: true, message: "Enter variant" }]}>
                   {manual ? (
                     <Input placeholder="Type variant" onChange={(e)=>setVariant(e.target.value)} />
@@ -1239,7 +1261,7 @@ export default function Quotation() {
                 </Form.Item>
               </Col>
 
-              <Col xs={24} md={12}>
+              <Col xs={24} sm={12} md={24}>
                 <Form.Item
                   label="On-Road Price (₹)"
                   name="onRoadPrice"
@@ -1265,15 +1287,33 @@ export default function Quotation() {
 
               {mode === "loan" && (
                 <>
-                  <Col xs={24} md={12}>
-                    <Form.Item label="Down Payment (₹)">
+                  <Col xs={24} sm={12} md={12}>
+                    <Form.Item
+                      label="Down Payment (₹)"
+                      name="downPayment"
+                      rules={[
+                        { required: true, message: "Down payment is required for loan" },
+                        () => ({
+                          validator(_, val) {
+                            const n = Number(val || 0);
+                            if (!Number.isFinite(n) || n <= 0) return Promise.reject(new Error("Enter a positive amount"));
+                            if (n > Number(onRoadPrice || 0)) return Promise.reject(new Error("Down payment cannot exceed on-road price"));
+                            return Promise.resolve();
+                          },
+                        })
+                      ]}
+                    >
                       <InputNumber
                         style={{ width: "100%" }}
                         min={0}
                         max={onRoadPrice}
                         step={1000}
                         value={downPayment}
-                        onChange={(v) => setDownPayment(Math.min(Number(v || 0), onRoadPrice || 0))}
+                        onChange={(v) => {
+                          const n = Math.min(Number(v || 0), onRoadPrice || 0);
+                          setDownPayment(n);
+                          form.setFieldsValue({ downPayment: n });
+                        }}
                         formatter={(val) => `₹ ${String(val ?? "0").replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`}
                         parser={(val) => String(val || "0").replace(/[₹,\s]/g, "")}
                       />
@@ -1349,6 +1389,37 @@ export default function Quotation() {
               <Col xs={24}>
                 <Form.Item label="Remarks" name="remarks">
                   <Input.TextArea rows={2} placeholder="Any notes for this quotation (optional)" />
+                </Form.Item>
+              </Col>
+
+              {/* Follow-up */}
+              <Col span={24}>
+                <Divider orientation="left">Follow-up</Divider>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Schedule follow-up?">
+                  <Switch checked={followUpEnabled} onChange={setFollowUpEnabled} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Follow-up date & time">
+                  <DatePicker
+                    showTime
+                    style={{ width: '100%' }}
+                    value={followUpAt}
+                    onChange={setFollowUpAt}
+                    disabled={!followUpEnabled}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={8}>
+                <Form.Item label="Follow-up notes">
+                  <Input
+                    placeholder="e.g., Customer will decide after salary"
+                    value={followUpNotes}
+                    onChange={(e)=>setFollowUpNotes(e.target.value)}
+                    disabled={!followUpEnabled}
+                  />
                 </Form.Item>
               </Col>
 
