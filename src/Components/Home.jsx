@@ -612,14 +612,6 @@ export default function Home() {
       <div style={styles.navWrap}>
         <div style={{ ...styles.container, ...styles.nav }}>
           <div style={styles.logo}>SHANTHA MOTORS</div>
-          <nav style={styles.navLinks} aria-label="Primary">
-            <a href="#offerings" style={styles.navLink}>Offerings</a>
-            <a href="#products" style={styles.navLink}>Vehicles</a>
-            <a href="#about" style={styles.navLink}>About</a>
-            <a href="#reviews" style={styles.navLink}>Reviews</a>
-            <a href="#enquiry" style={styles.navLink}>Visit</a>
-            <Link to="/contact" style={{ ...styles.navLink, fontWeight: 900 }}>Contact</Link>
-          </nav>
           <button type="button" style={styles.burger} onClick={() => document.getElementById("offerings")?.scrollIntoView({ behavior: "smooth" })}>
             <div style={{ display: "grid", gap: 4 }}>
               <span style={{ height: 2, width: 20, background: "#131417", display: "block" }} />

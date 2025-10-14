@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker } from "antd";
+import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 
 const { Text } = Typography;
@@ -38,12 +39,21 @@ export default function Quotations() {
     const load = async () => {
       setLoading(true);
       try {
-        const GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL;
+        const DEFAULT_QUOT_URL =
+          "https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec";
+        const GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
         const SECRET = import.meta.env.VITE_QUOTATION_GAS_SECRET || '';
-        if (!GAS_URL) throw new Error('Missing VITE_QUOTATION_GAS_URL');
-        const url = SECRET ? `${GAS_URL}?action=list&secret=${encodeURIComponent(SECRET)}` : `${GAS_URL}?action=list`;
-        const res = await fetch(url, { cache: 'no-store' });
-        const js = await res.json();
+        if (!GAS_URL) {
+          message.info('Quotations: Apps Script URL not configured — showing empty list.');
+          if (!cancelled) setRows([]);
+          return;
+        }
+        const resp = await saveBookingViaWebhook({
+          webhookUrl: GAS_URL,
+          method: 'GET',
+          payload: SECRET ? { action: 'list', secret: SECRET } : { action: 'list' },
+        });
+        const js = resp?.data || resp;
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
         const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
         const data = dataArr.map((o, idx) => {
@@ -207,4 +217,3 @@ function parseTsMs(v) {
   }
   return null;
 }
-
