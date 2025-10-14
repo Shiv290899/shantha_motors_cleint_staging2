@@ -56,6 +56,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const fetchFollowUps = async () => {
     setLoading(true);
     try {
+      if (!webhookUrl) {
+        // Optional: if webhook not configured, show empty list gracefully
+        setRows([]);
+        setLoading(false);
+        message.info('Follow-ups webhook not configured.');
+        return;
+      }
       const payload = {
         action: 'followups',
         filter, // today|overdue|upcoming|all

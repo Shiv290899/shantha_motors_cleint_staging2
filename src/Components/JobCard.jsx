@@ -21,8 +21,10 @@ const { Option } = Select;
    CONFIG / CONSTANTS
    ========================= */
 
-// Apps Script Web App URL (set in client env)
-const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || "";
+// Apps Script Web App URL (default set here; env can override)
+const DEFAULT_JOBCARD_GAS_URL =
+  "https://script.google.com/macros/s/AKfycbyo4NZ2hhGrD7_d0uejX_G3Ejv5DXD9hAPRNTOJQ13madNO4DUrHUQOk7dgEe97i3CF/exec";
+const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
 
@@ -127,9 +129,11 @@ const inr = (n) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 })
     .format(Math.max(0, Math.round(Number(n || 0))));
 
-/** Save JobCard via Apps Script Webhook (proxy through backend to avoid CORS). */
+/** Save JobCard via Apps Script Webhook (proxy through backend to avoid CORS).
+ * Optional: if not configured, act as offline success so UI continues (print, etc.).
+ */
 async function submitJobcardWebhook(payload) {
-  if (!JOBCARD_GAS_URL) throw new Error('VITE_JOBCARD_GAS_URL not configured');
+  if (!JOBCARD_GAS_URL) return { success: true, offline: true };
   const resp = await saveJobcardViaWebhook({
     webhookUrl: JOBCARD_GAS_URL,
     method: 'POST',
@@ -586,6 +590,7 @@ export default function JobCard() {
       const outboxId = enqueueOutbox({ type: 'save', data });
       setTimeout(async () => {
         try {
+          if (!JOBCARD_GAS_URL) return; // optional integration disabled
           const resp = await submitJobcardWebhook(data);
           const ok = (resp?.data || resp)?.success !== false;
           if (ok) removeOutboxById(outboxId);
@@ -665,8 +670,11 @@ export default function JobCard() {
       const outboxId = enqueueOutbox({ type: 'post', data });
       setTimeout(async () => {
         try {
-          const resp = await saveJobcardViaWebhook({ webhookUrl: JOBCARD_GAS_URL, method: 'POST', payload: { action: 'postService', data } });
-          const ok = (resp?.data || resp)?.success !== false;
+      let ok = true;
+      if (JOBCARD_GAS_URL) {
+        const resp = await saveJobcardViaWebhook({ webhookUrl: JOBCARD_GAS_URL, method: 'POST', payload: { action: 'postService', data } });
+        ok = (resp?.data || resp)?.success !== false;
+      }
           if (ok) removeOutboxById(outboxId);
         } catch {
           // keep queued

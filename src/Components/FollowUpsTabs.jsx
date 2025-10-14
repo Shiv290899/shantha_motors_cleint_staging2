@@ -11,8 +11,12 @@ export default function FollowUpsTabs() {
     </span>
   );
 
-  const QUOT_URL = import.meta.env.VITE_QUOTATION_GAS_URL || '';
-  const JC_URL = import.meta.env.VITE_JOBCARD_GAS_URL || '';
+  const DEFAULT_QUOT_URL =
+    'https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec';
+  const DEFAULT_JC_URL =
+    'https://script.google.com/macros/s/AKfycbyo4NZ2hhGrD7_d0uejX_G3Ejv5DXD9hAPRNTOJQ13madNO4DUrHUQOk7dgEe97i3CF/exec';
+  const QUOT_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
+  const JC_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 
   const items = [
     {
@@ -35,4 +39,3 @@ export default function FollowUpsTabs() {
     />
   );
 }
-

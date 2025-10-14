@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, Popover, DatePicker } from "antd";
+import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 
 const { Text } = Typography;
@@ -41,12 +42,22 @@ export default function Bookings() {
     const load = async () => {
       setLoading(true);
       try {
-        const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL;
+        const DEFAULT_BOOKING_GAS_URL =
+          "https://script.google.com/macros/s/AKfycbxgy5_MsllkytvWrOuQMukeZhwjIm7omEMPiMttaK9DEe0UsELzmgh6IPe4jqHNbga_/exec";
+        const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
         const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
-        if (!GAS_URL) throw new Error('Missing VITE_BOOKING_GAS_URL');
-        const url = SECRET ? `${GAS_URL}?action=list&secret=${encodeURIComponent(SECRET)}` : `${GAS_URL}?action=list`;
-        const res = await fetch(url, { cache: 'no-store' });
-        const js = await res.json();
+        // If still empty somehow, show empty list gracefully
+        if (!GAS_URL) {
+          message.info('Bookings: Apps Script URL not configured — showing empty list.');
+          if (!cancelled) setRows([]);
+          return;
+        }
+        const resp = await saveBookingViaWebhook({
+          webhookUrl: GAS_URL,
+          method: 'GET',
+          payload: SECRET ? { action: 'list', secret: SECRET } : { action: 'list' },
+        });
+        const js = resp?.data || resp;
         if (!js?.ok || !Array.isArray(js?.data)) throw new Error('Invalid response');
         const data = js.data.map((o, idx) => ({
           key: idx,
