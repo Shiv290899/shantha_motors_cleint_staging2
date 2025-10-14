@@ -7,6 +7,7 @@ import JobCard from "../JobCard";
 import BookingForm from "../BookingForm";
 import StockUpdate from "../StockUpdate";
 import FollowUpsTabs from "../FollowUpsTabs";
+// Announcements banner removed; keep placeholder tab content
 
 export default function Staff() {
   const screens = Grid.useBreakpoint();

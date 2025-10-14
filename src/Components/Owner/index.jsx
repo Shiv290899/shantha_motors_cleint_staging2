@@ -3,8 +3,10 @@ import { Tabs, Grid } from 'antd'
 import InStockUpdate from '../InStockUpdate'
 import Bookings from '../Bookings'
 import Quotations from '../Quotations'
+import Jobcards from '../Jobcards'
 import Branches from '../Admin/Branches'
 import Users from '../Admin/Users'
+// Announcements tab/banner removed as requested
 
 // Owner dashboard: Analytics & Reports in tabs
 export default function OwnerIndex() {
@@ -41,11 +43,12 @@ export default function OwnerIndex() {
   )
 
   const items = [
+    { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
+    { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },
     { key: 'quotations', label: 'Quotations', children: <Quotations /> },
-    { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
-    { key: 'users', label: 'Users', children: <Users readOnly /> },
+    { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
     { key: 'branch', label: 'Branch-level Sales', children: <BranchSales /> },
     { key: 'compare', label: 'Multi-branch Compare', children: <MultiBranchCompare /> },
     { key: 'performance', label: 'Sales Performance', children: <SalesPerformance /> },

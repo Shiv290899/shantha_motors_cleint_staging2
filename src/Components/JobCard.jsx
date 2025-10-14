@@ -22,8 +22,9 @@ const { Option } = Select;
    ========================= */
 
 // Apps Script Web App URL (default set here; env can override)
+// Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbyo4NZ2hhGrD7_d0uejX_G3Ejv5DXD9hAPRNTOJQ13madNO4DUrHUQOk7dgEe97i3CF/exec";
+  "https://script.google.com/macros/s/AKfycbx7Q36rQ4tzFCDZKJbR5SUabuunYL2NKd0jNJxdUgaqIQ8BUX2kfINq5WppF5NJLxA6YQ/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook

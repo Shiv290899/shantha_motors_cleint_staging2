@@ -1,5 +1,5 @@
 import React from "react";
-import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Row, Col } from "antd";
+import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Row, Col, Typography, Tooltip } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { listBranches, listBranchesPublic, createBranch, updateBranch, deleteBranch } from "../../apiCalls/branches";
 
@@ -23,6 +23,10 @@ export default function Branches({ readOnly = false }) {
   const [modalOpen, setModalOpen] = React.useState(false);
   const [editing, setEditing] = React.useState(null);
   const [form] = Form.useForm();
+  const [q, setQ] = React.useState("");
+  const [cityFilter, setCityFilter] = React.useState("all");
+  const [typeFilter, setTypeFilter] = React.useState("all");
+  const [statusFilter, setStatusFilter] = React.useState("all");
 
   const fetchList = React.useCallback(async () => {
     setLoading(true);
@@ -63,6 +67,50 @@ export default function Branches({ readOnly = false }) {
   }, [readOnly]);
 
   React.useEffect(() => { fetchList(); }, [fetchList]);
+
+  // Derived filters + filtered data
+  const cities = React.useMemo(() => {
+    const s = new Set((items || []).map((b) => (b.address?.city ? String(b.address.city).trim() : "")).filter(Boolean));
+    return ["all", ...Array.from(s).sort((a,b)=>a.localeCompare(b))];
+  }, [items]);
+  const filtered = React.useMemo(() => {
+    const s = String(q || "").toLowerCase();
+    return (items || []).filter((b) => {
+      if (cityFilter !== 'all' && (String(b.address?.city || '') !== cityFilter)) return false;
+      if (typeFilter !== 'all' && String(b.type || '') !== typeFilter) return false;
+      if (statusFilter !== 'all' && String(b.status || '') !== statusFilter) return false;
+      if (!s) return true;
+      const hay = [b.code, b.name, b.phone, b.email, b.address?.line1, b.address?.line2, b.address?.area, b.address?.city, b.address?.state]
+        .map((x)=>String(x||'').toLowerCase());
+      return hay.some((x)=>x.includes(s));
+    });
+  }, [items, q, cityFilter, typeFilter, statusFilter]);
+
+  const stats = React.useMemo(() => {
+    const by = (key) => {
+      const m = new Map();
+      filtered.forEach((b)=>{ const k = String(b[key] || ''); m.set(k, (m.get(k)||0)+1); });
+      return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
+    };
+    return { byType: by('type'), byStatus: by('status') };
+  }, [filtered]);
+
+  const exportCsv = () => {
+    const headers = [
+      'Code','Name','Type','Status','Phone','Email','Line1','Line2','Area','City','State','Pincode','Latitude','Longitude'
+    ];
+    const rows = filtered.map((b)=>[
+      b.code||'', b.name||'', b.type||'', b.status||'', b.phone||'', b.email||'',
+      b.address?.line1||'', b.address?.line2||'', b.address?.area||'', b.address?.city||'', b.address?.state||'', b.address?.pincode||'',
+      b.location?.coordinates?.[1] ?? '', b.location?.coordinates?.[0] ?? ''
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => (String(v).includes(',') ? `"${String(v).replace(/"/g,'""')}"` : String(v))).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'branches.csv'; a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 500);
+  };
 
   const onCreate = () => {
     setEditing(null);
@@ -172,10 +220,26 @@ export default function Branches({ readOnly = false }) {
     }
   };
 
+  const mapUrl = (b) => {
+    const parts = [b.address?.line1, b.address?.line2, b.address?.area, b.address?.city, b.address?.state, b.address?.pincode]
+      .filter(Boolean).join(', ');
+    if (!parts) return null; return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parts)}`;
+  };
+
   const columns = [
     { title: "Code", dataIndex: "code", key: "code", width: 110, sorter: (a, b) => a.code.localeCompare(b.code) },
-    { title: "Name", dataIndex: "name", key: "name", sorter: (a, b) => a.name.localeCompare(b.name) },
-    { title: "Type", dataIndex: "type", key: "type", width: 150, render: (v) => <Tag color="blue">{v}</Tag> },
+    { title: "Name", dataIndex: "name", key: "name", sorter: (a, b) => a.name.localeCompare(b.name), render: (v,r)=> (
+      <span>
+        {v}{' '}
+        <Tooltip title="Open in Google Maps">
+          {mapUrl(r) && <a href={mapUrl(r)} target="_blank" rel="noopener" style={{ fontSize: 12, marginLeft: 4 }}>Map</a>}
+        </Tooltip>
+      </span>
+    ) },
+    { title: "Type", dataIndex: "type", key: "type", width: 150, render: (v) => {
+      const color = v === 'sales' ? 'geekblue' : v === 'service' ? 'cyan' : 'blue';
+      return <Tag color={color}>{v}</Tag>;
+    } },
     { title: "City", key: "city", width: 140, render: (_, r) => r.address?.city || "—" },
     { title: "Phone", dataIndex: "phone", key: "phone", width: 140 },
     { title: "Staff", key: "staffCount", width: 90, render: (v, r) => (r.activeStaffCount ?? (Array.isArray(r.staff) ? r.staff.length : 0)) },
@@ -199,22 +263,39 @@ export default function Branches({ readOnly = false }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
-        <div>
-          <strong>Total:</strong> {total}
-        </div>
+      <div style={{ display: "flex", gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+        <Space size={[8,8]} wrap>
+          <Input.Search placeholder="Search code/name/city/phone" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 220 }} />
+          <Select value={cityFilter} onChange={setCityFilter} style={{ minWidth: 160 }} options={cities.map(c=>({ value: c, label: c==='all'?'All Cities':c }))} />
+          <Select value={typeFilter} onChange={setTypeFilter} style={{ minWidth: 160 }} options={[{value:'all',label:'All Types'},...TYPE_OPTIONS]} />
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 180 }} options={[{value:'all',label:'All Status'},...STATUS_OPTIONS]} />
+          <Button onClick={fetchList}>Refresh</Button>
+          <Button onClick={exportCsv}>Export CSV</Button>
+        </Space>
+        <div style={{ flex: 1 }} />
         {!readOnly && (
           <Button type="primary" icon={<PlusOutlined />} onClick={onCreate}>
             New Branch
           </Button>
         )}
       </div>
+
+      {/* Stats badges */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        {stats.byStatus.map(([k,v]) => (
+          <Tag key={`st-${k||'unknown'}`} color={k==='active'?'green':k==='inactive'?'default':'orange'}>{(k||'unknown')}: {v}</Tag>
+        ))}
+        {stats.byType.map(([k,v]) => (
+          <Tag key={`tp-${k||'unknown'}`} color={k==='sales'?'geekblue':k==='service'?'cyan':'blue'}>{(k||'unknown')}: {v}</Tag>
+        ))}
+        <Tag color="blue">Total: {filtered.length} / {total}</Tag>
+      </div>
       <Table
         rowKey={(r) => r.id}
-        dataSource={items}
+        dataSource={filtered}
         columns={columns}
         loading={loading}
-        pagination={false}
+        pagination={{ pageSize: 10 }}
         size="middle"
       />
 

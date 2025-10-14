@@ -5,6 +5,9 @@ import StockUpdate from "../StockUpdate";
 import InStockUpdate from "../InStockUpdate";
 import Users from "./Users";
 import Bookings from "../Bookings";
+import Quotations from "../Quotations";
+import Jobcards from "../Jobcards";
+// Announcements tab/banner removed as requested
 
 const { Title, Paragraph } = Typography;
 
@@ -32,6 +35,16 @@ export default function Admin() {
       key: "bookings",
       label: "Bookings",
       children: <Bookings />,
+    },
+    {
+      key: "quotations",
+      label: "Quotations",
+      children: <Quotations />,
+    },
+    {
+      key: "jobcards",
+      label: "Job Cards",
+      children: <Jobcards />,
     },
     {
       key: "in-stock",
