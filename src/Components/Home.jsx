@@ -609,18 +609,21 @@ export default function Home() {
         .marquee-track { display:flex; gap:28px; width:max-content; animation: scrollX 24s linear infinite }
       `}</style>
 
-      <div style={styles.navWrap}>
-        <div style={{ ...styles.container, ...styles.nav }}>
-          <div style={styles.logo}>SHANTHA MOTORS</div>
-          <button type="button" style={styles.burger} onClick={() => document.getElementById("offerings")?.scrollIntoView({ behavior: "smooth" })}>
-            <div style={{ display: "grid", gap: 4 }}>
-              <span style={{ height: 2, width: 20, background: "#131417", display: "block" }} />
-              <span style={{ height: 2, width: 16, background: "#131417", display: "block" }} />
-              <span style={{ height: 2, width: 20, background: "#131417", display: "block" }} />
-            </div>
-          </button>
+      {/* Hide the internal Home navbar on mobile to avoid duplicate headers/drawers */}
+      {!isMobile && (
+        <div style={styles.navWrap}>
+          <div style={{ ...styles.container, ...styles.nav }}>
+            <div style={styles.logo}>SHANTHA MOTORS</div>
+            <button type="button" style={styles.burger} onClick={() => document.getElementById("offerings")?.scrollIntoView({ behavior: "smooth" })}>
+              <div style={{ display: "grid", gap: 4 }}>
+                <span style={{ height: 2, width: 20, background: "#131417", display: "block" }} />
+                <span style={{ height: 2, width: 16, background: "#131417", display: "block" }} />
+                <span style={{ height: 2, width: 20, background: "#131417", display: "block" }} />
+              </div>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div style={styles.container}>
         <section style={styles.heroWrap} role="img" aria-label="Motorcycle hero">

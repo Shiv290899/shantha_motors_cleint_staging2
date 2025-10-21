@@ -1,6 +1,7 @@
 import React from 'react'
 import { Tabs, Grid } from 'antd'
 import InStockUpdate from '../InStockUpdate'
+import StockUpdate from '../StockUpdate'
 import Bookings from '../Bookings'
 import Quotations from '../Quotations'
 import Jobcards from '../Jobcards'
@@ -46,6 +47,7 @@ export default function OwnerIndex() {
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
+    { key: 'stock', label: 'Stock Update', children: <StockUpdate /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },
     { key: 'quotations', label: 'Quotations', children: <Quotations /> },
     { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },

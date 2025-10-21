@@ -33,6 +33,15 @@ export default function Staff() {
       ),
     },
     {
+      key: "jobcard",
+      label: tabLabel(<ToolOutlined />, "Job Card"),
+      children: (
+        <div style={wrap}>
+          <JobCard />
+        </div>
+      ),
+    },
+    {
       key: "followups",
       label: tabLabel(<PhoneOutlined />, "Follow-ups"),
       children: (
@@ -42,15 +51,7 @@ export default function Staff() {
       ),
     },
     
-    {
-      key: "jobcard",
-      label: tabLabel(<ToolOutlined />, "Job Card"),
-      children: (
-        <div style={wrap}>
-          <JobCard />
-        </div>
-      ),
-    },
+    
     {
       key: "booking",
       label: tabLabel(<CalendarOutlined />, "Booking"),

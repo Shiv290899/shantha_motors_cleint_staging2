@@ -34,6 +34,31 @@ export default function Jobcards() {
   const [q, setQ] = useState("");
   const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
+  const [userRole, setUserRole] = useState("");
+  const [allowedBranches, setAllowedBranches] = useState([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (!raw) return;
+      const u = JSON.parse(raw);
+      setUserRole(String(u?.role || '').toLowerCase());
+      const list = [];
+      const pb = u?.formDefaults?.branchName || u?.primaryBranch?.name || '';
+      if (pb) list.push(pb);
+      if (Array.isArray(u?.branches)) {
+        u.branches.forEach((b)=>{ const nm = typeof b === 'string' ? b : (b?.name || ''); if (nm) list.push(nm); });
+      }
+      setAllowedBranches(Array.from(new Set(list.filter(Boolean))));
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length && branchFilter === 'all') {
+      setBranchFilter(allowedBranches[0]);
+    }
+  }, [userRole, allowedBranches, branchFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,15 +124,22 @@ export default function Jobcards() {
 
   const branches = useMemo(() => {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const all = Array.from(set);
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length) return [...Array.from(new Set(all.filter((b)=>allowedBranches.includes(b))))];
+    return ["all", ...all];
+  }, [rows, userRole, allowedBranches]);
   const services = useMemo(() => {
     const set = new Set(rows.map((r)=> String(r.serviceType||'').toLowerCase()).filter(Boolean));
     return ["all", ...Array.from(set)];
   }, [rows]);
 
   const filtered = useMemo(() => {
+    const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     return rows.filter((r) => {
+      if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+        if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+      }
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
       if (serviceFilter !== "all" && String(r.serviceType||'').toLowerCase() !== serviceFilter) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
@@ -124,7 +156,7 @@ export default function Jobcards() {
       }
       return true;
     });
-  }, [rows, branchFilter, serviceFilter, q, dateRange]);
+  }, [rows, branchFilter, serviceFilter, q, dateRange, userRole, allowedBranches]);
 
   const columns = [
     { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, responsive: ['md'], render: (v)=> formatTs(v) },

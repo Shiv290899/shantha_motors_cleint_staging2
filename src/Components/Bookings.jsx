@@ -1,26 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, Popover, DatePicker } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, Popover } from "antd";
+import BookingPrintQuickModal from "./BookingPrintQuickModal";
+import BookingInlineModal from "./BookingInlineModal";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
-import dayjs from "dayjs";
 
 const { Text } = Typography;
 
 // Bookings are now loaded only through Apps Script JSON endpoint (no CSV)
 
 const HEAD = {
-  ts: ["Timestamp", "Time", "Date"],
-  name: ["Customer_Name", "Customer", "Name"],
-  mobile: ["Mobile", "Phone", "Mobile Number"],
-  amount: ["Booking Amount", "Amount"],
-  mode: ["Payment_Mode", "Payment Mode"],
-  rto: ["RTO"],
-  address: ["Address"],
-  aadhar: ["Aadhar_Card", "Aadhar"],
-  pan: ["Pan_Card", "PAN"],
-  other: ["Additional_Documents", "Additional"],
-  payload: ["Payload"],
-  bookingId: ["Booking_ID", "Booking Id", "BookingID"],
+  ts: ["Submitted At", "Timestamp", "Time", "Date"],
   branch: ["Branch"],
+  name: ["Customer Name", "Customer_Name", "Customer", "Name"],
+  mobile: ["Mobile Number", "Mobile", "Phone"],
+  bookingId: ["Booking ID", "Booking_ID", "Booking Id", "BookingID"],
+  company: ["Company"],
+  model: ["Model"],
+  variant: ["Variant"],
+  chassis: ["Chassis Number", "Chassis No", "Chassis"],
+  file: ["File URL", "File", "Document URL"],
+  status: ["Status", "Booking Status", "State"],
+  availability: ["Chassis Availability", "Availability", "Stock", "Stock Status"],
 };
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj[k] ?? "").find((v) => v !== "") || "").trim();
@@ -32,10 +32,11 @@ export default function Bookings() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
-  const [modeFilter, setModeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [updating, setUpdating] = useState(null);
+  const [printModal, setPrintModal] = useState({ open: false, row: null });
+  const [prefillModal, setPrefillModal] = useState({ open: false, row: null });
   const [q, setQ] = useState("");
-  const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
-  const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
 
   useEffect(() => {
     let cancelled = false;
@@ -43,7 +44,7 @@ export default function Bookings() {
       setLoading(true);
       try {
         const DEFAULT_BOOKING_GAS_URL =
-          "https://script.google.com/macros/s/AKfycbxgy5_MsllkytvWrOuQMukeZhwjIm7omEMPiMttaK9DEe0UsELzmgh6IPe4jqHNbga_/exec";
+          "https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec"
         const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
         const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
         // If still empty somehow, show empty list gracefully
@@ -63,20 +64,19 @@ export default function Bookings() {
           key: idx,
           ts: pick(o, HEAD.ts),
           tsMs: parseTsMs(pick(o, HEAD.ts)),
+          bookingId: pick(o, HEAD.bookingId),
           name: pick(o, HEAD.name),
           mobile: pick(o, HEAD.mobile),
-          amount: pick(o, HEAD.amount),
-          mode: pick(o, HEAD.mode),
-          rto: pick(o, HEAD.rto),
-          address: pick(o, HEAD.address),
-          aadhar: pick(o, HEAD.aadhar),
-          pan: pick(o, HEAD.pan),
-          other: pick(o, HEAD.other),
-          payload: pick(o, HEAD.payload),
-          bookingId: pick(o, HEAD.bookingId),
+          company: pick(o, HEAD.company),
+          model: pick(o, HEAD.model),
+          variant: pick(o, HEAD.variant),
+          chassis: pick(o, HEAD.chassis),
+          fileUrl: pick(o, HEAD.file),
           branch: pick(o, HEAD.branch),
+          status: (pick(o, HEAD.status) || 'pending').toLowerCase(),
+          availability: pick(o, HEAD.availability),
         }));
-        if (!cancelled) setRows(data.filter((r)=>r.name || r.mobile || r.bookingId));
+        if (!cancelled) setRows(data.filter((r)=>r.bookingId || r.name || r.mobile));
       } catch {
         message.error('Could not load bookings via Apps Script. Check Web App URL / access.');
         if (!cancelled) setRows([]);
@@ -95,43 +95,109 @@ export default function Bookings() {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
     return ["all", ...Array.from(set)];
   }, [rows]);
-  const modes = useMemo(() => {
-    const set = new Set(rows.map((r)=>r.mode).filter(Boolean));
+  const statuses = useMemo(() => {
+    const set = new Set(rows.map((r) => (r.status || "").toLowerCase()).filter(Boolean));
     return ["all", ...Array.from(set)];
   }, [rows]);
 
   const filtered = useMemo(() => {
-    return rows.filter((r) => {
+    const list = rows.filter((r) => {
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-      if (modeFilter !== "all" && r.mode !== modeFilter) return false;
-      if (dateRange && dateRange[0] && dateRange[1]) {
-        const start = dateRange[0].startOf('day').valueOf();
-        const end = dateRange[1].endOf('day').valueOf();
-        const t = r.tsMs ?? parseTsMs(r.ts);
-        if (!t || t < start || t > end) return false;
-      }
+      if (statusFilter !== "all" && (String(r.status || "").toLowerCase() !== statusFilter)) return false;
       if (q) {
         const s = q.toLowerCase();
         if (![
-          r.name, r.mobile, r.bookingId, r.address, r.rto, r.mode, r.branch,
+          r.bookingId, r.name, r.mobile, r.company, r.model, r.variant, r.chassis, r.branch,
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
     });
-  }, [rows, branchFilter, modeFilter, q, dateRange]);
+    return list.sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
+  }, [rows, branchFilter, statusFilter, q]);
+
+  const STATUS_COLOR = {
+    pending: 'gold',
+    seen: 'blue',
+    approved: 'green',
+    allotted: 'purple',
+    cancelled: 'red',
+  };
+
+  // Simple rule as requested: if chassis number is present → In Stock; else → To be allotted
+  const stockLabel = (chassis,) => {
+    const hasChassis = Boolean(String(chassis || '').trim());
+    return hasChassis ? 'In Stock' : 'To be allotted';
+  };
+  const stockColor = (label) => (label === 'In Stock' ? 'green' : 'volcano');
+
+  const updateBooking = async (bookingId, patch, mobile) => {
+    try {
+      setUpdating(bookingId);
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec";
+      const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
+      await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: { action: 'update', bookingId, mobile, patch } });
+      setRows((prev)=> prev.map(r=> r.bookingId===bookingId ? { ...r, status: String(patch.status || r.status).toLowerCase() } : r));
+      message.success('Updated');
+    } catch { message.error('Update failed'); }
+    finally { setUpdating(null); }
+  };
 
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, responsive: ['md'], render: (v)=> formatTs(v) },
-    { title: "Booking ID", dataIndex: "bookingId", key: "bookingId", width: 180, ellipsis: true },
-    { title: "Customer", dataIndex: "name", key: "name", width: 200, ellipsis: true },
-    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 140 },
-    { title: "Amount", dataIndex: "amount", key: "amount", width: 110, align: 'right' },
-    { title: "Mode", dataIndex: "mode", key: "mode", width: 110, align: 'center' },
-    { title: "RTO", dataIndex: "rto", key: "rto", width: 110, responsive: ['md'], align: 'center' },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
-    { title: "Aadhar", dataIndex: "aadhar", key: "aadhar", width: 170, render: (v)=> <LinkCell url={v} /> },
-    { title: "PAN", dataIndex: "pan", key: "pan", width: 170, render: (v)=> <LinkCell url={v} /> },
-    { title: "Additional", dataIndex: "other", key: "other", width: 170, render: (v)=> <LinkCell url={firstFromList(v)} count={countFromList(v)} /> },
+    
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 200, ellipsis: true },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
+    { title: 'Model', dataIndex: 'model', key: 'model', width: 160 },
+    { title: 'Variant', dataIndex: 'variant', key: 'variant', width: 140 },
+    { title: 'Stk Status', dataIndex: 'availability', key: 'stk', width: 120, render: (v, r)=> {
+      const lbl = stockLabel(r.chassis, v);
+      return (<Tag color={stockColor(lbl)}>{lbl}</Tag>);
+    } },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 120, render: (s)=> <Tag color={STATUS_COLOR[String(s||'').toLowerCase()] || 'default'}>{String(s||'pending').replace(/_/g,' ')}</Tag> },
+   
+    
+     
+    {
+      title: 'Actions', key: 'actions', width: 320,
+      render: (_, r) => (
+        <Space size={6}>
+          <Select
+            size='small'
+            defaultValue={r.status || 'pending'}
+            style={{ width: 130 }}
+            onChange={(v)=> updateBooking(r.bookingId, { status: v }, r.mobile)}
+            options={[
+              { value: 'pending', label: 'Pending' },
+              { value: 'seen', label: 'Seen' },
+              { value: 'approved', label: 'Approved' },
+              { value: 'allotted', label: 'Allotted' },
+              { value: 'cancelled', label: 'Cancelled' },
+            ]}
+          />
+          <Select
+            size='small'
+            placeholder='Quick note'
+            style={{ width: 170 }}
+            onChange={(v)=> updateBooking(r.bookingId, { status: r.status || 'seen', notes: v }, r.mobile)}
+            options={[
+              { value: 'Checked – proceed.', label: 'Checked – proceed.' },
+              { value: 'Allot vehicle.', label: 'Allot vehicle.' },
+              { value: 'Please call showroom.', label: 'Please call showroom.' },
+            ]}
+          />
+          <Button size='small' loading={updating===r.bookingId} onClick={()=> updateBooking(r.bookingId, { status: 'seen' }, r.mobile)}>Mark Seen</Button>
+        </Space>
+      )
+    },
+    { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 300, render: (v, r)=> (
+      <Space size={6}>
+        <LinkCell url={v} />
+        <Button size='small' onClick={()=> setPrintModal({ open: true, row: r })}>Print</Button>
+        <Button size='small' onClick={()=> setPrefillModal({ open: true, row: r })}>Prefilled Form</Button>
+      </Space>
+    ) },
+    { title: 'Booking ID', dataIndex: 'bookingId', key: 'bookingId', width: 180, ellipsis: true },
+    
   ];
 
   const total = rows.length;
@@ -142,18 +208,14 @@ export default function Bookings() {
         <Space size="small" wrap>
           <Select value={branchFilter} onChange={setBranchFilter} style={{ minWidth: 160 }}
                   options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))} />
-          <Select value={modeFilter} onChange={setModeFilter} style={{ minWidth: 160 }}
-                  options={modes.map(m => ({ value: m, label: m === 'all' ? 'All Modes' : m }))} />
-          <DatePicker.RangePicker value={dateRange} onChange={(v)=>{ setDateRange(v); setQuickKey(null); }} allowClear />
-          <Button size="small" type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
-          <Button size="small" type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>
-          <Button size="small" onClick={()=>{ setDateRange(null); setQuickKey(null); }}>Clear</Button>
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 160 }}
+                  options={statuses.map(s => ({ value: s, label: s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ') }))} />
           <Input placeholder="Search name/mobile/booking" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 220 }} />
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
           <Tag color="blue">Total: {total}</Tag>
-          <Tag color="geekblue">Showing: {filtered.length}</Tag>
+          <Tag color="geekblue">Showing: {filtered.length}{statusFilter !== 'all' ? ` (status: ${statusFilter})` : ''}</Tag>
           <Button onClick={() => {
             // re-run the loader without full page refresh
             const ev = new Event('reload-bookings');
@@ -171,21 +233,24 @@ export default function Bookings() {
         rowKey={(r) => `${r.bookingId}-${r.mobile}-${r.ts}-${r.key}`}
         scroll={{ x: 'max-content' }}
       />
+
+      <BookingPrintQuickModal
+        open={printModal.open}
+        onClose={()=> setPrintModal({ open: false, row: null })}
+        row={printModal.row}
+        webhookUrl={import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbyeAGWyqVSln9CSmbU_m6n35z9ko9KdtPAqRKRBcmQbCl7tnapQPVtpN3jb6pBNmDjX/exec'}
+      />
+      <BookingInlineModal
+        open={prefillModal.open}
+        onClose={()=> setPrefillModal({ open: false, row: null })}
+        row={prefillModal.row}
+        webhookUrl={import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbyeAGWyqVSln9CSmbU_m6n35z9ko9KdtPAqRKRBcmQbCl7tnapQPVtpN3jb6pBNmDjX/exec'}
+      />
     </div>
   );
 }
 
-// --- Helpers for alignment and preview ---
-function formatTs(v) {
-  if (!v) return <Text type="secondary">—</Text>;
-  try {
-    // Support both native Date objects and strings
-    const d = v instanceof Date ? v : new Date(String(v));
-    if (isNaN(d.getTime())) return String(v);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch { return String(v); }
-}
+
 
 // Parse various timestamp formats from Sheets to epoch ms
 function parseTsMs(v) {
@@ -243,15 +308,7 @@ function normalizeLink(u) {
   };
 }
 
-function firstFromList(v) {
-  if (!v) return '';
-  const parts = String(v).split(' | ').filter(Boolean);
-  return parts[0] || '';
-}
-function countFromList(v) {
-  if (!v) return 0;
-  return String(v).split(' | ').filter(Boolean).length;
-}
+
 
 function LinkCell({ url, count }) {
   if (!url) return <Text type="secondary">—</Text>;

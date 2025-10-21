@@ -18,6 +18,7 @@ const HEAD = {
   variant: ["Variant"],
   price: ["On-Road Price", "On Road Price", "Price"],
   payload: ["Payload"],
+  status: ["Status", "FollowUp Status", "Quotation Status"],
 };
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj[k] ?? "").find((v) => v !== "") || "").trim();
@@ -30,9 +31,35 @@ export default function Quotations() {
   const [loading, setLoading] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
   const [modeFilter, setModeFilter] = useState("all"); // cash | loan | all
+  const [statusFilter, setStatusFilter] = useState("all");
   const [q, setQ] = useState("");
   const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
+  const [userRole, setUserRole] = useState("");
+  const [allowedBranches, setAllowedBranches] = useState([]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (!raw) return;
+      const u = JSON.parse(raw);
+      setUserRole(String(u?.role || '').toLowerCase());
+      const list = [];
+      const pb = u?.formDefaults?.branchName || u?.primaryBranch?.name || '';
+      if (pb) list.push(pb);
+      if (Array.isArray(u?.branches)) {
+        u.branches.forEach((b)=>{ const nm = typeof b === 'string' ? b : (b?.name || ''); if (nm) list.push(nm); });
+      }
+      setAllowedBranches(Array.from(new Set(list.filter(Boolean))));
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length && branchFilter === 'all') {
+      setBranchFilter(allowedBranches[0]);
+    }
+  }, [userRole, allowedBranches, branchFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +90,7 @@ export default function Quotations() {
           try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
           const fv = (payload && payload.formValues) ? payload.formValues : {};
           const mode = (payload && payload.mode) || '';
+          const status = (payload && payload.followUp && payload.followUp.status) || pick(obj, HEAD.status) || '';
           const brand = (payload && payload.brand) || '';
           const company = fv.company || pick(obj, HEAD.company);
           const model = fv.bikeModel || fv.model || pick(obj, HEAD.model);
@@ -83,6 +111,7 @@ export default function Quotations() {
             price,
             mode: mode || (payload && payload.mode) || '',
             brand,
+            status,
           };
         });
         if (!cancelled) setRows(data.filter((r)=>r.name || r.mobile || r.serialNo));
@@ -101,17 +130,33 @@ export default function Quotations() {
 
   const branches = useMemo(() => {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const all = Array.from(set);
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length) return [...Array.from(new Set(all.filter((b)=>allowedBranches.includes(b))))];
+    return ["all", ...all];
+  }, [rows, userRole, allowedBranches]);
   const modes = useMemo(() => {
     const set = new Set(rows.map((r)=> (r.mode || '').toLowerCase()).filter(Boolean));
     return ["all", ...Array.from(set)];
   }, [rows]);
+  const statuses = useMemo(() => {
+    const set = new Set(
+      rows
+        .map((r)=> String(r.status||'').toLowerCase())
+        .filter((s) => s && s !== 'lost')
+    );
+    return ["all", ...Array.from(set)];
+  }, [rows]);
 
   const filtered = useMemo(() => {
+    const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     return rows.filter((r) => {
+      if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+        if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+      }
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
       if (modeFilter !== "all" && String(r.mode||'').toLowerCase() !== modeFilter) return false;
+      if (statusFilter !== 'all' && String(r.status||'').toLowerCase() !== statusFilter) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
         const start = dateRange[0].startOf('day').valueOf();
         const end = dateRange[1].endOf('day').valueOf();
@@ -121,18 +166,32 @@ export default function Quotations() {
       if (q) {
         const s = q.toLowerCase();
         if (![
-          r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive
+          r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive, r.status
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
     });
-  }, [rows, branchFilter, modeFilter, q, dateRange]);
+  }, [rows, branchFilter, modeFilter, statusFilter, q, dateRange, userRole, allowedBranches]);
+
+  const statusColor = (s) => {
+    const k = String(s || '').toLowerCase();
+    return k === 'converted' ? 'green'
+      : k === 'completed' ? 'green'
+      : k === 'pending' ? 'orange'
+      : k === 'not_interested' ? 'default'
+      : k === 'unreachable' ? 'volcano'
+      : k === 'wrong_number' ? 'magenta'
+      : k === 'purchased_elsewhere' ? 'geekblue'
+      : k === 'no_response' ? 'gold'
+      : 'default';
+  };
 
   const columns = [
     { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, responsive: ['md'], render: (v)=> formatTs(v) },
     { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 180, ellipsis: true },
     { title: "Customer", dataIndex: "name", key: "name", width: 200, ellipsis: true },
     { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 140 },
+    { title: "Status", dataIndex: "status", key: "status", width: 130, render: (v)=> <Tag color={statusColor(v)}>{String(v||'').replace(/_/g,' ')||'—'}</Tag> },
     { title: "Company", dataIndex: "company", key: "company", width: 140, responsive: ['md'] },
     { title: "Model", dataIndex: "model", key: "model", width: 140, responsive: ['md'] },
     { title: "Variant", dataIndex: "variant", key: "variant", width: 140, responsive: ['lg'] },
@@ -152,6 +211,8 @@ export default function Quotations() {
                   options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))} />
           <Select value={modeFilter} onChange={setModeFilter} style={{ minWidth: 140 }}
                   options={modes.map(m => ({ value: m, label: m === 'all' ? 'All Modes' : String(m).toUpperCase() }))} />
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 160 }}
+                  options={statuses.map(s => ({ value: s, label: s === 'all' ? 'All Statuses' : String(s).replace(/_/g,' ') }))} />
           <DatePicker.RangePicker value={dateRange} onChange={(v)=>{ setDateRange(v); setQuickKey(null); }} allowClear />
           <Button size="small" type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
           <Button size="small" type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>

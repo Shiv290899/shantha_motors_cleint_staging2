@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip } from "antd";
 // Stock updates now use MongoDB backend only
 import { listStocks, listCurrentStocks, createStock } from "../apiCalls/stocks";
+import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
 
 // --- Config ---
@@ -73,6 +74,9 @@ export default function StockUpdate() {
   const [allowedActions, setAllowedActions] = useState(null); // null = all, ["add"] or [specific]
   const [submitting, setSubmitting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  const [invoicePrefill, setInvoicePrefill] = useState(null);
+  const [invoiceBaseRow, setInvoiceBaseRow] = useState(null);
   const [loadingList, setLoadingList] = useState(false);
   const [items, setItems] = useState([]);
   const [branchNames, setBranchNames] = useState([]);
@@ -238,6 +242,25 @@ export default function StockUpdate() {
 
   const openWithAction = (base, act) => {
     try {
+      if (act === 'invoice') {
+        // Open Booking form modal with prefilled vehicle stock details
+        const prefill = {
+          company: base?.company || '',
+          bikeModel: base?.model || '',
+          variant: base?.variant || '',
+          color: base?.color || '',
+          chassisNo: base?.chassis || base?.chassisNo || '',
+          purchaseType: 'cash',
+          addressProofMode: 'aadhaar',
+          executive: (currentUser?.name || currentUser?.email || ''),
+          branch: (currentUser?.formDefaults?.branchName || currentUser?.primaryBranch?.name || myBranch || ''),
+        };
+        setInvoicePrefill(prefill);
+        setInvoiceBaseRow(base || null);
+        setInvoiceModalOpen(true);
+        return;
+      }
+
       setAllowedActions([act]);
       setAction(act);
       const patch = {
@@ -492,6 +515,45 @@ export default function StockUpdate() {
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      {/* Invoice Modal with Booking Form */}
+      <Modal
+        title="Create Invoice"
+        open={invoiceModalOpen}
+        onCancel={() => { setInvoiceModalOpen(false); setInvoicePrefill(null); }}
+        footer={null}
+        destroyOnClose
+        width={980}
+      >
+        <BookingForm
+          asModal
+          initialValues={invoicePrefill || {}}
+          onSuccess={async ({ response, payload }) => {
+            try {
+              const veh = payload?.vehicle || {};
+              const row = {
+                Chassis_No: String(veh.chassisNo || invoiceBaseRow?.chassis || invoiceBaseRow?.chassisNo || '').toUpperCase(),
+                Company: veh.company || invoiceBaseRow?.company || '',
+                Model: veh.model || invoiceBaseRow?.model || '',
+                Variant: veh.variant || invoiceBaseRow?.variant || '',
+                Color: veh.color || invoiceBaseRow?.color || '',
+                Action: 'invoice',
+                Customer_Name: payload?.customerName || '',
+                Source_Branch: invoiceBaseRow?.sourceBranch || myBranch || '',
+                Notes: response?.bookingId ? `Invoice via Booking ID ${response.bookingId}` : 'Invoice via Booking form',
+              };
+              await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'user' });
+              message.success('Stock updated: vehicle marked invoiced / out of stock');
+              setInvoiceModalOpen(false);
+              setInvoicePrefill(null);
+              setInvoiceBaseRow(null);
+              fetchList();
+            } catch {
+              message.error('Saved booking but failed to update stock. Please refresh and try again.');
+            }
+          }}
+        />
       </Modal>
     </div>
   );

@@ -219,7 +219,7 @@ function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
    MAIN COMPONENT
    ========================= */
 
-export default function JobCard() {
+export default function JobCard({ initialValues = null } = {}) {
   const [form] = Form.useForm();
   const [, setUserStaffName] = useState();
   const [, setUserRole] = useState();
@@ -293,7 +293,10 @@ export default function JobCard() {
       }
     } catch {/* ignore */}
   };
+  // Run outbox retry on mount and when back online
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setTimeout(() => { retryOutbox(); }, 0); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { const onOnline = () => retryOutbox(); window.addEventListener('online', onOnline); return () => window.removeEventListener('online', onOnline); }, []);
 
   const recomputeReady = () => {
@@ -328,7 +331,7 @@ export default function JobCard() {
   };
   // ★ end required field helpers
 
-  const initialValues = useMemo(
+  const initialFormValues = useMemo(
     () => ({
       jcNo: "",
       createdAt: dayjs(),
@@ -354,6 +357,47 @@ export default function JobCard() {
     }),
     []
   );
+
+  // Apply external initial values (when rendered in a modal)
+  useEffect(() => {
+    if (!initialValues) return;
+    try {
+      const fv = initialValues.formValues || initialValues;
+      const parseDay = (v) => {
+        if (!v) return null;
+        const d = dayjs(v, ["DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true);
+        return d.isValid() ? d : null;
+      };
+      const kmVal = fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '';
+      const fields = {
+        jcNo: fv.jcNo || '',
+        branch: fv.branch || undefined,
+        mechanic: fv.mechanic || undefined,
+        executive: fv.executive || undefined,
+        expectedDelivery: parseDay(fv.expectedDelivery),
+        regNo: fv.regNo || '',
+        model: fv.model || '',
+        colour: fv.colour || '',
+        km: kmVal,
+        fuelLevel: fv.fuelLevel || undefined,
+        callStatus: fv.callStatus || '',
+        custName: fv.custName || '',
+        custMobile: String(fv.custMobile || '').replace(/\D/g,'').slice(-10),
+        obs: (fv.obs || '').replace(/\s*#\s*/g, "\n"),
+        vehicleType: fv.vehicleType || undefined,
+        serviceType: fv.serviceType || undefined,
+        floorMat: fv.floorMat === 'Yes' ? 'Yes' : fv.floorMat === 'No' ? 'No' : undefined,
+        discounts: { labour: 0 },
+        gstLabour: DEFAULT_GST_LABOUR,
+        labourRows: Array.isArray(initialValues?.labourRows) && initialValues.labourRows.length ? initialValues.labourRows : buildRows(fv.serviceType, fv.vehicleType),
+      };
+      form.setFieldsValue(fields);
+      setRegDisplay(fields.regNo || '');
+      setServiceTypeLocal(fv.serviceType || null);
+      setVehicleTypeLocal(fv.vehicleType || null);
+    } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialValues]);
 
   // Prefill executive + branch from logged-in user (staff)
   useEffect(() => {
@@ -414,7 +458,7 @@ export default function JobCard() {
         }
       } catch (e) { void e; }
     })();
-  }, [form]);
+  }, [form]); // branchCode intentionally excluded; we want this to run once on mount
 
   // Removed JC number prefetch to avoid increments on refresh
 
@@ -792,7 +836,7 @@ export default function JobCard() {
           <Form
           form={form}
           layout="vertical"
-          initialValues={initialValues}
+          initialValues={initialFormValues}
           style={{ marginTop: 12 }}
           onValuesChange={recomputeReady} // ★ live-enable buttons as user fills
         >

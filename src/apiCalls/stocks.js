@@ -35,6 +35,15 @@ export const listCurrentStocks = async ({ branch, limit = 500, page = 1 } = {}) 
   return pub.data || { success: false, data: [] };
 };
 
+export const listCurrentStocksPublic = async ({ branch, limit = 500, page = 1 } = {}) => {
+  const params = {};
+  if (branch) params.branch = branch;
+  params.limit = limit;
+  params.page = page;
+  const { data } = await axiosInstance.get("/stocks/current/public", { params, validateStatus: () => true });
+  return data;
+};
+
 export const createStock = async ({ data: row, createdBy }) => {
   const payload = { data: row, createdBy };
   const { data } = await axiosInstance.post("/stocks", payload);

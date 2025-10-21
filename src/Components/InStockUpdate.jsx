@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag } from "antd";
-import { listCurrentStocks } from "../apiCalls/stocks";
+import { Table, Grid, Space, Button, Select, Input, Tag, DatePicker, message, Modal } from "antd";
+import { listCurrentStocks, createStock } from "../apiCalls/stocks";
+import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
 
 export default function InStockUpdate() {
@@ -12,6 +13,24 @@ export default function InStockUpdate() {
   const [branchOptions, setBranchOptions] = useState([]);
   const [branch, setBranch] = useState("all");
   const [q, setQ] = useState("");
+  const [companies, setCompanies] = useState([]);
+  const [models, setModels] = useState([]);
+  const [variants, setVariants] = useState([]);
+  const [colors, setColors] = useState([]);
+
+  const [selCompanies, setSelCompanies] = useState([]);
+  const [selModels, setSelModels] = useState([]);
+  const [selVariants, setSelVariants] = useState([]);
+  const [selColors, setSelColors] = useState([]);
+  const [dateRange, setDateRange] = useState([]);
+
+  // Owner-only Invoice modal state
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  const [invoicePrefill, setInvoicePrefill] = useState(null);
+  const [invoiceBaseRow, setInvoiceBaseRow] = useState(null);
+
+  // Current user for prefill & createdBy
+  const currentUser = useMemo(() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } }, []);
 
   useEffect(() => {
     (async () => {
@@ -52,13 +71,55 @@ export default function InStockUpdate() {
 
   useEffect(() => { fetchData(); }, [branch]);
 
+  // Build option lists whenever items change (unique, sorted)
+  useEffect(() => {
+    const uniq = (arr) => Array.from(new Set(arr.map((v) => String(v || "").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    setCompanies(uniq(items.map((r)=>r.company)));
+    setModels(uniq(items.map((r)=>r.model)));
+    setVariants(uniq(items.map((r)=>r.variant)));
+    setColors(uniq(items.map((r)=>r.color)));
+  }, [items]);
+
   const filtered = useMemo(() => {
-    if (!q) return items;
-    const s = q.toLowerCase();
-    return items.filter((r) =>
-      [r.chassis, r.company, r.model, r.variant, r.color, r.branch].some((v) => String(v || "").toLowerCase().includes(s))
-    );
-  }, [items, q]);
+    const s = String(q || "").toLowerCase();
+    const hasSearch = !!s;
+    const [start, end] = Array.isArray(dateRange) ? dateRange : [];
+    const startTs = start && typeof start?.toDate === 'function' ? start.toDate() : null;
+    const endTs = end && typeof end?.toDate === 'function' ? end.toDate() : null;
+
+    return items.filter((r) => {
+      // Free-text search across key fields
+      if (hasSearch) {
+        const ok = [r.chassis, r.company, r.model, r.variant, r.color, r.branch]
+          .some((v) => String(v || "").toLowerCase().includes(s));
+        if (!ok) return false;
+      }
+
+      // Company/model/variant/color multi-select filters
+      const inCompanies = selCompanies.length ? selCompanies.includes(String(r.company || '').trim()) : true;
+      if (!inCompanies) return false;
+      const inModels = selModels.length ? selModels.includes(String(r.model || '').trim()) : true;
+      if (!inModels) return false;
+      const inVariants = selVariants.length ? selVariants.includes(String(r.variant || '').trim()) : true;
+      if (!inVariants) return false;
+      const inColors = selColors.length ? selColors.includes(String(r.color || '').trim()) : true;
+      if (!inColors) return false;
+
+      // Date range on last movement timestamp
+      if (startTs || endTs) {
+        const t = new Date(r.ts);
+        if (Number.isNaN(t.getTime())) return false;
+        if (startTs && t < startTs) return false;
+        if (endTs) {
+          // include end of day
+          const endDay = new Date(endTs);
+          endDay.setHours(23,59,59,999);
+          if (t > endDay) return false;
+        }
+      }
+      return true;
+    });
+  }, [items, q, selCompanies, selModels, selVariants, selColors, dateRange]);
 
   // Summary counts (independent of search filter)
   const totalCount = items.length;
@@ -100,6 +161,26 @@ export default function InStockUpdate() {
     { title: "Color", dataIndex: "color", key: "color", width: 150, render: (v) => colorDot(v) },
     { title: "Branch", dataIndex: "branch", key: "branch", width: 140 },
     { title: "Status", dataIndex: "status", key: "status", width: 110, render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag> },
+    { title: "Actions", key: "actions", width: 120, fixed: isMobile ? undefined : 'right', render: (_, r) => (
+      <Space size="small">
+        <Button size="small" type="primary" onClick={() => {
+          const pre = {
+            company: r.company || '',
+            bikeModel: r.model || '',
+            variant: r.variant || '',
+            color: r.color || '',
+            chassisNo: r.chassis || '',
+            purchaseType: 'cash',
+            addressProofMode: 'aadhaar',
+            executive: (currentUser?.name || currentUser?.email || ''),
+            branch: r.branch || '',
+          };
+          setInvoicePrefill(pre);
+          setInvoiceBaseRow(r);
+          setInvoiceModalOpen(true);
+        }}>Invoice</Button>
+      </Space>
+    ) },
   ];
 
   return (
@@ -112,10 +193,52 @@ export default function InStockUpdate() {
             style={{ minWidth: 180 }}
             options={[{ value: 'all', label: 'All Branches' }, ...branchOptions.map((b) => ({ value: b, label: b }))]}
           />
-          <Input placeholder="Search chassis / model / color" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 220 }} />
+          <Input placeholder="Search chassis / company / model / color" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 240 }} />
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Company"
+            style={{ minWidth: 180 }}
+            value={selCompanies}
+            onChange={setSelCompanies}
+            options={companies.map((v)=>({ value: v, label: v }))}
+            maxTagCount={isMobile ? 1 : 3}
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Model"
+            style={{ minWidth: 180 }}
+            value={selModels}
+            onChange={setSelModels}
+            options={models.map((v)=>({ value: v, label: v }))}
+            maxTagCount={isMobile ? 1 : 3}
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Variant"
+            style={{ minWidth: 200 }}
+            value={selVariants}
+            onChange={setSelVariants}
+            options={variants.map((v)=>({ value: v, label: v }))}
+            maxTagCount={isMobile ? 1 : 3}
+          />
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="Color"
+            style={{ minWidth: 180 }}
+            value={selColors}
+            onChange={setSelColors}
+            options={colors.map((v)=>({ value: v, label: v }))}
+            maxTagCount={isMobile ? 1 : 3}
+          />
+          <DatePicker.RangePicker value={dateRange} onChange={setDateRange} allowClear style={{ minWidth: 220 }} />
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
+          <Button onClick={() => { setSelCompanies([]); setSelModels([]); setSelVariants([]); setSelColors([]); setDateRange([]); setQ(""); }}>Reset Filters</Button>
           <Button onClick={fetchData}>Refresh</Button>
         </Space>
       </div>
@@ -148,6 +271,45 @@ export default function InStockUpdate() {
         rowKey={(r) => r.key}
         scroll={{ x: isMobile ? 900 : undefined }}
       />
+
+      {/* Invoice Modal (Owner) */}
+      <Modal
+        title="Create Invoice"
+        open={invoiceModalOpen}
+        onCancel={() => { setInvoiceModalOpen(false); setInvoicePrefill(null); setInvoiceBaseRow(null); }}
+        footer={null}
+        destroyOnClose
+        width={980}
+      >
+        <BookingForm
+          asModal
+          initialValues={invoicePrefill || {}}
+          onSuccess={async ({ response, payload }) => {
+            try {
+              const veh = payload?.vehicle || {};
+              const row = {
+                Chassis_No: String(veh.chassisNo || invoiceBaseRow?.chassis || '').toUpperCase(),
+                Company: veh.company || invoiceBaseRow?.company || '',
+                Model: veh.model || invoiceBaseRow?.model || '',
+                Variant: veh.variant || invoiceBaseRow?.variant || '',
+                Color: veh.color || invoiceBaseRow?.color || '',
+                Action: 'invoice',
+                Customer_Name: payload?.customerName || '',
+                Source_Branch: invoiceBaseRow?.branch || '',
+                Notes: response?.bookingId ? `Invoice via Booking ID ${response.bookingId}` : 'Invoice via Booking form',
+              };
+              await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'owner' });
+              message.success('Stock updated: vehicle marked invoiced / out of stock');
+              setInvoiceModalOpen(false);
+              setInvoicePrefill(null);
+              setInvoiceBaseRow(null);
+              fetchData();
+            } catch {
+              message.error('Saved booking but failed to update stock. Please refresh and try again.');
+            }
+          }}
+        />
+      </Modal>
     </div>
   );
 }

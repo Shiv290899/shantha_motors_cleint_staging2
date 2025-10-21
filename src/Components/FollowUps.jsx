@@ -1,10 +1,72 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip } from 'antd';
+import { CheckCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { GetCurrentUser } from "../apiCalls/users";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
+import PostServiceQuickModal from "./PostServiceQuickModal";
+import JobCardInlineModal from "./JobCardInlineModal";
 
-const STATUS_COLOR = { pending: 'orange', completed: 'green', cancelled: 'red' };
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    // Log for diagnostics
+    if (typeof window !== 'undefined' && window.console) {
+      console.error('FollowUps crashed', error, info);
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 16 }}>
+          <h3>Something went wrong in Follow-Ups.</h3>
+          <Space>
+            <Button size="small" type="primary" onClick={() => this.setState({ hasError: false, error: null })}>
+              Try Again
+            </Button>
+            <Button size="small" onClick={() => window.location.reload()}>Reload</Button>
+          </Space>
+          {this.state.error && (
+            <pre style={{ marginTop: 12, whiteSpace: 'pre-wrap', color: '#a00' }}>{String(this.state.error)}</pre>
+          )}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const STATUS_COLOR = {
+  pending: 'orange',
+  completed: 'green',
+  cancelled: 'red',
+  converted: 'green',
+  not_interested: 'default',
+  unreachable: 'volcano',
+  wrong_number: 'magenta',
+  purchased_elsewhere: 'geekblue',
+  no_response: 'gold',
+  // 'lost' removed per request
+};
+
+const STATUS_LABEL = {
+  pending: 'Pending',
+  completed: 'Completed',
+  converted: 'Converted',
+  not_interested: 'Not Interested',
+  unreachable: 'Unreachable',
+  wrong_number: 'Wrong Number',
+  purchased_elsewhere: 'Purchased Elsewhere',
+  no_response: 'No Response',
+  // 'lost' removed per request
+  cancelled: 'Cancelled',
+};
 
 /**
  * FollowUps list component
@@ -16,15 +78,20 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('all'); // today | overdue | upcoming | all
-  const [mineOnly, setMineOnly] = useState(true);
+  const [mineOnly,] = useState(true);
   const [branchOnly, setBranchOnly] = useState(true);
   // pagination (controlled to allow changing page size)
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
   const [me, setMe] = useState({ name: '', branch: '' });
+  const [userRole, setUserRole] = useState('');
+  const [allowedBranches, setAllowedBranches] = useState([]); // names only
 
   const [reschedule, setReschedule] = useState({ open: false, serial: null, at: null, notes: '' });
+  const [closing, setClosing] = useState({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
+  const [postModal, setPostModal] = useState({ open: false, row: null });
+  const [prefillModal, setPrefillModal] = useState({ open: false, row: null });
 
   useEffect(() => {
     (async () => {
@@ -39,8 +106,19 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         } }
       }
       const name = user?.formDefaults?.staffName || user?.name || '';
-      const branch = user?.formDefaults?.branchName || user?.primaryBranch?.name || '';
-      setMe({ name, branch });
+      const primaryBranch = user?.formDefaults?.branchName || user?.primaryBranch?.name || '';
+      const branches = [];
+      if (primaryBranch) branches.push(primaryBranch);
+      if (Array.isArray(user?.branches)) {
+        user.branches.forEach((b) => {
+          const nm = (typeof b === 'string') ? b : (b?.name || b?.label || b?.title || '');
+          if (nm) branches.push(nm);
+        });
+      }
+      const uniq = Array.from(new Set(branches.filter(Boolean)));
+      setAllowedBranches(uniq);
+      setUserRole(String(user?.role || '').toLowerCase());
+      setMe({ name, branch: uniq[0] || primaryBranch || '' });
     })();
   }, []);
 
@@ -66,7 +144,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const payload = {
         action: 'followups',
         filter, // today|overdue|upcoming|all
-        branch: branchOnly ? me.branch : '',
+        branch: branchOnly ? (me.branch || allowedBranches[0] || '') : '',
         executive: mineOnly ? me.name : '',
       };
       const resp = await callWebhook({ method: 'GET', payload });
@@ -82,6 +160,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const items = list.map((r, i) => {
         const p = asPayload(r) || {};
         const fv = p.formValues || {};
+        const values = (r && r.values) ? r.values : {};
         const fu = p.followUp || {};
         // Serial helpers (quotation vs jobcard)
         const serial = (() => {
@@ -100,22 +179,35 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         return {
           key: serial || i,
           serialNo: serial || '-',
-          name: fv.name || '-',
-          mobile: fv.mobile || '-',
+          name: fv.name || values.Customer_Name || values.Customer || values.Name || '-',
+          mobile: fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
           vehicle,
-          branch: fv.branch || p.branch || '-',
-          executive: fv.executive || fu.assignedTo || '-',
+          branch: fv.branch || p.branch || values.Branch || '-',
+          executive: fv.executive || fu.assignedTo || values.Executive || '-',
           followUpAt: fu.at ? dayjs(fu.at) : null,
           followUpNotes: fu.notes || '',
+          closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
           status: fu.status || 'pending',
           price: Number((fv.onRoadPrice ?? p.onRoadPrice ?? fv.price ?? p.price) || 0),
           brand: (p.brand || '').toUpperCase() || 'SHANTHA',
+          remarks: fv.remarks || p.remarks || values.Remarks || values.remarks || '',
+          jcNo: fv.jcNo || p.jcNo || values['JC No'] || values['JC No.'] || values['Job Card No'] || serial || '-',
+          regNo: fv.regNo || values['Vehicle No'] || values['Vehicle_No'] || '',
+          model: fv.model || values.Model || '',
+          amount: fv.amount || values['Collected Amount'] || values.Amount || 0,
+          payload: p,
+          values,
         };
       });
       // Client-side filtering as a fallback (in case webhook returns unfiltered rows)
       const startToday = dayjs().startOf('day');
       const endToday = dayjs().endOf('day');
+      const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
       const filtered = items.filter((it) => {
+        // hard branch gate for non-admin staff
+        if (allowedSet.size && !['owner','admin'].includes(userRole)) {
+          if (!allowedSet.has(String(it.branch||'').toLowerCase())) return false;
+        }
         // branch/executive toggles
         if (branchOnly && me.branch && it.branch && it.branch !== me.branch) return false;
         if (mineOnly && me.name && it.executive && it.executive !== me.name) return false;
@@ -138,7 +230,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
   };
 
-  useEffect(() => { if (webhookUrl) fetchFollowUps(); }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, me.name, mode]);
+  useEffect(() => { if (webhookUrl) fetchFollowUps(); }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, me.name, mode, userRole, allowedBranches.length]);
 
   const updateFollowUp = async (serialNo, patch) => {
     try {
@@ -152,62 +244,64 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
   };
 
-  const columns = [
-    { title: 'Due', dataIndex: 'followUpAt', key: 'followUpAt', render: (d) => (d ? d.format('DD MMM, HH:mm') : '-') },
-    { title: 'Customer', dataIndex: 'name', key: 'name' },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile' },
-    { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle' },
-    { title: isJobcard ? 'Job Card' : 'Quotation', dataIndex: 'serialNo', key: 'serialNo' },
-    { title: 'Branch', dataIndex: 'branch', key: 'branch' },
-    { title: 'Executive', dataIndex: 'executive', key: 'executive' },
+  const columns = isJobcard ? [
+    { title: 'JC No.', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
     { title: 'Notes', dataIndex: 'followUpNotes', key: 'followUpNotes', ellipsis: true },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (s) => <Tag color={STATUS_COLOR[s] || 'default'}>{s}</Tag> },
+    { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
+      <Tooltip title={r.closeReason || r.followUpNotes || ''}>
+        <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
+      </Tooltip>
+    ) },
     {
       title: 'Actions', key: 'actions',
-      render: (_, r) => {
-        const inr0 = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Math.max(0, Math.round(n || 0)));
-        const showroomName = (String(r.brand).toUpperCase() === 'NH') ? 'NH Motors' : 'Shantha Motors';
-        const buildWhatsApp = () => {
-          const phone = String(r.mobile || '').replace(/\D/g, '');
-          if (!phone) { message.warning('Missing mobile'); return null; }
-          const lines = [
-            `*Hi ${r.name}! Hope you're doing well 😊*`,
-            isJobcard
-              ? `This is a reminder about your job card *${r.serialNo}* for *${r.vehicle || '-'}*.`
-              : `You had requested a quotation for *${r.vehicle || '-'}* (No. ${r.serialNo}).`,
-            !isJobcard && r.price ? `On-road price: ${inr0(r.price)}.` : undefined,
-            isJobcard
-              ? `Please let me know a convenient time to proceed.`
-              : `Would you like me to reserve one for you at ${r.branch}?`,
-            `– ${r.executive}, ${showroomName}`,
-          ].filter(Boolean);
-          const text = encodeURIComponent(lines.join('\n'));
-          return `https://wa.me/91${phone}?text=${text}`;
-        };
-        return (
-          <Space>
-            <Button size="small" onClick={() => updateFollowUp(r.serialNo, { status: 'completed' })}>Done</Button>
-            <Button size="small" onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}>Reschedule</Button>
-            <Tooltip title="Send WhatsApp reminder">
-              <Button size="small" type="link" onClick={() => {
-                const url = buildWhatsApp();
-                if (!url) return;
-                const w = window.open(url, '_blank', 'noopener,noreferrer');
-                if (!w) window.location.href = url;
-              }}>WhatsApp</Button>
-            </Tooltip>
-          </Space>
-        );
-      }
+      render: (_, r) => (
+        <Space>
+          <Button size="small" type="primary" onClick={() => setPostModal({ open: true, row: r })}>Post Service</Button>
+          <Button size="small" onClick={() => setPrefillModal({ open: true, row: r })}>Open Prefilled JC</Button>
+          <Button size="small" onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}>Reschedule</Button>
+        </Space>
+      ),
     }
+  ] : [
+    // Quotation-only ordering requested: Quotation_ID, Customer, Mobile, Notes, Status, Actions, Remarks
+    { title: 'Quotation ID', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
+    { title: 'Notes', dataIndex: 'followUpNotes', key: 'followUpNotes', ellipsis: true },
+    { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
+      <Tooltip title={r.closeReason || r.followUpNotes || ''}>
+        <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
+      </Tooltip>
+    ) },
+    {
+      title: 'Actions', key: 'actions',
+      render: (_, r) => (
+        <Space>
+          <Tooltip title="Mark done/converted with reason">
+            <Button size="small" type="primary" icon={<CheckCircleOutlined />} onClick={() => setClosing({ open: true, serial: r.serialNo, status: 'converted', reason: '', notes: '' })}>
+              Done
+            </Button>
+          </Tooltip>
+          <Button size="small" onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}>Reschedule</Button>
+        </Space>
+      ),
+    },
+    { title: 'Remarks', dataIndex: 'remarks', key: 'remarks', render: (t) => (
+      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{String(t || '-')}
+      </div>
+    ) },
   ];
 
   return (
-    <div>
+    <ErrorBoundary>
+      <div>
       <Space style={{ marginBottom: 24 }} wrap>
         <Select
           value={filter}
           onChange={setFilter}
+          style={{ minWidth: 130 }}
           options={[
             { value: 'all', label: 'All' },
             { value: 'today', label: 'Due Today' },
@@ -216,16 +310,14 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
             
           ]}
         />
-        <Select
-          value={mineOnly ? 'all' : 'mine'}
-          onChange={(v)=>setMineOnly(v==='mine')}
-          options={[{value:'mine',label:'Assigned to me'},{value:'all',label:'Anyone'}]}
-        />
-        <Select
-          value={branchOnly ? 'mybranch' : 'all'}
-          onChange={(v)=>setBranchOnly(v==='mybranch')}
-          options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
-        />
+        {/* Only admins/owners can switch branch scope; staff locked to own branch */}
+        {['owner','admin'].includes(userRole) && (
+          <Select
+            value={branchOnly ? 'mybranch' : 'all'}
+            onChange={(v)=>setBranchOnly(v==='mybranch')}
+            options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
+          />
+        )}
         <Button onClick={fetchFollowUps} loading={loading}>Refresh</Button>
       </Space>
 
@@ -249,6 +341,34 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         scroll={{ x: true }}
       />
 
+      {/* Inline modals for Jobcard follow-ups */}
+      {isJobcard && (
+        <>
+          <PostServiceQuickModal
+            open={postModal.open}
+            onClose={() => setPostModal({ open: false, row: null })}
+            row={postModal.row}
+            webhookUrl={webhookUrl}
+          />
+          <JobCardInlineModal
+            open={prefillModal.open}
+            onClose={() => setPrefillModal({ open: false, row: null })}
+            initialValues={(prefillModal.row?.payload && prefillModal.row.payload.formValues) ? prefillModal.row.payload : (prefillModal.row ? { formValues: {
+              jcNo: prefillModal.row.jcNo || prefillModal.row.serialNo,
+              branch: prefillModal.row.branch,
+              executive: prefillModal.row.executive,
+              regNo: prefillModal.row.regNo,
+              model: prefillModal.row.model,
+              custName: prefillModal.row.name,
+              custMobile: prefillModal.row.mobile,
+              serviceType: prefillModal.row.serviceType,
+              vehicleType: prefillModal.row.vehicleType,
+              obs: prefillModal.row.followUpNotes,
+            } } : null)}
+          />
+        </>
+      )}
+
       <Modal
         title={`Reschedule ${reschedule.serial || ''}`}
         open={reschedule.open}
@@ -263,6 +383,50 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           <Input.TextArea rows={2} placeholder="Notes" value={reschedule.notes} onChange={(e)=>setReschedule(s=>({...s, notes:e.target.value}))} />
         </Space>
       </Modal>
-    </div>
+
+      <Modal
+        title={`Mark Done – ${closing.serial || ''}`}
+        open={closing.open}
+        onCancel={() => setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' })}
+        onOk={async () => {
+          const patch = {
+            status: closing.status || 'converted',
+            closeReason: closing.status || 'converted',
+            closeNotes: closing.details || '',
+            closedAt: new Date().toISOString(),
+          };
+          if (closing.status === 'purchased_elsewhere') {
+            patch.purchasedElsewhere = {
+              boughtFrom: closing.boughtFrom || '',
+              offer: closing.offer || '',
+            };
+          }
+          await updateFollowUp(closing.serial, patch);
+          setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
+        }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Select
+            style={{ width: '100%' }}
+            value={closing.status}
+            onChange={(v)=>setClosing(s=>({...s, status:v}))}
+            options={[
+              { value: 'converted', label: 'Converted (Booked/Purchased)' },
+              { value: 'not_interested', label: 'Not Interested' },
+              { value: 'unreachable', label: 'Unreachable' },
+              { value: 'purchased_elsewhere', label: 'Purchased SomeWhereElse' },
+
+            ]}
+          />
+          {closing.status === 'purchased_elsewhere' && (
+            <>
+              <Input placeholder="Bought From" value={closing.boughtFrom} onChange={(e)=>setClosing(s=>({...s, boughtFrom:e.target.value}))} />
+               </>
+          )}
+          <Input.TextArea rows={2} placeholder="Notes" value={closing.details} onChange={(e)=>setClosing(s=>({...s, details:e.target.value}))} />
+        </Space>
+      </Modal>
+      </div>
+    </ErrorBoundary>
   );
 }
