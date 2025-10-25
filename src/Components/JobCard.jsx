@@ -60,7 +60,7 @@ const EXECUTIVES = [
 
 const SERVICE_TYPES = ["Free", "Paid"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
-const MECHANIC = ["Sonu", "ManMohan", "Mansur", "Irshad", "Dakshat"];
+const MECHANIC = ["Sonu", "Karthik", "ManMohan", "Mansur", "Irshad", "Dakshat"];
 
 // Fuel Level (tabs)
 const FUEL_LEVELS = ["Empty", "¼", "½", "¾", "Full"];
@@ -225,6 +225,8 @@ export default function JobCard({ initialValues = null } = {}) {
   const [, setUserRole] = useState();
   // Keep defaults to restore if fields get cleared
   const [defaultBranchName, setDefaultBranchName] = useState("");
+  const [allowedBranches, setAllowedBranches] = useState([]); // [{id,name,code}]
+  const [canSwitch, setCanSwitch] = useState(false);
   const [defaultExecutiveName, setDefaultExecutiveName] = useState("");
   const [branchCode, setBranchCode] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -423,6 +425,27 @@ export default function JobCard({ initialValues = null } = {}) {
         if (user) {
           const staffName = user?.formDefaults?.staffName || user?.name || undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
+          // who can switch branches
+          const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
+          setCanSwitch(can);
+          // Build allowed branch list from primary + branches
+          try {
+            const list = [];
+            const push = (b) => {
+              if (!b) return;
+              const id = (b && (b._id || b.id || b.$oid || b)) || '';
+              const name = typeof b === 'string' ? '' : (b?.name || '');
+              const code = typeof b === 'string' ? '' : (b?.code || '');
+              if (!id || !name) return;
+              list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
+            };
+            if (user?.primaryBranch) push(user.primaryBranch);
+            if (Array.isArray(user?.branches)) user.branches.forEach(push);
+            const seen = new Set();
+            const uniq = [];
+            list.forEach((b) => { if (!seen.has(b.id)) { seen.add(b.id); uniq.push(b); } });
+            setAllowedBranches(uniq);
+          } catch { /* ignore */ }
           let branchName = user?.formDefaults?.branchName;
           const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
           if (codeFromUser) { setBranchCode(codeFromUser); try { form.setFieldsValue({ branchCode: codeFromUser }); } catch {
@@ -461,6 +484,28 @@ export default function JobCard({ initialValues = null } = {}) {
   }, [form]); // branchCode intentionally excluded; we want this to run once on mount
 
   // Removed JC number prefetch to avoid increments on refresh
+
+  const branchMapByName = React.useMemo(() => {
+    const m = new Map();
+    (allowedBranches || []).forEach((b) => m.set(String(b.name || '').toLowerCase(), b));
+    return m;
+  }, [allowedBranches]);
+
+  const onBranchChange = (name) => {
+    try {
+      const key = String(name || '').toLowerCase();
+      const b = branchMapByName.get(key);
+      if (b) {
+        setBranchId(b.id);
+        if (b.code) setBranchCode(String(b.code).toUpperCase());
+        try { form.setFieldsValue({ branch: b.name, branchCode: b.code ? String(b.code).toUpperCase() : undefined }); } catch {
+          //dfn
+        }
+      }
+    } catch {
+      //sd
+    }
+  };
 
   // If branch/executive ever get cleared by a reset, restore from defaults
   const watchedBranch = Form.useWatch('branch', form);
@@ -857,7 +902,16 @@ export default function JobCard({ initialValues = null } = {}) {
 
               <Col xs={24} sm={12} md={8}>
                 <Form.Item label="Branch" name="branch" rules={[{ required: true }]}>
-                  <Input readOnly placeholder="Auto-fetched from your profile" />
+                  {canSwitch && allowedBranches.length ? (
+                    <Select
+                      placeholder="Select branch"
+                      value={watchedBranch}
+                      onChange={(v) => onBranchChange(v)}
+                      options={allowedBranches.map((b) => ({ value: b.name, label: b.code ? `${b.name} (${b.code})` : b.name }))}
+                    />
+                  ) : (
+                    <Input readOnly placeholder="Auto-fetched from your profile" />
+                  )}
                 </Form.Item>
               </Col>
 

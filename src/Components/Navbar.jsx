@@ -530,7 +530,7 @@ export default function Navbar() {
                               role === "mechanic" ? "/mechanic" :
                               role === "employees" ? "/employees" :
                               role === "staff" ? "/staff" :
-                              "/user";
+                              "/staff";
                             setAccOpen(false);
                             navigate(target);
                           }}
@@ -543,7 +543,7 @@ export default function Navbar() {
                                 role === "mechanic" ? "/mechanic" :
                                 role === "employees" ? "/employees" :
                                 role === "staff" ? "/staff" :
-                                "/user";
+                                "/staff";
                               setAccOpen(false);
                               navigate(target);
                             }
@@ -680,7 +680,7 @@ export default function Navbar() {
                     role === "mechanic" ? "/mechanic" :
                     role === "employees" ? "/employees" :
                     role === "staff" ? "/staff" :
-                    "/user";
+                    "/staff";
                   navigate(target);
                   setMenuOpen(false);
                 }}

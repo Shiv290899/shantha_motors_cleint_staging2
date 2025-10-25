@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, Popover } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography } from "antd";
 import BookingPrintQuickModal from "./BookingPrintQuickModal";
-import BookingInlineModal from "./BookingInlineModal";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 
 const { Text } = Typography;
@@ -35,17 +34,21 @@ export default function Bookings() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [updating, setUpdating] = useState(null);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
-  const [prefillModal, setPrefillModal] = useState({ open: false, row: null });
+  // Prefilled inline form modal removed per request; use Print modal only
   const [q, setQ] = useState("");
+
+  // Reuse the same GAS URL for list + print so search works
+  const DEFAULT_BOOKING_GAS_URL =
+    "https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec";
+  const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
+  const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       try {
-        const DEFAULT_BOOKING_GAS_URL =
-          "https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec"
-        const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
+        const GAS_URL = GAS_URL_STATIC;
         const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
         // If still empty somehow, show empty list gracefully
         if (!GAS_URL) {
@@ -192,8 +195,7 @@ export default function Bookings() {
     { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 300, render: (v, r)=> (
       <Space size={6}>
         <LinkCell url={v} />
-        <Button size='small' onClick={()=> setPrintModal({ open: true, row: r })}>Print</Button>
-        <Button size='small' onClick={()=> setPrefillModal({ open: true, row: r })}>Prefilled Form</Button>
+        <Button size='small' type='primary' onClick={()=> setPrintModal({ open: true, row: r })}>Print</Button>
       </Space>
     ) },
     { title: 'Booking ID', dataIndex: 'bookingId', key: 'bookingId', width: 180, ellipsis: true },
@@ -238,14 +240,10 @@ export default function Bookings() {
         open={printModal.open}
         onClose={()=> setPrintModal({ open: false, row: null })}
         row={printModal.row}
-        webhookUrl={import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbyeAGWyqVSln9CSmbU_m6n35z9ko9KdtPAqRKRBcmQbCl7tnapQPVtpN3jb6pBNmDjX/exec'}
+        webhookUrl={GAS_URL_STATIC}
+        secret={GAS_SECRET_STATIC}
       />
-      <BookingInlineModal
-        open={prefillModal.open}
-        onClose={()=> setPrefillModal({ open: false, row: null })}
-        row={prefillModal.row}
-        webhookUrl={import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbyeAGWyqVSln9CSmbU_m6n35z9ko9KdtPAqRKRBcmQbCl7tnapQPVtpN3jb6pBNmDjX/exec'}
-      />
+      {/* Prefilled form modal removed */}
     </div>
   );
 }
@@ -284,15 +282,13 @@ function parseTsMs(v) {
 function extractId(u) {
   try {
     if (!u) return null;
-    // Accept uc?export=view&id=, open?id=, file/d/<id>/view, and raw id
     const url = new URL(u);
     if (url.searchParams.get('id')) return url.searchParams.get('id');
     const m = url.pathname.match(/\/d\/([^/]+)/);
     if (m && m[1]) return m[1];
     return null;
   } catch {
-    // Fallback: parse id= in raw string
-    const m = String(u).match(/[?&]id=([^&]+)/);
+    const m = String(u || '').match(/[?&]id=([^&]+)/);
     return m ? m[1] : null;
   }
 }
@@ -304,19 +300,17 @@ function normalizeLink(u) {
   return {
     view: `https://drive.google.com/uc?export=view&id=${id}`,
     download: `https://drive.google.com/uc?export=download&id=${id}`,
-    embed: `https://drive.google.com/file/d/${id}/preview`, // embeddable Drive preview
+    embed: `https://drive.google.com/file/d/${id}/preview`,
   };
 }
 
-
-
-function LinkCell({ url, count }) {
+function LinkCell({ url }) {
   if (!url) return <Text type="secondary">—</Text>;
   const { view, download, embed } = normalizeLink(url);
   const content = (
     <div style={{ width: 340 }}>
       <div style={{ height: 260, border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', marginBottom: 8 }}>
-        <iframe src={embed} title="preview" width="100%" height="100%" style={{ display: 'block', border: '0' }} allow="fullscreen" />
+        <iframe src={embed} title="preview" width="100%" height="100%" style={{ display: 'block', border: 0 }} allow="fullscreen" />
       </div>
       <Space>
         <a href={view} target="_blank" rel="noopener">Open</a>
@@ -326,7 +320,7 @@ function LinkCell({ url, count }) {
   );
   return (
     <Space size={6}>
-      <Popover content={content} title={count ? `${count} file(s)` : 'Preview'} trigger="click">
+      <Popover content={content} title="Preview" trigger="click">
         <Button size="small">Preview</Button>
       </Popover>
       <a href={download}>Download</a>

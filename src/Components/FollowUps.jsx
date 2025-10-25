@@ -43,20 +43,29 @@ class ErrorBoundary extends React.Component {
 }
 
 const STATUS_COLOR = {
+  // Shared
   pending: 'orange',
-  completed: 'green',
   cancelled: 'red',
+  // Quotation/Jobcard
+  completed: 'green',
   converted: 'green',
   not_interested: 'default',
   unreachable: 'volcano',
   wrong_number: 'magenta',
   purchased_elsewhere: 'geekblue',
   no_response: 'gold',
+  // Booking-specific
+  seen: 'blue',
+  approved: 'green',
+  allotted: 'purple',
   // 'lost' removed per request
 };
 
 const STATUS_LABEL = {
+  // Shared
   pending: 'Pending',
+  cancelled: 'Cancelled',
+  // Quotation/Jobcard
   completed: 'Completed',
   converted: 'Converted',
   not_interested: 'Not Interested',
@@ -64,8 +73,11 @@ const STATUS_LABEL = {
   wrong_number: 'Wrong Number',
   purchased_elsewhere: 'Purchased Elsewhere',
   no_response: 'No Response',
+  // Booking-specific
+  seen: 'Seen',
+  approved: 'Approved',
+  allotted: 'Allotted',
   // 'lost' removed per request
-  cancelled: 'Cancelled',
 };
 
 /**
@@ -78,7 +90,9 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState('all'); // today | overdue | upcoming | all
-  const [mineOnly,] = useState(true);
+  // Show follow-ups based on Branch only (not executive)
+  // Set to false so we never filter by executive name
+  const [mineOnly,] = useState(false);
   const [branchOnly, setBranchOnly] = useState(true);
   // pagination (controlled to allow changing page size)
   const [page, setPage] = useState(1);
@@ -122,7 +136,9 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     })();
   }, []);
 
-  const isJobcard = String(mode).toLowerCase() === 'jobcard';
+  const modeKey = String(mode || '').toLowerCase();
+  const isJobcard = modeKey === 'jobcard';
+  const isBooking = modeKey === 'booking';
 
   const callWebhook = async ({ method = 'GET', payload }) => {
     if (isJobcard) {
@@ -141,15 +157,20 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         message.info('Follow-ups webhook not configured.');
         return;
       }
-      const payload = {
+      // For bookings, many deployments expose only `action=list`.
+      // Use that and client-side filter instead of `followups`.
+      const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
+      const payload = isBooking ? (
+        BOOKING_SECRET ? { action: 'list', secret: BOOKING_SECRET } : { action: 'list' }
+      ) : {
         action: 'followups',
         filter, // today|overdue|upcoming|all
         branch: branchOnly ? (me.branch || allowedBranches[0] || '') : '',
-        executive: mineOnly ? me.name : '',
+        executive: '', // show all for branch
       };
       const resp = await callWebhook({ method: 'GET', payload });
       const j = resp?.data || resp;
-      const list = Array.isArray(j?.rows) ? j.rows : [];
+      const list = Array.isArray(j?.rows) ? j.rows : (Array.isArray(j?.data) ? j.data : []);
       // Normalize various row shapes from webhook
       const asPayload = (r) => {
         if (!r) return null;
@@ -160,7 +181,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const items = list.map((r, i) => {
         const p = asPayload(r) || {};
         const fv = p.formValues || {};
-        const values = (r && r.values) ? r.values : {};
+        // For booking list, values are top-level keys
+        const values = (r && r.values) ? r.values : (r || {});
         const fu = p.followUp || {};
         // Serial helpers (quotation vs jobcard)
         const serial = (() => {
@@ -169,17 +191,23 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
               fv.jcNo || fv.JCNo || p.jcNo || p.JCNo || fv.serialNo || p.serialNo || '-'
             );
           }
-          return fv.serialNo || p.serialNo || '-';
+          if (isBooking) {
+            return (
+              fv.bookingId || p.bookingId || values['Booking ID'] || values['Booking_Id'] || values['Booking Id'] || '-'
+            );
+          }
+          // quotation
+          return fv.serialNo || p.serialNo || values['Quotation No.'] || values['Quotation No'] || values['Serial'] || '-';
         })();
         const vehicle = [
-          p.company || fv.company,
-          p.model || fv.bikeModel || fv.model,
-          p.variant || fv.variant,
+          p.company || fv.company || values.Company,
+          p.model || fv.bikeModel || fv.model || values.Model,
+          p.variant || fv.variant || values.Variant,
         ].filter(Boolean).join(' ');
         return {
           key: serial || i,
           serialNo: serial || '-',
-          name: fv.name || values.Customer_Name || values.Customer || values.Name || '-',
+          name: fv.name || values.Customer_Name || values['Customer Name'] || values.Customer || values.Name || '-',
           mobile: fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
           vehicle,
           branch: fv.branch || p.branch || values.Branch || '-',
@@ -187,7 +215,10 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           followUpAt: fu.at ? dayjs(fu.at) : null,
           followUpNotes: fu.notes || '',
           closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
-          status: fu.status || 'pending',
+          status: (() => {
+            const s = fu.status || p.status || fv.status || values.Status || values['Booking Status'] || '';
+            return String(s || 'pending').toLowerCase();
+          })(),
           price: Number((fv.onRoadPrice ?? p.onRoadPrice ?? fv.price ?? p.price) || 0),
           brand: (p.brand || '').toUpperCase() || 'SHANTHA',
           remarks: fv.remarks || p.remarks || values.Remarks || values.remarks || '',
@@ -195,6 +226,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           regNo: fv.regNo || values['Vehicle No'] || values['Vehicle_No'] || '',
           model: fv.model || values.Model || '',
           amount: fv.amount || values['Collected Amount'] || values.Amount || 0,
+          availability: values['Chassis Availability'] || values['Availability'] || values['Stock'] || values['Stock Status'] || (p?.vehicle?.availability || fv?.vehicle?.availability || ''),
           payload: p,
           values,
         };
@@ -210,7 +242,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         }
         // branch/executive toggles
         if (branchOnly && me.branch && it.branch && it.branch !== me.branch) return false;
-        if (mineOnly && me.name && it.executive && it.executive !== me.name) return false;
+        // Do not filter by executive name (per requirement)
         // date filter
         if (filter === 'all') return true;
         const d = it.followUpAt;
@@ -264,8 +296,20 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         </Space>
       ),
     }
+  ] : (isBooking ? [
+    { title: 'Booking ID', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
+    { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 220, ellipsis: true },
+    { title: 'Availability', dataIndex: 'availability', key: 'availability', width: 130 },
+    { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
+      <Tooltip title={r.followUpNotes || ''}>
+        <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
+      </Tooltip>
+    ) },
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
   ] : [
-    // Quotation-only ordering requested: Quotation_ID, Customer, Mobile, Notes, Status, Actions, Remarks
+    // Quotation ordering: Quotation_ID, Customer, Mobile, Notes, Status, Actions, Remarks
     { title: 'Quotation ID', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
@@ -292,7 +336,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{String(t || '-')}
       </div>
     ) },
-  ];
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
+  ]);
 
   return (
     <ErrorBoundary>

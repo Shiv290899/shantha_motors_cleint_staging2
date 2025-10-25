@@ -17,8 +17,8 @@ import Executive from "./Components/Executive";
 import Staff from "./Components/Staff";
 import Owner from "./Components/Owner";
 import StockUpdate from "./Components/StockUpdate";
+import RoleRedirect from "./Components/RoleRedirect";
 
-import User from "./Components/User";
 import Employees from "./Components/Employees";
 import Products from "./Components/Products";
 import Service from "./Components/Service";
@@ -39,7 +39,8 @@ function App() {
         <Route path="/jobcard" element={<ProtectedRoute><JobCard /></ProtectedRoute>} />
         <Route path="/stock" element={<ProtectedRoute><StockUpdate /></ProtectedRoute>} />
 
-        <Route path="/user" element={<ProtectedRoute><User /></ProtectedRoute>} />
+        {/* Dynamic redirect based on user role */}
+        <Route path="/dashboard" element={<ProtectedRoute><RoleRedirect /></ProtectedRoute>} />
         <Route path="/admin" element={<ProtectedRoute roles={["admin","owner"]}><Admin /></ProtectedRoute>} />
         <Route path="/owner" element={<ProtectedRoute ><Owner /></ProtectedRoute>} />
         <Route path="/mechanic" element={<ProtectedRoute ><Mechanic /></ProtectedRoute>} />

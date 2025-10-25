@@ -1,13 +1,15 @@
 import React from "react";
 import { Tabs, Grid } from "antd";
 import { FileTextOutlined, ToolOutlined, CalendarOutlined, SoundOutlined, AppstoreAddOutlined, PhoneOutlined } from "@ant-design/icons";
+// dynamic new pill (animated) on tab label
 
 import Quotation from "../Quotation";
 import JobCard from "../JobCard";
 import BookingForm from "../BookingForm";
 import StockUpdate from "../StockUpdate";
 import FollowUpsTabs from "../FollowUpsTabs";
-// Announcements banner removed; keep placeholder tab content
+import Announcements from "../Announcements";
+import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 
 export default function Staff() {
   const screens = Grid.useBreakpoint();
@@ -15,6 +17,21 @@ export default function Staff() {
 
   const container = { maxWidth: 1200, margin: "0 auto", padding: isMobile ? 12 : 16 };
   const wrap = { paddingTop: 12, width: "100%", overflowX: "auto", minWidth: 0 };
+  const { hasNew, latestItem } = useAnnouncementBadge();
+  const pillColor = (t) => (t === 'alert' ? '#fa541c' : t === 'warning' ? '#faad14' : '#2f54eb');
+  const NewPill = () => hasNew ? (
+    <span style={{
+      marginLeft: 6,
+      padding: '0 6px',
+      borderRadius: 10,
+      fontSize: 11,
+      color: '#fff',
+      fontWeight: 700,
+      background: pillColor(latestItem?.type),
+      display: 'inline-block',
+      animation: 'annPulse 1.6s ease-in-out infinite'
+    }}>NEW</span>
+  ) : null;
   const tabLabel = (icon, text) => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       {icon}
@@ -72,12 +89,15 @@ export default function Staff() {
     },
     {
       key: "announcements",
-      label: tabLabel(<SoundOutlined />, "Announcements"),
+      label: (
+        <>
+          <style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style>
+          <span>{tabLabel(<SoundOutlined />, "Announcements")}<NewPill/></span>
+        </>
+      ),
       children: (
         <div style={wrap}>
-          <div style={{ padding: 12, border: "1px dashed #d9d9d9", borderRadius: 8 }}>
-            Branch-wide messages and notices. (UI coming soon)
-          </div>
+          <Announcements />
         </div>
       ),
     },

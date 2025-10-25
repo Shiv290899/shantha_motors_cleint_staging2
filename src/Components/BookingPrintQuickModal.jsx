@@ -1,59 +1,118 @@
 // components/BookingPrintQuickModal.jsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Modal, Button, Spin, message } from 'antd';
 import { saveBookingViaWebhook } from '../apiCalls/forms';
 import BookingPrintSheet from './BookingPrintSheet';
 import { handleSmartPrint } from '../utils/printUtils';
 
-export default function BookingPrintQuickModal({ open, onClose, row, webhookUrl }) {
+export default function BookingPrintQuickModal({ open, onClose, row, webhookUrl, secret }) {
   const [loading, setLoading] = useState(false);
   const [payload, setPayload] = useState(null);
   const printRef = useRef(null);
 
-  const buildFromRow = (r) => {
-    if (!r) return null;
+  // Helpers to read values from varied Sheet headers and normalize to print payload
+  const pick = (obj, keys) => String((keys || []).map((k) => obj?.[k] ?? '').find((v) => v !== '') || '').trim();
+  const toDigits10 = (x) => String(x || '').replace(/\D/g, '').slice(-10);
+  const normalizeFromSheet = (row) => {
+    if (!row) return null;
+    const src = (row && typeof row === 'object') ? (row.payload || row.formValues || row.values || row) : {};
+    const customerName = pick(src, ['customerName','Customer Name','Customer_Name','Name','Customer']);
+    const mobileNumber = toDigits10(pick(src, ['mobileNumber','Mobile Number','Mobile','Phone']));
+    const address = pick(src, ['address','Address','Address Line','AddressLine']);
+    const branch = pick(src, ['branch','Branch']);
+    const executive = pick(src, ['executive','Executive','Sales Executive']);
+    const rtoOffice = pick(src, ['rtoOffice','RTO Office','RTO']);
+    const veh = (src && typeof src === 'object' && src.vehicle && typeof src.vehicle === 'object') ? src.vehicle : {};
+    const company = veh.company || src.company || pick(src, ['company','Company']);
+    const model = veh.model || src.model || pick(src, ['model','Model']);
+    const variant = veh.variant || src.variant || pick(src, ['variant','Variant']);
+    const color = veh.color || src.color || pick(src, ['color','Color']);
+    const chassisNo = veh.chassisNo || src.chassisNo || pick(src, ['chassisNo','Chassis No','Chassis Number','Chassis']);
+    const purchaseMode = pick(src, ['purchaseMode','purchaseType','Payment Type','Purchase Mode']);
+    const financier = pick(src, ['financier','Financier','Financier Name','HP Financier','NOHP Financier']);
+    const addressProofMode = pick(src, ['addressProofMode','Address Proof','Address Proof Mode']);
+    let addressProofTypes = src?.addressProofTypes || src?.['Proof Types'] || src?.['Address Proof Types'] || '';
+    if (typeof addressProofTypes === 'string') addressProofTypes = addressProofTypes.split(',').map((s)=>s.trim()).filter(Boolean);
+    const fileName = pick(src, ['fileName','Document Name','File Name']);
+    const createdAt = src?.createdAt || src?.Timestamp || src?.Date || new Date();
     return {
-      customerName: r.name || '',
-      mobileNumber: r.mobile || '',
-      address: '',
-      branch: r.branch || '',
-      executive: '',
-      rtoOffice: '',
-      purchaseMode: '',
-      vehicle: { company: r.company || '', model: r.model || '', variant: r.variant || '', color: '', chassisNo: r.chassis || '' },
-      createdAt: new Date(),
+      customerName,
+      mobileNumber,
+      address,
+      branch,
+      executive,
+      rtoOffice,
+      purchaseMode,
+      financier,
+      addressProofMode,
+      addressProofTypes: Array.isArray(addressProofTypes) ? addressProofTypes : [],
+      fileName,
+      createdAt,
+      vehicle: {
+        company,
+        model,
+        variant,
+        color,
+        chassisNo,
+        availability: chassisNo ? 'found' : 'allot',
+      },
     };
   };
 
   useEffect(() => {
     let active = true;
+    // Show print-sheet on screen while modal is open (preview)
+    if (open) {
+      try { document.body.classList.add('print-host'); } catch {
+        //iuuh
+      }
+    }
+    const cleanupHost = () => { try { document.body.classList.remove('print-host'); } catch {
+      //ohu
+    } };
     const fetchPayload = async () => {
       if (!open || !row) return;
       setLoading(true);
       try {
         if (webhookUrl && row.bookingId) {
-          const resp = await saveBookingViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode: 'booking', query: row.bookingId } });
+          const payload = { action: 'search', mode: 'booking', query: row.bookingId };
+          if (secret) payload.secret = secret;
+          const resp = await saveBookingViaWebhook({ webhookUrl, method: 'GET', payload });
           const j = resp?.data || resp;
-          const p = Array.isArray(j?.rows) && j.rows.length ? j.rows[0]?.payload : null;
-          if (active) setPayload(p || buildFromRow(row));
+          const r0 = Array.isArray(j?.rows) && j.rows.length ? j.rows[0] : null;
+          const normalized = r0 ? normalizeFromSheet(r0) : null;
+          if (active && normalized) {
+            setPayload(normalized);
+          } else {
+            // Fallback: try list + filter client-side (if search endpoint differs)
+            const respList = await saveBookingViaWebhook({ webhookUrl, method: 'GET', payload: secret ? { action: 'list', secret } : { action: 'list' } });
+            const jl = respList?.data || respList;
+            const arr = Array.isArray(jl?.data) ? jl.data : [];
+            const hit = arr.find((r) => String(r['Booking ID'] || '').trim() === String(row.bookingId).trim());
+            const norm2 = hit ? normalizeFromSheet(hit) : null;
+            if (active && norm2) setPayload(norm2);
+            if (active && !norm2) message.error('Booking not found in Sheet by Booking ID');
+          }
         } else {
-          if (active) setPayload(buildFromRow(row));
+          if (active) {
+            message.error('Missing Booking ID or webhook URL for print');
+            setPayload(null);
+          }
         }
-      } catch (e) {
-        if (active) {
-          message.warning('Could not fetch full booking; printing with available fields.');
-          setPayload(buildFromRow(row));
-        }
+      } catch  {
+        if (active) { message.error('Failed to fetch booking from Sheet'); setPayload(null); }
       } finally {
         if (active) setLoading(false);
       }
     };
     fetchPayload();
-    return () => { active = false; };
+    return () => { active = false; cleanupHost(); };
   }, [open, row, webhookUrl]);
 
   const handlePrint = () => {
-    try { handleSmartPrint(printRef.current); } catch {}
+    try { handleSmartPrint(printRef.current); } catch {
+      //ugyf
+    }
   };
 
   const body = (
@@ -76,4 +135,3 @@ export default function BookingPrintQuickModal({ open, onClose, row, webhookUrl 
     </Modal>
   );
 }
-

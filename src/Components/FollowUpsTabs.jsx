@@ -1,6 +1,6 @@
 import React from 'react';
 import { Tabs } from 'antd';
-import { FileTextOutlined, ToolOutlined } from '@ant-design/icons';
+import { FileTextOutlined, ToolOutlined, CalendarOutlined } from '@ant-design/icons';
 import FollowUps from './FollowUps';
 
 export default function FollowUpsTabs() {
@@ -17,6 +17,8 @@ export default function FollowUpsTabs() {
     'https://script.google.com/macros/s/AKfycbx7Q36rQ4tzFCDZKJbR5SUabuunYL2NKd0jNJxdUgaqIQ8BUX2kfINq5WppF5NJLxA6YQ/exec';
   const QUOT_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
   const JC_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
+  const DEFAULT_BOOKING_URL =
+    import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec';
 
   const items = [
     {
@@ -29,6 +31,12 @@ export default function FollowUpsTabs() {
       label: tabLabel(<ToolOutlined />, 'Job Card'),
       children: <FollowUps mode="jobcard" webhookUrl={JC_URL} />,
     },
+    {
+      key: 'booking',
+      label: tabLabel(<CalendarOutlined />, 'Booking'),
+      children: <FollowUps mode="booking" webhookUrl={DEFAULT_BOOKING_URL} />,
+    },
+    
   ];
 
   return (

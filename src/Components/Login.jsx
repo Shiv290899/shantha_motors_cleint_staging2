@@ -130,19 +130,23 @@ function Login() {
           }
         }
 
-        // Pull the latest profile so navbar/account chip can show the name/email
+        // Pull the latest profile to decide redirect by role
         // Best effort: refresh from /get-valid-user; ignore if it fails
         try {
           const profile = await GetCurrentUser();
           if (profile?.success && profile?.data) {
             localStorage.setItem("user", JSON.stringify(profile.data));
+            const r = String(profile.data.role || '').toLowerCase();
+            const { routeForRole } = await import('../utils/roleRoute');
+            navigate(routeForRole(r));
+            return;
           }
         } catch {
           // ignore
         }
 
         message.success("Login successful!");
-        navigate("/"); // redirect home
+        navigate("/dashboard"); // fallback redirect
       } else {
         message.error(data?.message || "Invalid email or password");
       }

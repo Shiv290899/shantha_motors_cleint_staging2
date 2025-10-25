@@ -2,6 +2,7 @@ import React from "react";
 import { Tabs, Grid, List, Typography } from "antd";
 import { CheckSquareOutlined, SoundOutlined } from "@ant-design/icons";
 import Announcements from "../Announcements";
+import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 
 const { Text } = Typography;
 
@@ -22,6 +23,12 @@ export default function Employees() {
     { title: "Update stock entries", due: "Today" },
     { title: "Close yesterday job cards", due: "Tomorrow" },
   ];
+
+  const { hasNew, latestItem } = useAnnouncementBadge();
+  const pillColor = (t) => (t === 'alert' ? '#fa541c' : t === 'warning' ? '#faad14' : '#2f54eb');
+  const NewPill = () => hasNew ? (
+    <span style={{ marginLeft:6, padding:'0 6px', borderRadius:10, fontSize:11, color:'#fff', fontWeight:700, background:pillColor(latestItem?.type), display:'inline-block', animation:'annPulse 1.6s ease-in-out infinite' }}>NEW</span>
+  ) : null;
 
   const items = [
     {
@@ -44,7 +51,12 @@ export default function Employees() {
     },
     {
       key: "announcements",
-      label: tabLabel(<SoundOutlined />, "Announcements"),
+      label: (
+        <>
+          <style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style>
+          <span>{tabLabel(<SoundOutlined />, "Announcements")}<NewPill/></span>
+        </>
+      ),
       children: (
         <div style={wrap}>
           <Announcements />

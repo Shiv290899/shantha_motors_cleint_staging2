@@ -6,6 +6,8 @@ import Bookings from '../Bookings'
 import Quotations from '../Quotations'
 import Jobcards from '../Jobcards'
 import Branches from '../Admin/Branches'
+import Announcements from '../Announcements'
+import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
 import Users from '../Admin/Users'
 // Announcements tab/banner removed as requested
 
@@ -43,9 +45,15 @@ export default function OwnerIndex() {
     </div>
   )
 
+  const { hasNew, latestItem } = useAnnouncementBadge()
+  const pillColor = (t) => (t === 'alert' ? '#fa541c' : t === 'warning' ? '#faad14' : '#2f54eb')
+  const NewPill = () => hasNew ? (
+    <span style={{ marginLeft:6, padding:'0 6px', borderRadius:10, fontSize:11, color:'#fff', fontWeight:700, background:pillColor(latestItem?.type), display:'inline-block', animation:'annPulse 1.6s ease-in-out infinite' }}>NEW</span>
+  ) : null
   const items = [
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
+    { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
     { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
     { key: 'stock', label: 'Stock Update', children: <StockUpdate /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },

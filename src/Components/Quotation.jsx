@@ -263,6 +263,8 @@ export default function Quotation() {
   );
 
   const [downPayment, setDownPayment] = useState(0);
+  const [busy, setBusy] = useState(false); // disable actions while saving/printing
+  const savingRef = useRef(false);
   const [vehicleType, setVehicleType] = useState("scooter");
   const [fittings, setFittings] = useState(["Side Stand", "Floor Mat", "ISI Helmet", "Grip Cover"]);
   const [docsReq, setDocsReq] = useState(DOCS_REQUIRED);
@@ -271,6 +273,8 @@ export default function Quotation() {
   const [, setUserRole] = useState();
   // Defaults for restore if fields get cleared
   const [defaultBranchName, setDefaultBranchName] = useState("");
+  const [allowedBranches, setAllowedBranches] = useState([]); // [{id,name,code}]
+  const [canSwitch, setCanSwitch] = useState(false);
   const [defaultExecutiveName, setDefaultExecutiveName] = useState("");
   const [branchCode, setBranchCode] = useState("");
   const [branchId, setBranchId] = useState("");
@@ -375,6 +379,27 @@ export default function Quotation() {
         if (user) {
           const staffName = user?.formDefaults?.staffName || user?.name || undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
+          // who can switch branches
+          const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
+          setCanSwitch(can);
+          // Build allowed branch list from primary + branches
+          try {
+            const list = [];
+            const push = (b) => {
+              if (!b) return;
+              const id = (b && (b._id || b.id || b.$oid || b)) || '';
+              const name = typeof b === 'string' ? '' : (b?.name || '');
+              const code = typeof b === 'string' ? '' : (b?.code || '');
+              if (!id || !name) return;
+              list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
+            };
+            if (user?.primaryBranch) push(user.primaryBranch);
+            if (Array.isArray(user?.branches)) user.branches.forEach(push);
+            const seen = new Set();
+            const uniq = [];
+            list.forEach((b) => { if (!seen.has(b.id)) { seen.add(b.id); uniq.push(b); } });
+            setAllowedBranches(uniq);
+          } catch { /* ignore */ }
           let branchName = user?.formDefaults?.branchName;
           const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
           if (codeFromUser) { setBranchCode(codeFromUser); try { form.setFieldsValue({ branchCode: codeFromUser }); } catch {
@@ -439,6 +464,28 @@ export default function Quotation() {
 
   // Removed serial prefetch to avoid accidental increments on refresh
 
+  const branchMapByName = React.useMemo(() => {
+    const m = new Map();
+    (allowedBranches || []).forEach((b) => m.set(String(b.name || '').toLowerCase(), b));
+    return m;
+  }, [allowedBranches]);
+
+  const onBranchChange = (name) => {
+    try {
+      const key = String(name || '').toLowerCase();
+      const b = branchMapByName.get(key);
+      if (b) {
+        setBranchId(b.id);
+        if (b.code) setBranchCode(String(b.code).toUpperCase());
+        try { form.setFieldsValue({ branch: b.name, branchCode: b.code ? String(b.code).toUpperCase() : undefined }); } catch {
+          //if
+        }
+      }
+    } catch {
+      //ignore
+    }
+  };
+
   useEffect(() => {
     if (brand === "NH") {
       form.setFieldsValue({ executive: MEGHANA_NAME });
@@ -499,11 +546,19 @@ export default function Quotation() {
   const tenuresForSet = (s) => (s === "12" ? [12, 18, 24, 36] : [24, 30, 36, 48]);
 
   const safeAutoSave = async () => {
-    const now = Date.now();
-    if (now - lastSavedAt < 3000) return null; // tighter debounce for UX
-    const result = await handleSaveToForm();   // validates + queues background save
-    setLastSavedAt(now);
-    return result;
+    if (savingRef.current) return null;
+    savingRef.current = true;
+    setBusy(true);
+    try {
+      const now = Date.now();
+      if (now - lastSavedAt < 3000) return null; // debounce rapid taps
+      const result = await handleSaveToForm();   // validates + queues background save
+      setLastSavedAt(Date.now());
+      return result;
+    } finally {
+      savingRef.current = false;
+      setBusy(false);
+    }
   };
 
   // ---------- Android-proof A4 print ----------
@@ -1163,7 +1218,16 @@ export default function Quotation() {
               </Col>
               <Col xs={24} sm={12} md={6}>
                 <Form.Item label="Branch" name="branch" rules={[{ required: true, message: "Branch is required" }]}>
-                  <Input readOnly placeholder="Auto-fetched from your profile" />
+                  {canSwitch && allowedBranches.length ? (
+                    <Select
+                      placeholder="Select branch"
+                      value={watchedBranch}
+                      onChange={(v) => onBranchChange(v)}
+                      options={allowedBranches.map((b) => ({ value: b.name, label: b.code ? `${b.name} (${b.code})` : b.name }))}
+                    />
+                  ) : (
+                    <Input readOnly placeholder="Auto-fetched from your profile" />
+                  )}
                 </Form.Item>
               </Col>
 
@@ -1588,13 +1652,13 @@ export default function Quotation() {
                 <Button
                   className="no-print"
                   onClick={handleWhatsAppClick}
-                  disabled={!canAct}
+                  disabled={!canAct || busy}
                   style={{ marginRight: 8, background: "#25D366", borderColor: "#25D366", color: "#fff" }}
                 >
                   WhatsApp
                 </Button>
 
-                <Button className="no-print" type="primary" icon={<PrinterOutlined />} onClick={handlePrint} disabled={!canAct}>
+                <Button className="no-print" type="primary" icon={<PrinterOutlined />} onClick={handlePrint} disabled={!canAct || busy}>
                   Print
                 </Button>
               </Col>

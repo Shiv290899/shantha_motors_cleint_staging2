@@ -131,7 +131,8 @@ export default function StockUpdate() {
     { name: "Black", hex: "#111827" },
     { name: "White", hex: "#ffffff", border: "#e5e7eb" },
     { name: "Red", hex: "#ef4444" },
-    { name: "Blue", hex: "#2563eb" },
+    { name: "PS Blue", hex: "#1e3a8a" },
+    { name: "Decent Blue", hex: "#3b82f6" },
     { name: "Grey / Silver", hex: "#9ca3af" },
     { name: "Green", hex: "#10b981" },
     { name: "Yellow", hex: "#f59e0b" },
@@ -357,28 +358,6 @@ export default function StockUpdate() {
       >
         <Form form={form} layout="vertical" initialValues={{}}>
           <Row gutter={[12, 8]}>
-            <Col xs={24} md={12}>
-              <Form.Item name="chassis" label={label("Chassis No.")} rules={[{ required: true, message: "Chassis number is required" }]}>
-                <Input
-                  placeholder={isChassisLocked ? "Chassis fixed for this movement" : "Enter chassis number"}
-                  disabled={isChassisLocked}
-                  onChange={(e)=>{ const v = (e.target.value||"").toUpperCase(); form.setFieldsValue({ chassis: v }); }}
-                />
-              </Form.Item>
-            </Col>
-
-            <Col xs={24} md={12}>
-              <Form.Item name="sourceBranch" label={label("Source Branch")}> 
-                <Select
-                  allowClear={!isSourceLocked}
-                  disabled={isSourceLocked}
-                  placeholder={isSourceLocked ? (form.getFieldValue('sourceBranch') || myBranch || "Current branch") : "(Optional) Select current branch"}
-                  value={isSourceLocked ? (form.getFieldValue('sourceBranch') || myBranch) : undefined}
-                >
-                  {branchNames.map((b) => <Select.Option key={b} value={b}>{b}</Select.Option>)}
-                </Select>
-              </Form.Item>
-            </Col>
 
             <Col span={24}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
@@ -454,6 +433,34 @@ export default function StockUpdate() {
                   ))}
                 </Space>
               )}
+            </Col>
+
+            {/* Moved here: Branch + Chassis side by side after Color */}
+            <Col xs={24} md={12}>
+              <Form.Item name="sourceBranch" label={label("Source Branch")}>
+                <Select
+                  allowClear={!isSourceLocked}
+                  disabled={isSourceLocked}
+                  placeholder={isSourceLocked ? (form.getFieldValue('sourceBranch') || myBranch || "Current branch") : "(Optional) Select current branch"}
+                  value={isSourceLocked ? (form.getFieldValue('sourceBranch') || myBranch) : undefined}
+                >
+                  {branchNames.map((b) => (
+                    <Select.Option key={b} value={b}>{b}</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="chassis" label={label("Chassis No.")} rules={[{ required: true, message: "Chassis number is required" }]}>
+                <Input
+                  placeholder={isChassisLocked ? "Chassis fixed for this movement" : "Enter chassis number"}
+                  disabled={isChassisLocked}
+                  onChange={(e) => {
+                    const v = (e.target.value || "").toUpperCase();
+                    form.setFieldsValue({ chassis: v });
+                  }}
+                />
+              </Form.Item>
             </Col>
 
             <Col span={24}>
