@@ -13,6 +13,8 @@ import {
   Button,            // CTA buttons
   Divider,           // Section separator
   Grid,              // AntD responsive hooks (useBreakpoint)
+  Carousel,          // Reviews carousel
+  Rate,              // Star rating
 } from "antd";       // Import all from antd
 // ↓ Icons
 import {
@@ -51,7 +53,7 @@ export default function About() { // Default export of the About page
     { year: "2022", title: "Year 1", desc: "Launched our first showroom in Bengaluru. Premium, transparent buying experience and dependable after-sales.", stat: 1 },   // Y1
     { year: "2023", title: "Year 2", desc: "Expanded to more neighborhoods for easy access to sales, service, and genuine spares.", stat: 3 },                        // Y2
     { year: "2024", title: "Year 3", desc: "Scaled rapidly while cloning our service DNA—bright spaces, trained teams, and customer-first process.", stat: 9 },      // Y3
-    { year: "2025", title: "Year 4", desc: "Operational excellence across the city. Targeting city-wide coverage by year-end.", stat: "10 → 15" },                   // Y4
+    { year: "2025", title: "Year 4", desc: "Operational excellence across the city. Targeting city-wide coverage by year-end.", stat: "10 → 27" },                   // Y4
     { year: "Next", title: "Momentum", desc: "Extending the ~3× trajectory—next milestone: 27 showrooms—on the path to 100+.", stat: "27 • 100+" },                  // Next
   ];
 
@@ -61,6 +63,18 @@ export default function About() { // Default export of the About page
     { icon: <ToolOutlined />, title: "Skilled Teams", desc: "Friendly advisors & trained technicians using only genuine parts." },              // Card 3
     { icon: <EnvironmentOutlined />, title: "Close to You", desc: "Strategic locations for quick access to sales & service." },                // Card 4
     { icon: <CheckCircleOutlined />, title: "Consistent Quality", desc: "Every branch upholds the same high Shantha Motors standard." },       // Card 5
+  ];
+
+  const values = [
+    { key: 'trust', color: 'linear-gradient(135deg,#ec4899,#f59e0b)', title: 'Trust', text: 'We do the right thing—always. Clear estimates, honest advice, dependable delivery.' },
+    { key: 'transparency', color: 'linear-gradient(135deg,#22d3ee,#6366f1)', title: 'Transparency', text: 'No surprises. Upfront pricing, live updates, and plain‑language communication.' },
+    { key: 'care', color: 'linear-gradient(135deg,#10b981,#84cc16)', title: 'Care', text: 'Warm guidance before and after purchase. Genuine spares and meticulous workmanship.' },
+  ];
+
+  const reviews = [
+    { name: 'Arun K', rating: 5, text: 'Super smooth delivery and the team patiently clarified every doubt. Service follow‑ups are on time.' },
+    { name: 'Meghana S', rating: 5, text: 'Transparent pricing and no hidden charges. Loved the experience—highly recommended!' },
+    { name: 'Ravi P', rating: 4.5, text: 'Quick turnaround for service and genuine parts. Professional and friendly staff.' },
   ];
 
   // ---------- STYLES (responsive via breakpoints) ----------
@@ -107,6 +121,15 @@ export default function About() { // Default export of the About page
     section: { padding: isMobile ? "28px 0" : "40px 0" }, // Section vertical rhythm
     container: { maxWidth: 1180, margin: "0 auto", padding: "0 16px" }, // Page container
     muted: { color: "rgba(0,0,0,0.45)" },         // Muted text color
+    valueCard: (bg) => ({
+      background: bg,
+      color: '#fff',
+      border: 'none',
+      boxShadow: '0 10px 24px rgba(0,0,0,.12)',
+      height: '100%',
+    }),
+    valueTitle: { color: '#fff', marginBottom: 6 },
+    reviewCard: { maxWidth: 760, margin: '0 auto', textAlign: 'center', padding: isMobile ? 12 : 16 },
   };
 
   return (                                        // Component render
@@ -138,7 +161,7 @@ export default function About() { // Default export of the About page
       {/* STORY + FACTS */}
       <section style={styles.section}>            {/* Padded section */}
         <div style={styles.container}>            {/* Centered container */}
-          <Row gutter={[16, 16]} align="top">     {/* Responsive grid row */}
+          <Row gutter={[16, 16]} align="stretch">  {/* Stretch columns to equal height */}
             <Col xs={24} md={14}>                 {/* Story card: full on mobile, 14/24 on md+ */}
               <Card bordered>                     {/* AntD card */}
                 <Title level={2} style={{ marginBottom: 8 }}>
@@ -173,7 +196,7 @@ export default function About() { // Default export of the About page
                     <Statistic title="Year 3" value={9} suffix="Showrooms" />
                   </Col>
                   <Col xs={12} sm={6}>
-                    <Statistic title="Year 4" value={10} suffix="→ 15" />
+                    <Statistic title="Year 4" value={10} suffix="→ 27" />
                   </Col>
                 </Row>
               </Card>
@@ -209,7 +232,7 @@ export default function About() { // Default export of the About page
             Nearly 3× scale-up year over year         {/* Subheading */}
           </Paragraph>
 
-          <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} align="stretch">  {/* Stretch mission/vision for alignment */}
             <Col span={24}>                         {/* Full-width timeline card */}
               <Card bordered>
                 <Timeline
@@ -239,7 +262,7 @@ export default function About() { // Default export of the About page
       {/* MISSION & VISION */}
       <section style={styles.section}>            {/* Padded section */}
         <div style={styles.container}>            {/* Centered container */}
-          <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} justify="center" align="stretch"> {/* Center last row; equal heights */}
             <Col xs={24} md={12}>                 {/* Mission card: stacks on mobile */}
               <Card bordered title="Our Mission" extra={<CheckCircleOutlined />}>
                 <ul style={{ margin: 0, paddingLeft: 18 }}>
@@ -264,6 +287,43 @@ export default function About() { // Default export of the About page
         </div>
       </section>
 
+      {/* VALUES */}
+      <section style={{ ...styles.section, background: '#0f172a' }}>
+        <div style={styles.container}>
+          <Title level={2} style={{ textAlign: 'center', color: '#e2e8f0', marginBottom: 6 }}>Our Values</Title>
+          <Paragraph style={{ textAlign: 'center', color: '#94a3b8', marginBottom: 18 }}>The principles behind every interaction</Paragraph>
+          <Row gutter={[16,16]} justify="center" align="stretch">
+            {values.map(v => (
+              <Col key={v.key} xs={24} sm={12} md={8}>
+                <Card hoverable style={styles.valueCard(v.color)}>
+                  <Title level={3} style={styles.valueTitle}>{v.title}</Title>
+                  <Paragraph style={{ color: 'rgba(255,255,255,.9)', margin: 0 }}>{v.text}</Paragraph>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </div>
+      </section>
+
+      {/* REVIEWS */}
+      <section style={styles.section}>
+        <div style={styles.container}>
+          <Title level={2} style={{ textAlign: 'center', marginBottom: 6 }}>What Customers Say</Title>
+          <Paragraph style={{ textAlign: 'center', ...styles.muted, marginBottom: 18 }}>Real feedback from recent visits</Paragraph>
+          <Carousel autoplay dots draggable adaptiveHeight>
+            {reviews.map((r,i) => (
+              <div key={i}>
+                <Card bordered style={styles.reviewCard}>
+                  <Rate disabled allowHalf defaultValue={r.rating} />
+                  <Paragraph style={{ fontSize: isMobile ? 14 : 16, marginTop: 8 }}>{r.text}</Paragraph>
+                  <Text type="secondary">— {r.name}</Text>
+                </Card>
+              </div>
+            ))}
+          </Carousel>
+        </div>
+      </section>
+
       {/* WHY CHOOSE US */}
       <section style={{ ...styles.section, background: "#faf6f8" }}> {/* Themed background */}
         <div style={styles.container}>            {/* Centered container */}
@@ -284,7 +344,7 @@ export default function About() { // Default export of the About page
                 <Card
                   bordered
                   hoverable
-                  style={{ height: "100%" }}       // Make equal height columns
+                  style={{ height: "100%", display: 'flex', flexDirection: 'column', textAlign: 'left' }} // Equal height + consistent alignment
                   actions={[<SmileOutlined key="smile" />]} // Cute icon action
                 >
                   <div style={{ fontSize: 22, marginBottom: 8, color: "#e11d48" }}>

@@ -34,7 +34,7 @@ export const saveBookingForm = async (payload) => {
 };
 
 export const saveBookingViaWebhook = async ({ webhookUrl, payload, headers, method }) => {
-  const { data } = await axiosInstance.post("/forms/booking/webhook", { webhookUrl, payload, headers, method });
+  const { data } = await axiosInstance.post("/forms/booking/webhook", { webhookUrl, payload, headers, method }, { timeout: 60000 });
   return data;
 };
 

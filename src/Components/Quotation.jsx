@@ -1252,8 +1252,16 @@ export default function Quotation() {
 
               {/* Customer */}
               <Col xs={24} sm={12} md={12}>
-                <Form.Item label="Customer Name" name="name" rules={[{ required: true, message: "Enter name" }]}>
-                  <Input placeholder="Customer name" />
+                <Form.Item 
+                  label="Customer Name" 
+                  name="name" 
+                  rules={[{ required: true, message: "Enter name" }]}
+                  getValueFromEvent={(e) => {
+                    const v = e?.target?.value ?? e; 
+                    return typeof v === 'string' ? v.toUpperCase() : v;
+                  }}
+                >
+                  <Input placeholder="CUSTOMER NAME" style={{ textTransform: 'uppercase' }} />
                 </Form.Item>
               </Col>
               <Col xs={24} sm={12} md={12}>

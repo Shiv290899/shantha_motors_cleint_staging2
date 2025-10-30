@@ -36,10 +36,38 @@ export default function Bookings() {
   const [printModal, setPrintModal] = useState({ open: false, row: null });
   // Prefilled inline form modal removed per request; use Print modal only
   const [q, setQ] = useState("");
+  // Controlled pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  // User + branch scoping
+  const [userRole, setUserRole] = useState("");
+  const [allowedBranches, setAllowedBranches] = useState([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (!raw) return;
+      const u = JSON.parse(raw);
+      setUserRole(String(u?.role || '').toLowerCase());
+      const list = [];
+      const pb = u?.formDefaults?.branchName || u?.primaryBranch?.name || '';
+      if (pb) list.push(pb);
+      if (Array.isArray(u?.branches)) {
+        u.branches.forEach((b)=>{ const nm = typeof b === 'string' ? b : (b?.name || ''); if (nm) list.push(nm); });
+      }
+      setAllowedBranches(Array.from(new Set(list.filter(Boolean))));
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length && branchFilter === 'all') {
+      setBranchFilter(allowedBranches[0]);
+    }
+  }, [userRole, allowedBranches, branchFilter]);
 
   // Reuse the same GAS URL for list + print so search works
   const DEFAULT_BOOKING_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec";
+    "https://script.google.com/macros/s/AKfycbxykgDUyhsZpsXD5YK2J98LWzjphg-EEVwQs3SxqRD1F8PhTNnD5hvnkw8bWiQzGCFn/exec";
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
@@ -96,8 +124,13 @@ export default function Bookings() {
 
   const branches = useMemo(() => {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const all = ["all", ...Array.from(set)];
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length) {
+      return all.filter((b)=> b==='all' || allowedBranches.includes(b));
+    }
+    return all;
+  }, [rows, userRole, allowedBranches]);
   const statuses = useMemo(() => {
     const set = new Set(rows.map((r) => (r.status || "").toLowerCase()).filter(Boolean));
     return ["all", ...Array.from(set)];
@@ -105,6 +138,10 @@ export default function Bookings() {
 
   const filtered = useMemo(() => {
     const list = rows.filter((r) => {
+      const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
+      if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+        if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+      }
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
       if (statusFilter !== "all" && (String(r.status || "").toLowerCase() !== statusFilter)) return false;
       if (q) {
@@ -116,7 +153,10 @@ export default function Bookings() {
       return true;
     });
     return list.sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
-  }, [rows, branchFilter, statusFilter, q]);
+  }, [rows, branchFilter, statusFilter, q, userRole, allowedBranches]);
+
+  // Reset page when filters/search change
+  useEffect(() => { setPage(1); }, [branchFilter, statusFilter, q]);
 
   const STATUS_COLOR = {
     pending: 'gold',
@@ -136,9 +176,10 @@ export default function Bookings() {
   const updateBooking = async (bookingId, patch, mobile) => {
     try {
       setUpdating(bookingId);
-      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbyDnwl-dS1TBNXsJe77yZaq_DW0tQhTTGRtesBOBhpvCTXRcSOhCrYUdWFo8UfNNJLm/exec";
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbxykgDUyhsZpsXD5YK2J98LWzjphg-EEVwQs3SxqRD1F8PhTNnD5hvnkw8bWiQzGCFn/exec";
       const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
-      await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: { action: 'update', bookingId, mobile, patch } });
+      const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
+      await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: SECRET ? { action: 'update', bookingId, mobile, patch, secret: SECRET } : { action: 'update', bookingId, mobile, patch } });
       setRows((prev)=> prev.map(r=> r.bookingId===bookingId ? { ...r, status: String(patch.status || r.status).toLowerCase() } : r));
       message.success('Updated');
     } catch { message.error('Update failed'); }
@@ -152,6 +193,9 @@ export default function Bookings() {
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
     { title: 'Model', dataIndex: 'model', key: 'model', width: 160 },
     { title: 'Variant', dataIndex: 'variant', key: 'variant', width: 140 },
+    { title: 'Chassis', dataIndex: 'chassis', key: 'chassis', width: 260, ellipsis: false, render: (v)=> (
+      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
+    ) },
     { title: 'Stk Status', dataIndex: 'availability', key: 'stk', width: 120, render: (v, r)=> {
       const lbl = stockLabel(r.chassis, v);
       return (<Tag color={stockColor(lbl)}>{lbl}</Tag>);
@@ -208,8 +252,13 @@ export default function Bookings() {
     <div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <Space size="small" wrap>
-          <Select value={branchFilter} onChange={setBranchFilter} style={{ minWidth: 160 }}
-                  options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))} />
+          <Select
+            value={branchFilter}
+            onChange={setBranchFilter}
+            style={{ minWidth: 160 }}
+            disabled={!['owner','admin'].includes(userRole)}
+            options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
+          />
           <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 160 }}
                   options={statuses.map(s => ({ value: s, label: s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ') }))} />
           <Input placeholder="Search name/mobile/booking" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 220 }} />
@@ -231,7 +280,14 @@ export default function Bookings() {
         columns={columns}
         loading={loading}
         size={isMobile ? 'small' : 'middle'}
-        pagination={{ pageSize: 10 }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
         rowKey={(r) => `${r.bookingId}-${r.mobile}-${r.ts}-${r.key}`}
         scroll={{ x: 'max-content' }}
       />

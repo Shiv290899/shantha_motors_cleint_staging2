@@ -60,7 +60,7 @@ const EXECUTIVES = [
 
 const SERVICE_TYPES = ["Free", "Paid"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
-const MECHANIC = ["Sonu", "Karthik", "ManMohan", "Mansur", "Irshad", "Dakshat"];
+const MECHANIC = ["Sonu", "Karthik", "ManMohan", "Mansur", "Irshad", "Dakshat", "Salman"];
 
 // Fuel Level (tabs)
 const FUEL_LEVELS = ["Empty", "¼", "½", "¾", "Full"];
@@ -248,6 +248,7 @@ export default function JobCard({ initialValues = null } = {}) {
   const postRef = useRef(null);
   const [postOpen, setPostOpen] = useState(false);
   const [postPayment, setPostPayment] = useState('cash'); // 'cash' | 'online'
+  const [postUtr, setPostUtr] = useState('');
   // Follow-up state (similar to Quotation)
   const [followUpEnabled, setFollowUpEnabled] = useState(true);
   const [followUpAt, setFollowUpAt] = useState(() => dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
@@ -727,9 +728,20 @@ export default function JobCard({ initialValues = null } = {}) {
         : valsNow.floorMat === true ? 'Yes' : valsNow.floorMat === false ? 'No' : 'No';
       const obsOneLine = String(valsNow.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
 
+      // Basic validation: if online, require a UTR (len >= 4)
+      if (postPayment === 'online') {
+        const u = String(postUtr || '').trim();
+        if (u.length < 4) {
+          message.error('Enter a valid UTR No. for online payments.');
+          return;
+        }
+      }
+
       const payload = {
         postServiceAt: new Date().toISOString(),
         paymentMode: postPayment,
+        utr: postPayment === 'online' ? String(postUtr || '').trim() : undefined,
+        utrNo: postPayment === 'online' ? String(postUtr || '').trim() : undefined,
         formValues: {
           jcNo: jcNo || '',
           branch: valsNow.branch || '',
@@ -756,7 +768,7 @@ export default function JobCard({ initialValues = null } = {}) {
 
       // Optimistic: queue background post-service save
       message.success({ key: 'postsave', content: 'Saved. Syncing in background…' });
-      const data = { mobile: mobile10, jcNo, collectedAmount: amount, paymentMode: postPayment, payload };
+      const data = { mobile: mobile10, jcNo, collectedAmount: amount, paymentMode: postPayment, utr: postPayment === 'online' ? String(postUtr || '').trim() : undefined, utrNo: postPayment === 'online' ? String(postUtr || '').trim() : undefined, payload };
       const outboxId = enqueueOutbox({ type: 'post', data });
       setTimeout(async () => {
         try {
@@ -776,6 +788,7 @@ export default function JobCard({ initialValues = null } = {}) {
         await handlePrint('post');
       }
       setPostOpen(false);
+      setPostUtr('');
     } catch (e) {
       console.warn('post-service save error:', e);
       message.error((e && e.message) || 'Could not save post-service details.');
@@ -1006,8 +1019,16 @@ export default function JobCard({ initialValues = null } = {}) {
 
             <Row gutter={[12, 8]}>
               <Col xs={24} sm={12} md={8}>
-                <Form.Item label="Customer Name" name="custName" rules={[{ required: true }]}>
-                  <Input />
+                <Form.Item 
+                  label="Customer Name" 
+                  name="custName" 
+                  rules={[{ required: true }]}
+                  getValueFromEvent={(e) => {
+                    const v = e?.target?.value ?? e; 
+                    return typeof v === 'string' ? v.toUpperCase() : v;
+                  }}
+                >
+                  <Input placeholder="e.g., RAHUL SHARMA" style={{ textTransform: 'uppercase' }} />
                 </Form.Item>
               </Col>
 
@@ -1288,6 +1309,17 @@ export default function JobCard({ initialValues = null } = {}) {
           onChange={(v) => setPostPayment(v)}
           options={[{ label: 'Cash', value: 'cash' }, { label: 'Online', value: 'online' }]}
         />
+        {postPayment === 'online' && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No.</div>
+            <Input
+              placeholder="Enter UTR number"
+              value={postUtr}
+              onChange={(e) => setPostUtr(e.target.value)}
+              maxLength={32}
+            />
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={() => setPostOpen(false)}>Cancel</Button>
           <Button onClick={() => handlePostServiceFlow(false)}>Save Only</Button>

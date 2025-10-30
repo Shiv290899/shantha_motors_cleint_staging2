@@ -15,10 +15,12 @@ import {
   Radio,
   Tag,
   Checkbox,
+  AutoComplete,
 } from "antd";
 import { InboxOutlined, CreditCardOutlined, PrinterOutlined } from "@ant-design/icons";
 import { listCurrentStocksPublic } from "../apiCalls/stocks";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
+// Using direct upload to Google Apps Script; no server-side upload import
 import BookingPrintSheet from "./BookingPrintSheet";
 import FetchBooking from "./FetchBooking";
 import { handleSmartPrint } from "../utils/printUtils";
@@ -54,7 +56,10 @@ const SHEET_CSV_URL =
 // Prefer env var VITE_BOOKING_GAS_URL; fallback to provided URL
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbyhPxzPkpSowB4sRqL8Bm9Ju9SvmLzsli16eVDC7Mo53CXJQjKEh4Tw9XL_8Gbl90t9/exec";
+  "https://script.google.com/macros/s/AKfycbxykgDUyhsZpsXD5YK2J98LWzjphg-EEVwQs3SxqRD1F8PhTNnD5hvnkw8bWiQzGCFn/exec";
+const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
+// Control whether to send base64 file in payload. Default: 'none' (do not send)
+// Attachments are uploaded via GAS; no base64 in payload
 // Minimal CSV parser (copied from Quotation logic)
 const parseCsv = (text) => {
   const rows = [];
@@ -113,6 +118,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
 
   const [form] = Form.useForm();
   const [addressProofFiles, setAddressProofFiles] = useState([]);
+  // Removed server-side upload state; uploads will be done directly to GAS on submit
   const [bikeData, setBikeData] = useState([]);
 
   // User context for auto-filling Executive and Branch
@@ -195,36 +201,31 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
     try { handleSmartPrint(printRef.current); } catch { /* ignore */ }
   };
 
-  // --- Outbox for optimistic background submission (no waiting on UX) ---
-  const OUTBOX_KEY = 'Booking:outbox';
+  // --- Draft persistence to prevent data loss (excluding files) ---
+  const DRAFT_KEY = 'Booking:draft:v1';
   const readJson = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
   const writeJson = (k, obj) => { try { localStorage.setItem(k, JSON.stringify(obj)); } catch { /* ignore quota */ } };
-  const enqueueOutbox = (job) => { const box = readJson(OUTBOX_KEY, []); const item = { id: Date.now()+':' + Math.random().toString(36).slice(2), job }; box.push(item); writeJson(OUTBOX_KEY, box); return item.id; };
-  const removeOutboxById = (id) => { const box = readJson(OUTBOX_KEY, []); writeJson(OUTBOX_KEY, box.filter(x=>x.id!==id)); };
 
+  // Restore draft once on mount
+  useEffect(() => {
+    const draft = readJson(DRAFT_KEY, null);
+    if (draft && typeof draft === 'object') {
+      try {
+        form.setFieldsValue(draft);
+        if (draft.company) setSelectedCompany(draft.company);
+        if (draft.bikeModel) setSelectedModel(draft.bikeModel);
+      } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Submit helper with secret and error handling
   const submitToWebhook = async (payload) => {
     if (!BOOKING_GAS_URL) return { success: true, offline: true };
-    const resp = await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: 'POST', payload });
+    const merged = BOOKING_GAS_SECRET ? { ...payload, secret: BOOKING_GAS_SECRET } : payload;
+    const resp = await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: 'POST', payload: merged });
     return resp;
   };
-
-  const retryOutbox = async () => {
-    try {
-      const box = readJson(OUTBOX_KEY, []);
-      if (!Array.isArray(box) || !box.length) return;
-      for (const item of box) {
-        const data = item.job?.data;
-        if (!data) continue;
-        try {
-          const resp = await submitToWebhook(data);
-          const ok = (resp?.data || resp)?.success !== false;
-          if (ok) removeOutboxById(item.id);
-        } catch { /* keep for next retry */ }
-      }
-    } catch { /* ignore */ }
-  };
-  useEffect(() => { setTimeout(() => { retryOutbox(); }, 0); }, []);
-  useEffect(() => { const onOnline = () => retryOutbox(); window.addEventListener('online', onOnline); return () => window.removeEventListener('online', onOnline); }, []);
 
   // Chassis availability state
   const [chassisStatus, setChassisStatus] = useState("idle"); // idle|checking|found|not_found
@@ -412,7 +413,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         const cleaned = data.map(normalizeSheetRow).filter((r) => r.company && r.model && r.variant);
         if (!cancelled) setBikeData(cleaned);
       } catch  {
-        // Fallback to a static file if present
+        // Fallback 1: a static aggregated file if present
         try {
           const res2 = await fetch("/bikeData.json", { cache: "no-store" });
           if (!res2.ok) throw new Error("fallback missing");
@@ -423,7 +424,28 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
           if (!cancelled) setBikeData(cleaned);
           if (!Array.isArray(data)) message.warning("Loaded fallback bikeData.json");
         } catch {
-          message.error("Could not load vehicle data. Please try again later.");
+          // Fallback 2: merge brand JSONs already present in /public
+          try {
+            const brands = [
+              'bajaj', 'honda', 'tvs', 'suzuki', 'yamaha', 'royalEnfield'
+            ];
+            const lists = await Promise.all(
+              brands.map(async (b) => {
+                try {
+                  const r = await fetch(`/${b}.json`, { cache: 'no-store' });
+                  if (!r.ok) return [];
+                  const js = await r.json();
+                  return Array.isArray(js) ? js : [];
+                } catch { return []; }
+              })
+            );
+            const merged = lists.flat();
+            const cleaned = merged.map(normalizeFallbackRow).filter((r) => r.company && r.model && r.variant);
+            if (!cancelled) setBikeData(cleaned);
+            if (!cleaned.length) throw new Error('no data');
+          } catch {
+            message.error("Could not load vehicle data. Please try again later.");
+          }
         }
       }
     };
@@ -517,6 +539,8 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
     return false; // prevent auto-upload, keep in fileList
   };
 
+  // Removed auto-upload; we'll upload to GAS on submit
+
   const fileToBase64 = (file) => new Promise((resolve, reject) => {
     try {
       const reader = new FileReader();
@@ -530,6 +554,20 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
     } catch (e) { reject(e); }
   });
 
+  // Upload file directly to GAS to obtain Drive link
+  const uploadFileToGAS = async (file) => {
+    const fd = new FormData();
+    fd.append('action', 'upload');
+    if (BOOKING_GAS_SECRET) fd.append('secret', BOOKING_GAS_SECRET);
+    const origin = file?.originFileObj || file;
+    fd.append('file', origin, file?.name || origin?.name || 'document.pdf');
+    const resp = await fetch(BOOKING_GAS_URL, { method: 'POST', body: fd, credentials: 'omit' });
+    let js = null;
+    try { js = await resp.json(); } catch { js = null; }
+    if (js && (js.ok || js.success)) return js;
+    throw new Error('Upload failed');
+  };
+
   const onFinish = async (values) => {
     try {
       // Require at least one document uploaded (independent of address proof)
@@ -538,10 +576,21 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         return;
       }
       setSubmitting(true);
-      // Convert the single PDF to base64 for Apps Script
+      // Upload the selected file to GAS to obtain Drive link (if possible)
       const f = (addressProofFiles || [])[0];
-      const base64 = await fileToBase64(f);
-      const file = { name: f.name, mimeType: f.type || 'application/pdf', size: f.size, base64 };
+      let file = { name: f.name, mimeType: f.type || 'application/pdf', size: f.size };
+      try {
+        const up = await uploadFileToGAS(f);
+        if (up && (up.url || up.fileId)) file = { ...file, ...up };
+      } catch {
+        // Fallback: attach small files as base64 so GAS can upload
+        try {
+          if ((f.size || 0) <= 1024 * 1024) {
+            const base64 = await fileToBase64(f);
+            file.base64 = base64;
+          }
+        } catch { /* ignore */ }
+      }
 
       // Compute DP totals for submission
       const effAff = values.addressProofMode === 'additional' ? (Number(values.affidavitCharges) || 0) : 0;
@@ -631,43 +680,38 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         branch: values.branch || branchDefault || undefined,
         file,
       };
-
-      // Optimistic queue: enqueue a slim copy (avoid storing big base64)
-      const slim = JSON.parse(JSON.stringify(payload));
-      if (slim?.file) {
-        // drop base64 from outbox to avoid localStorage quota; keep metadata
-        delete slim.file.base64;
+      // Submit and wait for completion (no data loss; user said delay is fine)
+      let ok = false
+      let resp
+      try {
+        resp = await submitToWebhook(payload)
+        ok = (resp?.data || resp)?.success !== false
+      } catch  {
+        ok = false;
       }
-      const outboxId = enqueueOutbox({ type: 'booking', data: slim });
 
-      // Fire-and-forget background submission via backend proxy (webhook)
-      setTimeout(async () => {
-        try {
-          const resp = await submitToWebhook(payload); // full payload with file
-          const ok = (resp?.data || resp)?.success !== false;
-          if (ok) {
-            removeOutboxById(outboxId);
-            // notify other views to reload
-            try { window.dispatchEvent(new Event('reload-bookings')); } catch { /* ignore */ }
-          }
-        } catch {/* keep queued */}
-      }, 0);
+      if (!ok) {
+        throw new Error(String((resp?.data || resp)?.message || 'Submission failed'))
+      }
 
-      // Instant success UX — do not wait for network
-      message.success('Booking saved (syncing in background)');
+      message.success('Booking saved successfully')
       if (typeof onSuccess === 'function') {
-        try { onSuccess({ response: { success: true, queued: true }, payload }); } catch { /* noop */ }
+        try { onSuccess({ response: (resp?.data || resp), payload }); } catch { /* noop */ }
       }
 
-      form.resetFields();
+      // Clear form and draft only after confirmed success
+      form.resetFields()
+      writeJson(DRAFT_KEY, null)
       // clear file lists
-      form.setFieldsValue({ executive: executiveDefault || '', branch: branchDefault || '' });
-      setAddressProofFiles([]);
-      setSelectedCompany("");
-      setSelectedModel("");
-      setChassisStatus("idle");
-      setChassisInfo(null);
-      setStockItems([]);
+      form.setFieldsValue({ executive: executiveDefault || '', branch: branchDefault || '' })
+      setAddressProofFiles([])
+      setSelectedCompany("")
+      setSelectedModel("")
+      setChassisStatus("idle")
+      setChassisInfo(null)
+      setStockItems([])
+      // notify other views to reload
+      try { window.dispatchEvent(new Event('reload-bookings')); } catch { /* ignore */ }
     } catch (e) {
       message.error(String(e?.message || e || "Submission failed"));
     } finally {
@@ -708,6 +752,14 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       form={form}
       onFinish={onFinish}
       onFinishFailed={onFinishFailed}
+      onValuesChange={(_, all) => {
+        try {
+          const copy = { ...all }
+          // never persist payment reference or large internals implicitly
+          if (!copy.paymentMode || copy.paymentMode !== 'online') delete copy.paymentReference
+          writeJson(DRAFT_KEY, copy)
+        } catch { /* ignore */ }
+      }}
       requiredMark="optional"
       encType="multipart/form-data"
     >
@@ -740,8 +792,12 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             label="Customer Name"
             name="customerName"
             rules={[{ required: true, message: "Please enter customer name" }]}
+            getValueFromEvent={(e) => {
+              const v = e?.target?.value ?? e;
+              return typeof v === 'string' ? v.toUpperCase() : v;
+            }}
           >
-            <Input size="large" placeholder="e.g., Rahul Sharma" allowClear />
+            <Input size="large" placeholder="e.g., RAHUL SHARMA" allowClear style={{ textTransform: 'uppercase' }} />
           </Form.Item>
         </Col>
         <Col xs={24} md={12}>
@@ -835,22 +891,16 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       <Row gutter={[16, 0]}>
         <Col xs={24} md={12}>
           <Form.Item label="Color" name="color" rules={[{ required: true, message: "Select color" }]}>
-            {availableColors.length ? (
-              <Select
-                size="large"
-                placeholder={loadingStocks ? "Loading colors..." : "Select Color"}
-                disabled={!selectedVariant}
-                showSearch
-                optionFilterProp="children"
-                onChange={() => form.setFieldsValue({ chassisNo: undefined })}
-              >
-                {availableColors.map((c) => (
-                  <Option key={c} value={c}>{c}</Option>
-                ))}
-              </Select>
-            ) : (
-              <Input size="large" placeholder="Type color" disabled={!selectedVariant} />
-            )}
+            <AutoComplete
+              size="large"
+              disabled={!selectedVariant}
+              placeholder={loadingStocks ? "Loading colors..." : "Select or type color"}
+              options={availableColors.map((c) => ({ value: c }))}
+              filterOption={(inputValue, option) =>
+                String(option?.value || "").toLowerCase().includes(String(inputValue || "").toLowerCase())
+              }
+              onChange={() => form.setFieldsValue({ chassisNo: undefined })}
+            />
           </Form.Item>
         </Col>
         <Col xs={24} md={12}>

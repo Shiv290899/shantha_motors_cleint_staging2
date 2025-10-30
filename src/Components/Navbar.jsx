@@ -393,7 +393,6 @@ export default function Navbar() {
   // map labels to your actual paths (so no 404s)
   const navItems = [
     { label: "Home", path: "/" },
-    { label: "Products", path: "/products" },
     { label: "Service", path: "/service" },
     { label: "Gallery", path: "/gallery" },
     { label: "Contact", path: "/contact" },

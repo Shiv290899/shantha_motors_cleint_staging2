@@ -27,6 +27,9 @@ export default function Branches({ readOnly = false }) {
   const [cityFilter, setCityFilter] = React.useState("all");
   const [typeFilter, setTypeFilter] = React.useState("all");
   const [statusFilter, setStatusFilter] = React.useState("all");
+  // Controlled pagination
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(25);
 
   const fetchList = React.useCallback(async () => {
     setLoading(true);
@@ -85,6 +88,9 @@ export default function Branches({ readOnly = false }) {
       return hay.some((x)=>x.includes(s));
     });
   }, [items, q, cityFilter, typeFilter, statusFilter]);
+
+  // Reset page on filters/search change
+  React.useEffect(() => { setPage(1); }, [q, cityFilter, typeFilter, statusFilter]);
 
   const stats = React.useMemo(() => {
     const by = (key) => {
@@ -295,7 +301,15 @@ export default function Branches({ readOnly = false }) {
         dataSource={filtered}
         columns={columns}
         loading={loading}
-        pagination={{ pageSize: 10 }}
+        scroll={{ x: 'max-content' }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
         size="middle"
       />
 

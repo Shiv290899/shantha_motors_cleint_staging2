@@ -96,7 +96,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const [branchOnly, setBranchOnly] = useState(true);
   // pagination (controlled to allow changing page size)
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(25);
 
   const [me, setMe] = useState({ name: '', branch: '' });
   const [userRole, setUserRole] = useState('');
@@ -147,6 +147,9 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     return await saveBookingViaWebhook({ webhookUrl, method, payload });
   };
 
+  // Normalize branch names for strict comparisons
+  const norm = (s) => String(s || '').trim().toLowerCase();
+
   const fetchFollowUps = async () => {
     setLoading(true);
     try {
@@ -162,12 +165,17 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
       const payload = isBooking ? (
         BOOKING_SECRET ? { action: 'list', secret: BOOKING_SECRET } : { action: 'list' }
-      ) : {
-        action: 'followups',
-        filter, // today|overdue|upcoming|all
-        branch: branchOnly ? (me.branch || allowedBranches[0] || '') : '',
-        executive: '', // show all for branch
-      };
+      ) : (() => {
+        // Always pass branch to the webhook for strict server-side scoping
+        const meBranch = (me.branch || allowedBranches[0] || '');
+        const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
+        return {
+          action: 'followups',
+          filter, // today|overdue|upcoming|all
+          branch: shouldRestrict ? meBranch : '',
+          executive: '', // never restrict by executive
+        };
+      })();
       const resp = await callWebhook({ method: 'GET', payload });
       const j = resp?.data || resp;
       const list = Array.isArray(j?.rows) ? j.rows : (Array.isArray(j?.data) ? j.data : []);
@@ -204,16 +212,19 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           p.model || fv.bikeModel || fv.model || values.Model,
           p.variant || fv.variant || values.Variant,
         ].filter(Boolean).join(' ');
+        // Prefer trimmed branch for display; filtering uses `norm`
+        const branchDisp = (fv.branch || p.branch || values.Branch || values['Branch Name'] || '-');
         return {
           key: serial || i,
           serialNo: serial || '-',
           name: fv.name || values.Customer_Name || values['Customer Name'] || values.Customer || values.Name || '-',
           mobile: fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
           vehicle,
-          branch: fv.branch || p.branch || values.Branch || '-',
+          branch: String(branchDisp || '-').trim(),
           executive: fv.executive || fu.assignedTo || values.Executive || '-',
           followUpAt: fu.at ? dayjs(fu.at) : null,
-          followUpNotes: fu.notes || '',
+          // Make notes resilient to varying key names from webhook/sheet
+          followUpNotes: fu.notes || p.notes || p.closeNotes || fv.remarks || p.remarks || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Notes'] || '',
           closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
           status: (() => {
             const s = fu.status || p.status || fv.status || values.Status || values['Booking Status'] || '';
@@ -234,14 +245,17 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       // Client-side filtering as a fallback (in case webhook returns unfiltered rows)
       const startToday = dayjs().startOf('day');
       const endToday = dayjs().endOf('day');
-      const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
       const filtered = items.filter((it) => {
-        // hard branch gate for non-admin staff
-        if (allowedSet.size && !['owner','admin'].includes(userRole)) {
-          if (!allowedSet.has(String(it.branch||'').toLowerCase())) return false;
+        const itB = norm(it.branch);
+        const meB = norm(me.branch || allowedBranches[0] || '');
+
+        // Strict branch gate for non-admin roles
+        if (!['owner','admin'].includes(userRole)) {
+          if (!meB || itB !== meB) return false;
+        } else {
+          // Admins can opt into strict view with the toggle
+          if (branchOnly && meB && itB !== meB) return false;
         }
-        // branch/executive toggles
-        if (branchOnly && me.branch && it.branch && it.branch !== me.branch) return false;
         // Do not filter by executive name (per requirement)
         // date filter
         if (filter === 'all') return true;
@@ -266,7 +280,25 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
 
   const updateFollowUp = async (serialNo, patch) => {
     try {
-      const resp = await callWebhook({ method: 'POST', payload: { action: 'updateFollowup', serialNo, patch } });
+      // Ensure branch travels with update (some GAS scripts depend on it)
+      const withBranch = {
+        branch: branchOnly ? (me.branch || allowedBranches[0] || '') : (patch?.branch || ''),
+        ...patch,
+      };
+      // Normalise notes fields for maximum compatibility with various GAS handlers
+      if (withBranch?.followUp?.notes) {
+        const n = withBranch.followUp.notes;
+        withBranch.notes = withBranch.notes ?? n;           // top-level alias
+        withBranch.followupNotes = withBranch.followupNotes ?? n; // alt key
+        withBranch.remarks = withBranch.remarks ?? n;       // some sheets store as remarks
+      }
+      if (withBranch?.closeNotes) {
+        const cn = withBranch.closeNotes;
+        withBranch.notes = withBranch.notes ?? cn;
+        withBranch.followupNotes = withBranch.followupNotes ?? cn;
+        withBranch.remarks = withBranch.remarks ?? cn;
+      }
+      const resp = await callWebhook({ method: 'POST', payload: { action: 'updateFollowup', serialNo, patch: withBranch } });
       const j = resp?.data || resp;
       if (!j?.success) throw new Error('Failed');
       message.success('Updated');
@@ -286,6 +318,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
       </Tooltip>
     ) },
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
     {
       title: 'Actions', key: 'actions',
       render: (_, r) => (
@@ -376,7 +409,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['10','20','50','100'],
+          pageSizeOptions: ['25','50','75','100'],
           onChange: (p, ps) => {
             setPage(p);
             if (ps !== pageSize) setPageSize(ps);

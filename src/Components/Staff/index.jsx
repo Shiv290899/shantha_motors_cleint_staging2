@@ -10,10 +10,12 @@ import StockUpdate from "../StockUpdate";
 import FollowUpsTabs from "../FollowUpsTabs";
 import Announcements from "../Announcements";
 import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
+import { GetCurrentUser } from "../../apiCalls/users";
 
 export default function Staff() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md; // < md considered mobile/tablet portrait
+  const [branchName, setBranchName] = React.useState("");
 
   const container = { maxWidth: 1200, margin: "0 auto", padding: isMobile ? 12 : 16 };
   const wrap = { paddingTop: 12, width: "100%", overflowX: "auto", minWidth: 0 };
@@ -38,6 +40,22 @@ export default function Staff() {
       <span>{text}</span>
     </span>
   );
+
+  // Resolve branch name for the logged-in staff
+  React.useEffect(() => {
+    (async () => {
+      try {
+        let user = null;
+        try { const raw = localStorage.getItem('user'); user = raw ? JSON.parse(raw) : null; } catch { /* ignore */ }
+        if (!user) {
+          const resp = await GetCurrentUser().catch(() => null);
+          if (resp?.success && resp.data) { user = resp.data; try { localStorage.setItem('user', JSON.stringify(user)); } catch { /* ignore */ } }
+        }
+        const bn = user?.formDefaults?.branchName || user?.primaryBranch?.name || (Array.isArray(user?.branches) ? (typeof user.branches[0] === 'string' ? user.branches[0] : (user.branches[0]?.name || '')) : '');
+        setBranchName(bn || "");
+      } catch { setBranchName(""); }
+    })();
+  }, []);
 
   const items = [
     {
@@ -105,7 +123,40 @@ export default function Staff() {
 
   return (
     <div style={container}>
-      <h2 style={{ marginTop: 0 }}>Staff Dashboard</h2>
+      <h2
+        style={{
+          marginTop: 0,
+          display: "flex",
+          alignItems: "baseline",
+          flexWrap: "wrap",
+          gap: isMobile ? 8 : 12,
+          lineHeight: 1.15,
+        }}
+      >
+        <span>Staff Dashboard</span>
+        {branchName ? (
+          <span
+            title="Your branch"
+            style={{
+              marginLeft: 0,
+              fontSize: isMobile ? 18 : 28,
+              fontWeight: 800,
+              letterSpacing: 0.3,
+              whiteSpace: "nowrap",
+              display: "inline-flex",
+              alignItems: "center",
+              lineHeight: 1.1,
+              background: "linear-gradient(90deg,#2f54eb 0%, #13c2c2 45%, #52c41a 100%)",
+              WebkitBackgroundClip: "text",
+              backgroundClip: "text",
+              color: "transparent",
+              textShadow: "0 1px 1px rgba(0,0,0,0.08)",
+            }}
+          >
+            {branchName}
+          </span>
+        ) : null}
+      </h2>
       <Tabs
         defaultActiveKey="quotation"
         items={items}

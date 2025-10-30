@@ -34,6 +34,9 @@ export default function Users({ readOnly = false }) {
   const [roleFilter, setRoleFilter] = React.useState();
   const [statusFilter, setStatusFilter] = React.useState();
   const [branchFilter, setBranchFilter] = React.useState();
+  // Controlled pagination (client-side)
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(25);
 
   const fetchBranches = React.useCallback(async () => {
     const res = await listBranchesPublic({ limit: 500 });
@@ -54,7 +57,7 @@ export default function Users({ readOnly = false }) {
         });
         if (pub?.success) {
           setItems(pub.data.items || []);
-          setTotal(pub.data.total || 0);
+          setTotal(pub.data.total || (pub.data.items?.length || 0));
         } else {
           message.error(pub?.message || "Failed to load users");
           setItems([]); setTotal(0);
@@ -70,7 +73,7 @@ export default function Users({ readOnly = false }) {
         });
         if (res?.success) {
           setItems(res.data.items || []);
-          setTotal(res.data.total || 0);
+          setTotal(res.data.total || (res.data.items?.length || 0));
         } else if (res?._status === 401 || res?._status === 403) {
           // Fallback to public list (read-only) similar to branches
           const pub = await listUsersPublic({
@@ -84,7 +87,7 @@ export default function Users({ readOnly = false }) {
           if (pub?.success) {
             message.info("Showing public user list (read-only). Sign in for management.");
             setItems(pub.data.items || []);
-            setTotal(pub.data.total || 0);
+            setTotal(pub.data.total || (pub.data.items?.length || 0));
           } else {
             message.error(res?.message || "Failed to load users");
             setItems([]); setTotal(0);
@@ -102,6 +105,7 @@ export default function Users({ readOnly = false }) {
 
   React.useEffect(() => { fetchBranches(); }, [fetchBranches]);
   React.useEffect(() => { fetchList(); }, [fetchList]);
+  React.useEffect(() => { setPage(1); }, [q, roleFilter, statusFilter, branchFilter]);
 
   const onEdit = (row) => {
     setEditing(row);
@@ -260,7 +264,15 @@ export default function Users({ readOnly = false }) {
         dataSource={items}
         columns={columns}
         loading={loading}
-        pagination={false}
+        scroll={{ x: 'max-content' }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
         size="middle"
       />
 

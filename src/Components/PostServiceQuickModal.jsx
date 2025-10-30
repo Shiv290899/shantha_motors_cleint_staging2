@@ -13,6 +13,7 @@ import { handleSmartPrint } from "../utils/printUtils";
  */
 export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }) {
   const [payment, setPayment] = useState("cash");
+  const [utr, setUtr] = useState("");
   const printRef = useRef(null);
 
   const amount = useMemo(() => {
@@ -52,9 +53,18 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
         return;
       }
       const jc = String(valsForPrint?.jcNo || "").trim();
+      if (payment === 'online') {
+        const u = String(utr || '').trim();
+        if (u.length < 4) {
+          message.error('Enter a valid UTR No. for online payments.');
+          return;
+        }
+      }
       const payload = {
         postServiceAt: new Date().toISOString(),
         paymentMode: payment,
+        utr: payment === 'online' ? String(utr || '').trim() : undefined,
+        utrNo: payment === 'online' ? String(utr || '').trim() : undefined,
         formValues: {
           jcNo: jc,
           branch: valsForPrint.branch || "",
@@ -84,7 +94,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
         await saveJobcardViaWebhook({
           webhookUrl,
           method: 'POST',
-          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, collectedAmount: amount || 0, paymentMode: payment, payload } },
+          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, collectedAmount: amount || 0, paymentMode: payment, utr: payment === 'online' ? String(utr || '').trim() : undefined, utrNo: payment === 'online' ? String(utr || '').trim() : undefined, payload } },
         });
       }
       message.success('Post-service saved');
@@ -95,6 +105,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
         } }, 50);
       }
       onClose?.();
+      setUtr('');
     } catch (e) {
       message.error(e?.message || 'Could not save post-service');
     }
@@ -105,6 +116,19 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       <Modal open={open} title="Post-service" onCancel={onClose} footer={null}>
         <div style={{ marginBottom: 12 }}>Select payment mode:</div>
         <Segmented value={payment} onChange={setPayment} options={[{ label: 'Cash', value: 'cash' }, { label: 'Online', value: 'online' }]} />
+        {payment === 'online' && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No.</div>
+            <input
+              type="text"
+              value={utr}
+              onChange={(e) => setUtr(e.target.value)}
+              placeholder="Enter UTR number"
+              maxLength={32}
+              style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '6px 10px' }}
+            />
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={onClose}>Cancel</Button>
           <Button onClick={() => savePostService(false)}>Save Only</Button>
@@ -119,4 +143,3 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
     </>
   );
 }
-

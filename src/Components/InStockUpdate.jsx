@@ -23,6 +23,9 @@ export default function InStockUpdate() {
   const [selVariants, setSelVariants] = useState([]);
   const [selColors, setSelColors] = useState([]);
   const [dateRange, setDateRange] = useState([]);
+  // Controlled pagination to avoid resets on re-render
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   // Owner-only Invoice modal state
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
@@ -121,6 +124,9 @@ export default function InStockUpdate() {
     });
   }, [items, q, selCompanies, selModels, selVariants, selColors, dateRange]);
 
+  // Whenever filters/search/branch change, reset to first page
+  useEffect(() => { setPage(1); }, [q, selCompanies, selModels, selVariants, selColors, dateRange, branch]);
+
   // Summary counts (independent of search filter)
   const totalCount = items.length;
   const countsByBranch = useMemo(() => {
@@ -136,31 +142,54 @@ export default function InStockUpdate() {
   const col = (v) => String(v || "").trim();
   const colorDot = (name) => {
     const n = String(name || "").toLowerCase();
-    const hex = n.includes("black") ? "#111827"
-      : n.includes("white") ? "#ffffff"
-      : n.includes("red") ? "#ef4444"
-      : n.includes("blue") ? "#2563eb"
-      : n.includes("grey") || n.includes("silver") ? "#9ca3af"
-      : n.includes("green") ? "#10b981"
-      : n.includes("yellow") ? "#f59e0b"
-      : n.includes("orange") ? "#f97316"
-      : n.includes("maroon") || n.includes("wine") ? "#800000"
-      : "#d1d5db";
-    const border = hex === "#ffffff" ? "#e5e7eb" : "#d1d5db";
-    return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ width: 12, height: 12, borderRadius: 3, background: hex, border: `1px solid ${border}` }} />
-      {name || '-'}
-    </span>;
+    // Handle specific variants first
+    let hex = "#d1d5db";
+    if (n.includes("white")) hex = "#ffffff";
+    else if (n.includes("black")) hex = "#111827";
+    else if (n.includes("maroon") || n.includes("wine")) hex = "#800000";
+    else if (n.includes("gold")) hex = "#d4af37";
+    else if (n.includes("copper")) hex = "#b87333";
+    else if (n.includes("purple") || n.includes("violet")) hex = "#8b5cf6";
+    else if (n.includes("brown")) hex = "#8b4513";
+
+    // Blues: starlight/decent/ps must come before generic blue
+    else if (n.includes("starlight") && n.includes("blue")) hex = "#60a5fa";
+    else if (n.includes("ps") && n.includes("blue")) hex = "#1e3a8a";
+    else if (n.includes("decent") && n.includes("blue")) hex = "#3b82f6";
+    else if (n.includes("blue")) hex = "#2563eb";
+
+    // Greys: deep ground / mat grey / genny grey / silver
+    else if (n.includes("deep") && n.includes("ground") && n.includes("grey")) hex = "#374151";
+    else if (n.includes("mat") && n.includes("grey")) hex = "#6b7280";
+    else if (n.includes("genny") && n.includes("grey")) hex = "#9ca3af";
+    else if (n.includes("silver")) hex = "#c0c0c0";
+    else if (n.includes("grey")) hex = "#9ca3af";
+
+    else if (n.includes("milit")) hex = "#4b5320"; // military green
+    else if (n.includes("green")) hex = "#10b981";
+    else if (n.includes("yellow")) hex = "#f59e0b";
+    else if (n.includes("orange")) hex = "#f97316";
+    else if (n.includes("red")) hex = "#ef4444";
+
+    const border = hex === "#ffffff" ? "#e5e7eb" : (n.includes("silver") ? "#9ca3af" : "#d1d5db");
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 12, height: 12, borderRadius: 3, background: hex, border: `1px solid ${border}` }} />
+        {name || '-'}
+      </span>
+    );
   };
 
   const columns = [
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 160, ellipsis: true },
-    { title: "Company", dataIndex: "company", key: "company", width: 120, ellipsis: true, responsive: ['md'] },
-    { title: "Model", dataIndex: "model", key: "model", width: 140, ellipsis: true },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 160, ellipsis: true },
-    { title: "Color", dataIndex: "color", key: "color", width: 150, render: (v) => colorDot(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 140 },
-    { title: "Status", dataIndex: "status", key: "status", width: 110, render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag> },
+    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 260, ellipsis: false, render: (v)=> (
+      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
+    ) },
+    { title: "Company", dataIndex: "company", key: "company", width: 160, ellipsis: false },
+    { title: "Model", dataIndex: "model", key: "model", width: 180, ellipsis: false },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 200, ellipsis: false },
+    { title: "Color", dataIndex: "color", key: "color", width: 180, render: (v) => colorDot(v) },
+    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
+    { title: "Status", dataIndex: "status", key: "status", width: 120, render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag> },
     { title: "Actions", key: "actions", width: 120, fixed: isMobile ? undefined : 'right', render: (_, r) => (
       <Space size="small">
         <Button size="small" type="primary" onClick={() => {
@@ -267,9 +296,16 @@ export default function InStockUpdate() {
         columns={columns}
         loading={loading}
         size={isMobile ? 'small' : 'middle'}
-        pagination={{ pageSize: 10 }}
-        rowKey={(r) => r.key}
-        scroll={{ x: isMobile ? 900 : undefined }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
+        rowKey={(r) => r.chassis || r.key}
+        scroll={{ x: 'max-content' }}
       />
 
       {/* Invoice Modal (Owner) */}

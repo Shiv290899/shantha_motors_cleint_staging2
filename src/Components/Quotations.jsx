@@ -37,6 +37,9 @@ export default function Quotations() {
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
+  // Controlled pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   useEffect(() => {
     try {
@@ -130,10 +133,10 @@ export default function Quotations() {
 
   const branches = useMemo(() => {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    const all = Array.from(set);
+    const all = ["all", ...Array.from(set)];
     const isPriv = ["owner","admin"].includes(userRole);
-    if (!isPriv && allowedBranches.length) return [...Array.from(new Set(all.filter((b)=>allowedBranches.includes(b))))];
-    return ["all", ...all];
+    if (!isPriv && allowedBranches.length) return all.filter((b)=> b==='all' || allowedBranches.includes(b));
+    return all;
   }, [rows, userRole, allowedBranches]);
   const modes = useMemo(() => {
     const set = new Set(rows.map((r)=> (r.mode || '').toLowerCase()).filter(Boolean));
@@ -173,6 +176,9 @@ export default function Quotations() {
     });
   }, [rows, branchFilter, modeFilter, statusFilter, q, dateRange, userRole, allowedBranches]);
 
+  // Reset pagination on filters/search/date change
+  useEffect(() => { setPage(1); }, [branchFilter, modeFilter, statusFilter, q, dateRange]);
+
   const statusColor = (s) => {
     const k = String(s || '').toLowerCase();
     return k === 'converted' ? 'green'
@@ -187,18 +193,18 @@ export default function Quotations() {
   };
 
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, responsive: ['md'], render: (v)=> formatTs(v) },
-    { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 180, ellipsis: true },
-    { title: "Customer", dataIndex: "name", key: "name", width: 200, ellipsis: true },
-    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 140 },
+    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, render: (v)=> formatTs(v) },
+    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
+    { title: "Customer Name", dataIndex: "name", key: "name", width: 220, ellipsis: true },
+    { title: "Mobile No", dataIndex: "mobile", key: "mobile", width: 140 },
     { title: "Status", dataIndex: "status", key: "status", width: 130, render: (v)=> <Tag color={statusColor(v)}>{String(v||'').replace(/_/g,' ')||'—'}</Tag> },
-    { title: "Company", dataIndex: "company", key: "company", width: 140, responsive: ['md'] },
-    { title: "Model", dataIndex: "model", key: "model", width: 140, responsive: ['md'] },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 140, responsive: ['lg'] },
+    { title: "Model", dataIndex: "model", key: "model", width: 160 },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 180 },
     { title: "On-Road Price", dataIndex: "price", key: "price", width: 140, align: 'right' },
     { title: "Mode", dataIndex: "mode", key: "mode", width: 110, align: 'center', render: (v)=> String(v||'').toUpperCase() },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
     { title: "Executive", dataIndex: "executive", key: "executive", width: 160 },
+    { title: "Company", dataIndex: "company", key: "company", width: 160 },
+    { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 200, ellipsis: true },
   ];
 
   const total = rows.length;
@@ -207,8 +213,13 @@ export default function Quotations() {
     <div style={{ paddingTop: 12 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
         <Space wrap>
-          <Select value={branchFilter} onChange={setBranchFilter} style={{ minWidth: 160 }}
-                  options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))} />
+          <Select
+            value={branchFilter}
+            onChange={setBranchFilter}
+            style={{ minWidth: 160 }}
+            disabled={!['owner','admin'].includes(userRole)}
+            options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
+          />
           <Select value={modeFilter} onChange={setModeFilter} style={{ minWidth: 140 }}
                   options={modes.map(m => ({ value: m, label: m === 'all' ? 'All Modes' : String(m).toUpperCase() }))} />
           <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 160 }}
@@ -235,7 +246,15 @@ export default function Quotations() {
         columns={columns}
         loading={loading}
         size={isMobile ? 'small' : 'middle'}
-        pagination={{ pageSize: 10 }}
+        scroll={{ x: 'max-content' }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
         rowKey={(r) => `${r.serialNo}-${r.mobile}-${r.ts}-${r.key}`}
         scroll={{ x: 'max-content' }}
       />

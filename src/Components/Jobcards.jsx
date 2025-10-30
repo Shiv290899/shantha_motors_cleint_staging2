@@ -17,7 +17,8 @@ const HEAD = {
   model: ["Model", "Bike Model"],
   serviceType: ["Service Type", "Service", "Service_Type"],
   vehicleType: ["Vehicle Type", "Type of Vehicle", "Vehicle_Type"],
-  amount: ["Collected Amount", "Amount"],
+  amount: ["Service Amount", "Collected Amount", "Collected_Amount", "Amount"],
+  paymentMode: ["Payment Mode", "Mode of Payment", "Payment_Mode", "paymentMode"],
   payload: ["Payload"],
 };
 
@@ -36,6 +37,9 @@ export default function Jobcards() {
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
+  // Controlled pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   useEffect(() => {
     try {
@@ -91,6 +95,17 @@ export default function Jobcards() {
           const company = fv.company || '';
           const model = fv.model || pick(obj, HEAD.model);
           const regNo = fv.regNo || pick(obj, HEAD.regNo);
+          // Prefer authoritative values from payload when available
+          const serviceAmount = (() => {
+            const g = payload?.totals?.grand;
+            if (g !== undefined && g !== null && g !== '') return String(g);
+            return String(pick(obj, HEAD.amount) || '');
+          })();
+          const payMode = (() => {
+            const fromSheet = pick(obj, HEAD.paymentMode);
+            return String(fromSheet || payload?.paymentMode || '');
+          })();
+
           return {
             key: idx,
             ts: pick(obj, HEAD.ts),
@@ -105,7 +120,8 @@ export default function Jobcards() {
             model,
             serviceType: fv.serviceType || pick(obj, HEAD.serviceType),
             vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
-            amount: String(fv.amount || pick(obj, HEAD.amount) || '').trim(),
+            amount: serviceAmount.trim(),
+            paymentMode: payMode.trim(),
           };
         });
         if (!cancelled) setRows(data.filter((r)=>r.jcNo || r.name || r.mobile));
@@ -151,25 +167,29 @@ export default function Jobcards() {
       if (q) {
         const s = q.toLowerCase();
         if (![
-          r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive
+          r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
     });
   }, [rows, branchFilter, serviceFilter, q, dateRange, userRole, allowedBranches]);
 
+  // Reset pagination when filters/search/date change
+  useEffect(() => { setPage(1); }, [branchFilter, serviceFilter, q, dateRange]);
+
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, responsive: ['md'], render: (v)=> formatTs(v) },
-    { title: "Job Card", dataIndex: "jcNo", key: "jcNo", width: 160, ellipsis: true },
-    { title: "Customer", dataIndex: "name", key: "name", width: 180, ellipsis: true },
-    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 140 },
-    { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 140 },
-    { title: "Model", dataIndex: "model", key: "model", width: 140, responsive: ['md'] },
-    { title: "Service", dataIndex: "serviceType", key: "serviceType", width: 110, align: 'center', render: (v)=> String(v||'') },
-    { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 110, align: 'center', render: (v)=> String(v||'') },
-    { title: "Amount", dataIndex: "amount", key: "amount", width: 120, align: 'right' },
+    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, render: (v)=> formatTs(v) },
     { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
-    { title: "Executive", dataIndex: "executive", key: "executive", width: 160 },
+    { title: "Customer Name", dataIndex: "name", key: "name", width: 200, ellipsis: true },
+    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 140 },
+    { title: "Model", dataIndex: "model", key: "model", width: 160 },
+    { title: "Service Type", dataIndex: "serviceType", key: "serviceType", width: 140, align: 'center', render: (v)=> String(v||'') },
+    { title: "Service Amount", dataIndex: "amount", key: "amount", width: 130, align: 'right' },
+    { title: "Mode of Payment", dataIndex: "paymentMode", key: "paymentMode", width: 160, align: 'center', render: (v)=> String(v||'').toUpperCase() },
+    { title: "Executive", dataIndex: "executive", key: "executive", width: 170 },
+    { title: "Job Card", dataIndex: "jcNo", key: "jcNo", width: 200, ellipsis: true },
+    { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 160 },
+    { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 120, align: 'center', render: (v)=> String(v||'') },
   ];
 
   const total = rows.length;
@@ -178,15 +198,20 @@ export default function Jobcards() {
     <div style={{ paddingTop: 12 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
         <Space wrap>
-          <Select value={branchFilter} onChange={setBranchFilter} style={{ minWidth: 160 }}
-                  options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))} />
+          <Select
+            value={branchFilter}
+            onChange={setBranchFilter}
+            style={{ minWidth: 160 }}
+            disabled={!['owner','admin'].includes(userRole)}
+            options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
+          />
           <Select value={serviceFilter} onChange={setServiceFilter} style={{ minWidth: 140 }}
                   options={services.map(m => ({ value: m, label: m === 'all' ? 'All Services' : String(m).toUpperCase() }))} />
           <DatePicker.RangePicker value={dateRange} onChange={(v)=>{ setDateRange(v); setQuickKey(null); }} allowClear />
           <Button size="small" type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
           <Button size="small" type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>
           <Button size="small" onClick={()=>{ setDateRange(null); setQuickKey(null); }}>Clear</Button>
-          <Input placeholder="Search name/mobile/jc/vehicle/model" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 260 }} />
+          <Input placeholder="Search name/mobile/jc/vehicle/model/mode" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 280 }} />
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
@@ -204,7 +229,14 @@ export default function Jobcards() {
         columns={columns}
         loading={loading}
         size={isMobile ? 'small' : 'middle'}
-        pagination={{ pageSize: 10 }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
         rowKey={(r) => `${r.jcNo}-${r.mobile}-${r.ts}-${r.key}`}
         scroll={{ x: 'max-content' }}
       />

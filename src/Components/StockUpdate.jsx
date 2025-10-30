@@ -79,7 +79,22 @@ export default function StockUpdate() {
   const [invoiceBaseRow, setInvoiceBaseRow] = useState(null);
   const [loadingList, setLoadingList] = useState(false);
   const [items, setItems] = useState([]);
+  // Controlled pagination for the table
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [branchNames, setBranchNames] = useState([]);
+  const dealerOptions = useMemo(() => {
+    const name = String(company || '').toLowerCase();
+    if (!name) return [];
+    // Brand → franchise suggestions
+    if (/^hero$/i.test(company) || name.includes('hero')) {
+      return ['Poorna Motors', 'Sai Bikes', ];
+    }
+    if (/^honda$/i.test(company) || name.includes('honda')) {
+      return ['Silicon Honda', 'Springs Honda'];
+    }
+    return [];
+  }, [company]);
 
   const currentUser = useMemo(() => {
     try { return JSON.parse(localStorage.getItem('user') || 'null') } catch { return null }
@@ -127,18 +142,27 @@ export default function StockUpdate() {
   const models = useMemo(() => [...new Set(catalog.filter((r) => r.company === company).map((r) => r.model))], [catalog, company]);
   const variants = useMemo(() => [...new Set(catalog.filter((r) => r.company === company && r.model === model).map((r) => r.variant))], [catalog, company, model]);
   // Preset color choices with hex samples for quick pick
+  // Updated per requirement to use the following 19 colors
   const PRESET_COLORS = useMemo(() => ([
-    { name: "Black", hex: "#111827" },
     { name: "White", hex: "#ffffff", border: "#e5e7eb" },
+    { name: "Black", hex: "#111827" },
+    { name: "Mat Grey", hex: "#6b7280" },
     { name: "Red", hex: "#ef4444" },
-    { name: "PS Blue", hex: "#1e3a8a" },
+    { name: "Blue", hex: "#2563eb" },
     { name: "Decent Blue", hex: "#3b82f6" },
-    { name: "Grey / Silver", hex: "#9ca3af" },
-    { name: "Green", hex: "#10b981" },
+    { name: "PS Blue", hex: "#1e3a8a" },
+    { name: "Deep Ground Grey", hex: "#374151" },
+    { name: "Brown", hex: "#8b4513" },
     { name: "Yellow", hex: "#f59e0b" },
+    { name: "Purple", hex: "#8b5cf6" },
+    { name: "Genny Grey", hex: "#9ca3af" },
+    { name: "Militery Green", hex: "#4b5320" },
+    { name: "Silver", hex: "#c0c0c0", border: "#9ca3af" },
     { name: "Orange", hex: "#f97316" },
-    { name: "Maroon / Wine Red", hex: "#800000" },
-    { name: "Matte Black", hex: "#0f172a" },
+    { name: "Starlight Blue", hex: "#60a5fa" },
+    { name: "Gold", hex: "#d4af37" },
+    { name: "Copper", hex: "#b87333" },
+    { name: "Maroon", hex: "#800000" },
   ]), []);
 
   const colors = useMemo(() => {
@@ -178,11 +202,16 @@ export default function StockUpdate() {
         Return_To: action === 'return' ? (values.returnTo || '') : '',
         Customer_Name: action === 'invoice' ? (values.customerName || '') : '',
         Source_Branch: values.sourceBranch || '',
-        Notes: values.notes || '',
+        Notes: (() => {
+          const base = String(values.notes || '').trim();
+          const fr = action === 'add' ? String(values.franchise || '').trim() : '';
+          if (fr) return base ? `${base} | Franchise: ${fr}` : `Franchise: ${fr}`;
+          return base;
+        })(),
       };
       await createStock({ data: row, createdBy: user?.name || user?.email || 'user' });
       message.success("Stock movement saved.");
-      form.resetFields(["chassis", "notes", "targetBranch", "returnTo", "customerName"]);
+      form.resetFields(["chassis", "notes", "targetBranch", "returnTo", "customerName", "franchise"]);
       setModalOpen(false);
       fetchList();
     } catch (err) {
@@ -286,20 +315,22 @@ export default function StockUpdate() {
   };
 
   const columns = [
-    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 180, ellipsis: true, responsive: ['md'] },
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 150, ellipsis: true },
-    { title: "Company", dataIndex: "company", key: "company", width: 130, ellipsis: true, responsive: ['md'] },
-    { title: "Model", dataIndex: "model", key: "model", width: 130, ellipsis: true, responsive: ['md'] },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 140, ellipsis: true, responsive: ['md'] },
-    { title: "Color", dataIndex: "color", key: "color", width: 120, ellipsis: true, responsive: ['md'] },
+    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 180, ellipsis: true },
+    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 260, ellipsis: false, render: (v)=> (
+      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
+    ) },
+    { title: "Company", dataIndex: "company", key: "company", width: 150, ellipsis: false },
+    { title: "Model", dataIndex: "model", key: "model", width: 160, ellipsis: false },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 200, ellipsis: false },
+    { title: "Color", dataIndex: "color", key: "color", width: 150, ellipsis: false },
     { title: "Action", dataIndex: "action", key: "action", width: 120, render: (v) => {
       const t = String(v || "").toLowerCase();
       const color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
       return <Tag color={color}>{v || '-'}</Tag>;
     } },
     { title: "Target/Return/Customer", key: "dest", ellipsis: true, render: (_, r) => r.targetBranch || r.returnTo || r.customerName || "—" },
-    { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 140, ellipsis: true },
-    { title: "Notes", dataIndex: "notes", key: "notes", ellipsis: true, responsive: ['md'] },
+    { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 160, ellipsis: false },
+    { title: "Notes", dataIndex: "notes", key: "notes", ellipsis: true },
     { title: "Actions", key: "actions", width: 220, render: (_, r) => (
       <Space size="small">
         <Button size="small" onClick={() => openWithAction(r, 'transfer')}>Transfer</Button>
@@ -339,7 +370,14 @@ export default function StockUpdate() {
         dataSource={items}
         columns={columns}
         loading={loadingList}
-        pagination={{ pageSize: 10 }}
+        pagination={{
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['25','50','75','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        }}
         size={isMobile ? "small" : "middle"}
         scroll={{ x: isMobile ? 900 : undefined }}
         rowKey={(r) => `${r.ts}-${r.chassis}-${r.key}`}
@@ -463,6 +501,19 @@ export default function StockUpdate() {
               </Form.Item>
             </Col>
 
+            {/* Franchise selector (only when adding new stock and when brand has known dealers) */}
+            {action === 'add' && dealerOptions.length > 0 && (
+              <Col xs={24} md={12}>
+                <Form.Item name="franchise" label={label("Franchise (Dealer)")}> 
+                  <Select placeholder="Select franchise" allowClear disabled={!company} showSearch optionFilterProp="children">
+                    {dealerOptions.map((d)=> (
+                      <Select.Option key={`fr:${d}`} value={d}>{d}</Select.Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </Col>
+            )}
+
             <Col span={24}>
               {Array.isArray(allowedActions) && allowedActions.length === 1 ? (
                 <div style={{ marginBottom: 8 }}>
@@ -494,7 +545,7 @@ export default function StockUpdate() {
             {action === 'transfer' && (
               <Col xs={24} md={12}>
                 <Form.Item name="targetBranch" label={label("Target Branch")} rules={[{ required: true, message: "Select target branch" }]}> 
-                  <Select placeholder="Select branch">
+                  <Select placeholder="Select branch" showSearch optionFilterProp="children">
                     {branchNames.map((b) => <Select.Option key={b} value={b}>{b}</Select.Option>)}
                   </Select>
                 </Form.Item>
@@ -509,8 +560,16 @@ export default function StockUpdate() {
             )}
             {action === 'invoice' && (
               <Col xs={24} md={12}>
-                <Form.Item name="customerName" label={label("Customer Name")} rules={[{ required: true, message: "Customer name required" }]}> 
-                  <Input placeholder="Enter customer name" />
+                <Form.Item 
+                  name="customerName" 
+                  label={label("Customer Name")} 
+                  rules={[{ required: true, message: "Customer name required" }]} 
+                  getValueFromEvent={(e) => {
+                    const v = e?.target?.value ?? e; 
+                    return typeof v === 'string' ? v.toUpperCase() : v;
+                  }}
+                > 
+                  <Input placeholder="ENTER CUSTOMER NAME" style={{ textTransform: 'uppercase' }} />
                 </Form.Item>
               </Col>
             )}

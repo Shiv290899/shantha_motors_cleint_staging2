@@ -11,6 +11,7 @@ import Navbar from "./Components/Navbar"; // ✅ new
 import Quotation from "./Components/Quotation";
 import JobCard from "./Components/JobCard";
 import ProtectedRoute from "./compo/ProtectedRoute"
+import GuestRoute from "./compo/GuestRoute"
 import Admin from "./Components/Admin";
 import Mechanic from "./Components/Mechanic";
 import Executive from "./Components/Executive";
@@ -33,9 +34,9 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/home" element={<Home />} />
 
-        <Route path="/login" element={<Login />} />
+        <Route path="/login" element={<GuestRoute><Login /></GuestRoute>} />
         <Route path="/quotation" element={<ProtectedRoute><Quotation /></ProtectedRoute>} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/register" element={<GuestRoute><Register /></GuestRoute>} />
         <Route path="/jobcard" element={<ProtectedRoute><JobCard /></ProtectedRoute>} />
         <Route path="/stock" element={<ProtectedRoute><StockUpdate /></ProtectedRoute>} />
 
