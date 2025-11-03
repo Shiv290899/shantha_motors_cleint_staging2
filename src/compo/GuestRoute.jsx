@@ -9,47 +9,32 @@ export default function GuestRoute({ children }) {
   const [isAuthed, setIsAuthed] = useState(false);
 
   useEffect(() => {
-    const verify = async () => {
-      const token = localStorage.getItem("token");
-      if (!token) {
-        setIsAuthed(false);
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const res = await GetCurrentUser();
-        if (res?.success && res?.data) {
-          try { localStorage.setItem("user", JSON.stringify(res.data)); } catch {
-            // ignore storage failures
-          }
-          setIsAuthed(true);
-        } else {
-          try {
-            localStorage.removeItem("token");
-            localStorage.removeItem("user");
-          } catch {
-            // ignore
-          }
-          setIsAuthed(false);
-        }
-      } catch {
+    // Be lenient: if a token exists, treat as authenticated and redirect away from guest pages.
+    const token = localStorage.getItem("token");
+    const cached = (() => { try { return JSON.parse(localStorage.getItem("user") || "null"); } catch { return null; } })();
+    if (token || cached) {
+      setIsAuthed(true);
+      setLoading(false);
+      // Refresh user in background but don't force logout on failures
+      (async () => {
         try {
-          localStorage.removeItem("token");
-          localStorage.removeItem("user");
+          const res = await GetCurrentUser();
+          if (res?.success && res?.data) {
+            try { localStorage.setItem("user", JSON.stringify(res.data)); } catch {
+              //ihihhi
+            }
+          }
         } catch {
-          // ignore
+          //gyg
         }
-        setIsAuthed(false);
-      } finally {
-        setLoading(false);
-      }
-    };
-    verify();
+      })();
+      return;
+    }
+    setIsAuthed(false);
+    setLoading(false);
   }, []);
 
   if (loading) return null; // could render a spinner if desired
   if (isAuthed) return <Navigate to="/dashboard" replace />;
   return <>{children}</>;
 }
-

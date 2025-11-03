@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
+import dayjs from 'dayjs';
 import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip } from "antd";
 // Stock updates now use MongoDB backend only
-import { listStocks, listCurrentStocks, createStock } from "../apiCalls/stocks";
+import { listStocks, listCurrentStocks, createStock, updateStock } from "../apiCalls/stocks";
 import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
 
@@ -74,6 +75,7 @@ export default function StockUpdate() {
   const [allowedActions, setAllowedActions] = useState(null); // null = all, ["add"] or [specific]
   const [submitting, setSubmitting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingMovementId, setEditingMovementId] = useState(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [invoicePrefill, setInvoicePrefill] = useState(null);
   const [invoiceBaseRow, setInvoiceBaseRow] = useState(null);
@@ -83,6 +85,11 @@ export default function StockUpdate() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [branchNames, setBranchNames] = useState([]);
+  // Admin/Owner filters (computed after role)
+  const [branchFilter, setBranchFilter] = useState('all');
+  const [actionFilter, setActionFilter] = useState('all'); // add|transfer|return|invoice|all
+  const [qText, setQText] = useState('');
+  const [q, setQ] = useState('');
   const dealerOptions = useMemo(() => {
     const name = String(company || '').toLowerCase();
     if (!name) return [];
@@ -104,7 +111,10 @@ export default function StockUpdate() {
     return name || '';
   }, [currentUser]);
   const myRole = useMemo(() => String(currentUser?.role || '').toLowerCase(), [currentUser]);
+  const isPriv = useMemo(() => ['admin','owner'].includes(myRole), [myRole]);
   const lockSourceBranch = useMemo(() => ['staff','mechanic','employees'].includes(myRole), [myRole]);
+  const isAdminOwner = useMemo(() => ['admin'].includes(myRole), [myRole]);
+  const isOwner = useMemo(() => myRole === 'owner', [myRole]);
 
   useEffect(() => {
     (async () => {
@@ -209,10 +219,18 @@ export default function StockUpdate() {
           return base;
         })(),
       };
-      await createStock({ data: row, createdBy: user?.name || user?.email || 'user' });
-      message.success("Stock movement saved.");
+      if (editingMovementId) {
+        const resp = await updateStock(editingMovementId, row);
+        if (resp?.success) message.success("Stock movement updated.");
+        else message.error(resp?.message || "Update failed");
+      } else {
+        await createStock({ data: row, createdBy: user?.name || user?.email || 'user' });
+        message.success("Stock movement saved.");
+      }
       form.resetFields(["chassis", "notes", "targetBranch", "returnTo", "customerName", "franchise"]);
       setModalOpen(false);
+      setEditingMovementId(null);
+      setAllowedActions(null);
       fetchList();
     } catch (err) {
       if (err?.errorFields) return; // antd validation
@@ -223,7 +241,8 @@ export default function StockUpdate() {
   };
 
   const label = (s) => <strong style={{ fontWeight: 700 }}>{s}</strong>;
-  const isVehicleLocked = action !== 'add';
+  const isEdit = Boolean(editingMovementId);
+  const isVehicleLocked = action !== 'add' && !isEdit; // allow editing vehicle fields while editing
   const isChassisLocked = action !== 'add';
   const isSourceLocked = lockSourceBranch || action !== 'add';
 
@@ -232,9 +251,10 @@ export default function StockUpdate() {
     try {
       // For staff-like roles, show current inventory only (latest per chassis)
       const isStaffLike = ['staff','mechanic','employees'].includes(myRole)
+      const branchParam = isStaffLike ? myBranch : (branchFilter === 'all' ? undefined : branchFilter);
       const resp = isStaffLike
-        ? await listCurrentStocks({ branch: myBranch })
-        : await listStocks({ branch: myBranch, mode: undefined });
+        ? await listCurrentStocks({ branch: branchParam })
+        : await listStocks({ branch: branchParam, mode: undefined });
         const list = Array.isArray(resp?.data) ? resp.data : [];
         const rows = list.map((r, idx) => ({
           key: idx + 1,
@@ -262,6 +282,8 @@ export default function StockUpdate() {
   };
 
   useEffect(() => { fetchList(); }, [myBranch]);
+  // Refetch when admin/owner changes branch filter
+  useEffect(() => { if (isPriv) fetchList(); }, [isPriv, branchFilter]);
 
   // When opening the modal, prefill and lock Source Branch for staff-like roles
   useEffect(() => {
@@ -314,37 +336,141 @@ export default function StockUpdate() {
     }
   };
 
-  const columns = [
-    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 180, ellipsis: true },
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 260, ellipsis: false, render: (v)=> (
+  const onEditRow = (base) => {
+    try {
+      setEditingMovementId(base?.movementId || null);
+      setAllowedActions(null);
+      const act = String(base?.action || 'add').toLowerCase();
+      setAction(act);
+      setCompany(base?.company || '');
+      setModel(base?.model || '');
+      setVariant(base?.variant || '');
+      const patch = {
+        chassis: base?.chassis || base?.chassisNo || undefined,
+        company: base?.company || undefined,
+        model: base?.model || undefined,
+        variant: base?.variant || undefined,
+        color: base?.color || undefined,
+        sourceBranch: base?.sourceBranch || myBranch || undefined,
+        targetBranch: base?.targetBranch || undefined,
+        returnTo: base?.returnTo || undefined,
+        customerName: base?.customerName || undefined,
+        notes: base?.notes || undefined,
+      };
+      form.setFieldsValue(patch);
+      setModalOpen(true);
+    } catch {
+      //juji
+    }
+  };
+
+ 
+
+  // Core columns (excluding Source so we can place it differently per role)
+  const baseColsCore = [
+    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v) => {
+      if (!v) return '—';
+      const d = dayjs(v);
+      return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(v);
+    } },
+    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 20, ellipsis: false, render: (v)=> (
       <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
     ) },
-    { title: "Company", dataIndex: "company", key: "company", width: 150, ellipsis: false },
-    { title: "Model", dataIndex: "model", key: "model", width: 160, ellipsis: false },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 200, ellipsis: false },
-    { title: "Color", dataIndex: "color", key: "color", width: 150, ellipsis: false },
-    { title: "Action", dataIndex: "action", key: "action", width: 120, render: (v) => {
+    { title: "Company", dataIndex: "company", key: "company", width: 20, ellipsis: false },
+    { title: "Model", dataIndex: "model", key: "model", width: 20, ellipsis: false },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 20, ellipsis: false },
+    { title: "Color", dataIndex: "color", key: "color", width: 10, ellipsis: false },
+    { title: "Action", dataIndex: "action", key: "action", width: 20, render: (v) => {
       const t = String(v || "").toLowerCase();
       const color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
-      return <Tag color={color}>{v || '-'}</Tag>;
+      const display = t === 'invoice' ? 'Book' : (v || '-');
+      return <Tag color={color}>{display}</Tag>;
     } },
-    { title: "Target/Return/Customer", key: "dest", ellipsis: true, render: (_, r) => r.targetBranch || r.returnTo || r.customerName || "—" },
-    { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 160, ellipsis: false },
-    { title: "Notes", dataIndex: "notes", key: "notes", ellipsis: true },
-    { title: "Actions", key: "actions", width: 220, render: (_, r) => (
-      <Space size="small">
-        <Button size="small" onClick={() => openWithAction(r, 'transfer')}>Transfer</Button>
-        <Button size="small" onClick={() => openWithAction(r, 'return')}>Return</Button>
-        <Button size="small" type="primary" onClick={() => openWithAction(r, 'invoice')}>Invoice</Button>
-      </Space>
-    ) },
   ];
+  const sourceCol = { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 20, ellipsis: false };
+  // Staff: hide Timestamp column
+  const baseColsCoreStaff = baseColsCore.filter((c) => c.dataIndex !== 'ts');
+  const adminExtras = [
+    { title: "Target/Return/Customer", key: "dest", ellipsis: true, render: (_, r) => r.targetBranch || r.returnTo || r.customerName || "—" },
+    { title: "Notes", dataIndex: "notes", key: "notes", ellipsis: true },
+  ];
+  const actionsCol = {
+    title: "Actions",
+    key: "actions",
+    width: isAdminOwner ? 50 : 10,
+    render: (_, r) => (
+      <Space size="small">
+        {!isOwner && (
+          <>
+            <Button size="small" onClick={() => openWithAction(r, 'transfer')}>Transfer</Button>
+            <Button size="small" onClick={() => openWithAction(r, 'return')}>Return</Button>
+          </>
+        )}
+        <Button size="small" type="primary" onClick={() => openWithAction(r, 'invoice')}>Book</Button>
+        {isAdminOwner && (
+          <Button size="small" onClick={() => onEditRow(r)}>Edit</Button>
+        )}
+      </Space>
+    )
+  };
+  const isStaffLike = ['staff','mechanic','employees'].includes(myRole);
+  // Staff order: Chassis, Company, Model, Variant, Color, Action, Actions, Source (timestamp hidden)
+  // Admin/Owner order: Timestamp, Chassis, Company, Model, Variant, Color, Action, Actions, Source, Target/Return/Customer, Notes
+  const columns = isStaffLike
+    ? [...baseColsCoreStaff, actionsCol, sourceCol]
+    : [...baseColsCore, actionsCol, sourceCol, ...adminExtras];
+
+  // Client-side filtering (for admin/owner). Staff view already scoped to branch.
+  const filteredItems = useMemo(() => {
+    const list = items || [];
+    const text = String(q || '').toLowerCase();
+    return list.filter((r) => {
+      if (isPriv && branchFilter !== 'all' && r.sourceBranch !== branchFilter) return false;
+      if (actionFilter !== 'all' && String(r.action || '').toLowerCase() !== actionFilter) return false;
+      if (text) {
+        const hay = [r.chassis, r.company, r.model, r.variant, r.color, r.notes, r.targetBranch, r.returnTo, r.customerName, r.sourceBranch]
+          .map((x) => String(x || '').toLowerCase());
+        if (!hay.some(h => h.includes(text))) return false;
+      }
+      return true;
+    });
+  }, [items, isPriv, branchFilter, actionFilter, q]);
+
+  // Reset to first page when filters change
+  useEffect(() => { setPage(1); }, [branchFilter, actionFilter, q]);
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <div>
-          <strong>Total:</strong> {items.length || 0}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <strong>Total:</strong> {filteredItems.length || 0}
+          {isPriv && (
+            <>
+              <Select
+                value={branchFilter}
+                onChange={setBranchFilter}
+                style={{ minWidth: 180 }}
+                placeholder="Branch"
+                options={[{ value: 'all', label: 'All Branches' }, ...branchNames.map(b => ({ value: b, label: b }))]}
+              />
+              <Select
+                value={actionFilter}
+                onChange={setActionFilter}
+                style={{ width: 150 }}
+                placeholder="Action"
+                options={[{value:'all',label:'All Actions'},{value:'add',label:'Add'},{value:'transfer',label:'Transfer'},{value:'return',label:'Return'},{value:'invoice',label:'Invoice'}]}
+              />
+              <Input.Search
+                placeholder="Search chassis/company/model/notes"
+                allowClear
+                value={qText}
+                onChange={(e)=>setQText(e.target.value)}
+                onSearch={(v)=>setQ(String(v || '').trim())}
+                style={{ width: 260 }}
+              />
+              <Button onClick={()=>{ setQText(''); setQ(''); setActionFilter('all'); setBranchFilter('all'); }}>Reset</Button>
+            </>
+          )}
         </div>
         <Space>
           <Button onClick={fetchList}>Refresh</Button>
@@ -353,6 +479,7 @@ export default function StockUpdate() {
             onClick={() => {
               setAllowedActions(["add"]);
               setAction("add");
+              setEditingMovementId(null);
               // reset form except locked fields
               form.resetFields();
               if (lockSourceBranch && myBranch) {
@@ -367,26 +494,26 @@ export default function StockUpdate() {
       </div>
 
       <Table
-        dataSource={items}
+        dataSource={filteredItems}
         columns={columns}
         loading={loadingList}
         pagination={{
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
         size={isMobile ? "small" : "middle"}
-        scroll={{ x: isMobile ? 900 : undefined }}
+        scroll={{ x: 'max-content' }}
         rowKey={(r) => `${r.ts}-${r.chassis}-${r.key}`}
       />
 
       <Modal
-        title="New Stock Movement"
+        title={editingMovementId ? "Edit Stock Movement" : "New Stock Movement"}
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); setAllowedActions(null); setAction("add"); }}
+        onCancel={() => { setModalOpen(false); setAllowedActions(null); setAction("add"); setEditingMovementId(null); }}
         onOk={onSubmit}
         okText="Save"
         confirmLoading={submitting}
@@ -517,7 +644,7 @@ export default function StockUpdate() {
             <Col span={24}>
               {Array.isArray(allowedActions) && allowedActions.length === 1 ? (
                 <div style={{ marginBottom: 8 }}>
-                  {label("Action")} <Tag color={action === 'add' ? 'purple' : action === 'transfer' ? 'geekblue' : action === 'return' ? 'volcano' : 'green'} style={{ marginLeft: 8 }}>{action}</Tag>
+                  {label("Action")} <Tag color={action === 'add' ? 'purple' : action === 'transfer' ? 'geekblue' : action === 'return' ? 'volcano' : 'green'} style={{ marginLeft: 8 }}>{action === 'invoice' ? 'Book' : action}</Tag>
                 </div>
               ) : (
                 <Form.Item label={label("Action")}>
@@ -535,7 +662,7 @@ export default function StockUpdate() {
                       <Radio value="return">Return To</Radio>
                     )}
                     {(allowedActions || ["add","transfer","return","invoice"]).includes("invoice") && (
-                      <Radio value="invoice">Invoice (Sold)</Radio>
+                      <Radio value="invoice">Book</Radio>
                     )}
                   </Radio.Group>
                 </Form.Item>
@@ -583,9 +710,9 @@ export default function StockUpdate() {
         </Form>
       </Modal>
 
-      {/* Invoice Modal with Booking Form */}
+      {/* Booking Modal (uses Booking Form) */}
       <Modal
-        title="Create Invoice"
+        title="Book"
         open={invoiceModalOpen}
         onCancel={() => { setInvoiceModalOpen(false); setInvoicePrefill(null); }}
         footer={null}
@@ -607,10 +734,10 @@ export default function StockUpdate() {
                 Action: 'invoice',
                 Customer_Name: payload?.customerName || '',
                 Source_Branch: invoiceBaseRow?.sourceBranch || myBranch || '',
-                Notes: response?.bookingId ? `Invoice via Booking ID ${response.bookingId}` : 'Invoice via Booking form',
+                Notes: response?.bookingId ? `Book via Booking ID ${response.bookingId}` : 'Book via Booking form',
               };
               await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'user' });
-              message.success('Stock updated: vehicle marked invoiced / out of stock');
+              message.success('Stock updated: vehicle marked booked / out of stock');
               setInvoiceModalOpen(false);
               setInvoicePrefill(null);
               setInvoiceBaseRow(null);

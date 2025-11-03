@@ -9,6 +9,7 @@ import { LoginUser, GetCurrentUser, RequestPasswordReset, ResetPassword } from "
 function Login() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [form] = Form.useForm();
   
   const [loading, setLoading] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -112,7 +113,7 @@ function Login() {
     setLoading(true);
 
     try {
-      // Call backend API
+      // Call backend API (does not throw; returns {success, code, message})
       const data = await LoginUser(values);
       if (import.meta.env.DEV) {
         console.log("Login response:", data);
@@ -148,7 +149,25 @@ function Login() {
         message.success("Login successful!");
         navigate("/dashboard"); // fallback redirect
       } else {
-        message.error(data?.message || "Invalid email or password");
+        // Clear any stale token/user on failed login
+        try { localStorage.removeItem("token"); localStorage.removeItem("user"); } catch (e) { void e; }
+        // Show precise message by status code
+        const msg = data?.message || (data?.code === 401 ? "Invalid password" : data?.code === 404 ? "User does not exist" : "Invalid email or password");
+        // Use warning for 404 (user), error for 401 (password), error otherwise
+        if (data?.code === 404) {
+          // Inline error + subtle toast (no modal)
+          message.warning(msg);
+          try { form.setFields([{ name: 'email', errors: ['User does not exist'] }]); } catch (e) { void e; }
+        } else if (data?.code === 401) {
+          // Inline error + subtle toast (no modal)
+          message.error(msg);
+          try { form.setFields([{ name: 'password', errors: ['Invalid password'] }]); } catch (e) { void e; }
+        } else {
+          // Generic inline errors + toast (no modal)
+          message.error(msg);
+          try { form.setFields([{ name: 'email', errors: [''] }, { name: 'password', errors: [''] }]); } catch (e) { void e; }
+        }
+        return;
       }
     } catch (error) {
       console.error("Login error:", error);
@@ -171,7 +190,7 @@ function Login() {
     <div className="auth-container">
       <div className="auth-box">
         <h1 className="title">Login to Shantha Motors</h1>
-        <Form layout="vertical" onFinish={onFinish}>
+        <Form layout="vertical" form={form} onFinish={onFinish}>
           <Form.Item
             label="Email"
             name="email"

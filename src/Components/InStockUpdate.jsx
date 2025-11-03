@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, DatePicker, message, Modal } from "antd";
-import { listCurrentStocks, createStock } from "../apiCalls/stocks";
+import { Table, Grid, Space, Button, Select, Input, Tag, DatePicker, message, Modal, Form } from "antd";
+import { listCurrentStocks, createStock, updateStock } from "../apiCalls/stocks";
 import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
 
@@ -32,8 +32,35 @@ export default function InStockUpdate() {
   const [invoicePrefill, setInvoicePrefill] = useState(null);
   const [invoiceBaseRow, setInvoiceBaseRow] = useState(null);
 
+  // Admin/Owner edit modal state
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm] = Form.useForm();
+
+  // Vehicle catalog (for prefilled dropdowns in Edit)
+  const CATALOG_CSV_URL = import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
+  const HEADERS = { company: ["Company","Company Name"], model: ["Model","Model Name"], variant: ["Variant"], color: ["Color","Colours"] };
+  const pick = (row, keys) => String(keys.map((k)=> row[k] ?? "").find((v)=> v !== "") || "").trim();
+  const normalizeCatalogRow = (row={}) => ({ company: pick(row, HEADERS.company), model: pick(row, HEADERS.model), variant: pick(row, HEADERS.variant), color: pick(row, HEADERS.color) });
+  const parseCsv = (text) => { const rows=[]; let r=[],c="",q=false; for(let i=0;i<text.length;i++){ const ch=text[i],n=text[i+1]; if(ch==='"'&&!q){q=true;continue;} if(ch==='"'&&q){ if(n==='"'){c+='"';i++;continue;} q=false; continue;} if(ch===','&&!q){ r.push(c); c=""; continue;} if((ch==='\n'||ch==='\r')&&!q){ if(c!==""||r.length){ r.push(c); rows.push(r); r=[]; c="";} if(ch==='\r'&&n==='\n') i++; continue;} c+=ch;} if(c!==""||r.length){ r.push(c); rows.push(r);} return rows; };
+  const fetchSheetRowsCSV = async (url) => { const res = await fetch(url, { cache: 'no-store' }); if(!res.ok) throw new Error('Sheet fetch failed'); const csv = await res.text(); if(csv.trim().startsWith('<')) throw new Error('Expected CSV, got HTML'); const rows=parseCsv(csv); if(!rows.length) return []; const headers = rows[0].map(h=> (h||'').trim()); return rows.slice(1).map(r=>{ const obj={}; headers.forEach((h,i)=> obj[h]= r[i] ?? ''); return obj; }); };
+  const [catalog, setCatalog] = useState([]);
+  const [sheetOk, setSheetOk] = useState(false);
+  const [selCompany, setSelCompany] = useState("");
+  const [selModel, setSelModel] = useState("");
+  const [selVariant, setSelVariant] = useState("");
+  useEffect(()=>{ (async()=>{ try{ const raw=await fetchSheetRowsCSV(CATALOG_CSV_URL); const cleaned=raw.map(normalizeCatalogRow).filter(r=>r.company&&r.model&&r.variant); setCatalog(cleaned); setSheetOk(cleaned.length>0);} catch{ setCatalog([]); setSheetOk(false);} })(); },[]);
+  const companyOptions = useMemo(()=> [...new Set(catalog.map(r=>r.company))], [catalog]);
+  const modelOptions = useMemo(()=> [...new Set(catalog.filter(r=>r.company===selCompany).map(r=>r.model))], [catalog, selCompany]);
+  const variantOptions = useMemo(()=> [...new Set(catalog.filter(r=>r.company===selCompany && r.model===selModel).map(r=>r.variant))], [catalog, selCompany, selModel]);
+  const colorOptions = useMemo(()=> { const dyn=catalog.filter(r=>r.company===selCompany && r.model===selModel && r.variant===selVariant).map(r=>r.color).filter(Boolean); return dyn.length? Array.from(new Set(dyn)): []; }, [catalog, selCompany, selModel, selVariant]);
+
   // Current user for prefill & createdBy
   const currentUser = useMemo(() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } }, []);
+  const myRole = useMemo(() => String(currentUser?.role || '').toLowerCase(), [currentUser]);
+  const isAdminOwner = useMemo(() => ['admin'].includes(myRole), [myRole]);
 
   useEffect(() => {
     (async () => {
@@ -63,6 +90,8 @@ export default function InStockUpdate() {
         color: r.color || "",
         branch: r.sourceBranch || r.branch || "",
         status: r.status || "in stock",
+        movementId: r.movementId || r.lastMovementId || "",
+        lastMovementId: r.lastMovementId || r.movementId || "",
       }));
       setItems(rows);
     } catch {
@@ -124,6 +153,16 @@ export default function InStockUpdate() {
     });
   }, [items, q, selCompanies, selModels, selVariants, selColors, dateRange]);
 
+  // Availability summary for filtered results
+  const availabilityByBranch = useMemo(() => {
+    const map = new Map();
+    (filtered || []).forEach((r) => {
+      const b = String(r.branch || "").trim() || "Unassigned";
+      map.set(b, (map.get(b) || 0) + 1);
+    });
+    return Array.from(map.entries()).sort((a,b)=>b[1]-a[1]);
+  }, [filtered]);
+
   // Whenever filters/search/branch change, reset to first page
   useEffect(() => { setPage(1); }, [q, selCompanies, selModels, selVariants, selColors, dateRange, branch]);
 
@@ -180,17 +219,24 @@ export default function InStockUpdate() {
     );
   };
 
-  const columns = [
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 260, ellipsis: false, render: (v)=> (
+  const baseColumns = [
+    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 30, ellipsis: false, render: (v)=> (
       <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
     ) },
-    { title: "Company", dataIndex: "company", key: "company", width: 160, ellipsis: false },
-    { title: "Model", dataIndex: "model", key: "model", width: 180, ellipsis: false },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 200, ellipsis: false },
-    { title: "Color", dataIndex: "color", key: "color", width: 180, render: (v) => colorDot(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
-    { title: "Status", dataIndex: "status", key: "status", width: 120, render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag> },
-    { title: "Actions", key: "actions", width: 120, fixed: isMobile ? undefined : 'right', render: (_, r) => (
+    { title: "Company", dataIndex: "company", key: "company", width: 20, ellipsis: false },
+    { title: "Model", dataIndex: "model", key: "model", width: 50, ellipsis: false },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 50, ellipsis: false },
+    { title: "Color", dataIndex: "color", key: "color", width: 50, render: (v) => colorDot(v) },
+    { title: "Branch", dataIndex: "branch", key: "branch", width: 50 },
+    { title: "Status", dataIndex: "status", key: "status", width: 50, render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag> },
+  ];
+
+  const actionsColumn = {
+    title: "Actions",
+    key: "actions",
+    width: 260,
+    fixed: isMobile ? undefined : 'right',
+    render: (_, r) => (
       <Space size="small">
         <Button size="small" type="primary" onClick={() => {
           const pre = {
@@ -207,13 +253,34 @@ export default function InStockUpdate() {
           setInvoicePrefill(pre);
           setInvoiceBaseRow(r);
           setInvoiceModalOpen(true);
-        }}>Invoice</Button>
+        }}>Book</Button>
+            <Button size="small" onClick={() => {
+              setEditingRow(r);
+              setSelCompany(r.company || '');
+              setSelModel(r.model || '');
+              setSelVariant(r.variant || '');
+              editForm.setFieldsValue({
+                company: r.company || '',
+                model: r.model || '',
+                variant: r.variant || '',
+                color: r.color || '',
+                notes: '',
+              });
+              setEditModalOpen(true);
+            }}>Edit</Button>
+            {/* Delete removed per request */}
       </Space>
-    ) },
-  ];
+    )
+  };
+
+  const columns = isAdminOwner ? [...baseColumns, actionsColumn] : baseColumns;
 
   return (
     <div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontWeight: 800, fontSize: isMobile ? 16 : 18 }}>Stock Finder</div>
+        <div style={{ fontSize: 12, color: '#666' }}>Search by Company, Model, Variant to find which branch has vehicles in stock.</div>
+      </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <Space size="small" wrap>
           <Select
@@ -291,7 +358,19 @@ export default function InStockUpdate() {
         )}
       </div>
 
-      <Table
+      {/* Availability for current filters */}
+      {branch === 'all' && availabilityByBranch.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <span style={{ fontWeight: 600, marginRight: 8 }}>Available at:</span>
+          <Space size={[6,6]} wrap>
+            {availabilityByBranch.map(([b,c]) => (
+              <Tag key={`avail-${b}`} color="green">{b}: {c}</Tag>
+            ))}
+          </Space>
+        </div>
+      )}
+
+  <Table
         dataSource={filtered}
         columns={columns}
         loading={loading}
@@ -300,7 +379,7 @@ export default function InStockUpdate() {
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
@@ -308,9 +387,98 @@ export default function InStockUpdate() {
         scroll={{ x: 'max-content' }}
       />
 
-      {/* Invoice Modal (Owner) */}
+      {/* Edit Modal (Admin/Owner) */}
       <Modal
-        title="Create Invoice"
+        title={editingRow ? `Edit In-Stock – ${editingRow.chassis}` : 'Edit In-Stock'}
+        open={editModalOpen}
+        onCancel={() => { setEditModalOpen(false); setEditingRow(null); editForm.resetFields(); }}
+        onOk={async () => {
+          try {
+            const vals = await editForm.validateFields();
+            setEditSaving(true);
+            const patch = {
+              Company: vals.company,
+              Model: vals.model,
+              Variant: vals.variant,
+              Color: vals.color,
+              Notes: vals.notes,
+            };
+            const id = editingRow?.movementId || editingRow?.lastMovementId;
+            if (!id) { message.warning('No movement found for this chassis. Try Refresh.'); setEditSaving(false); return; }
+            const res = await updateStock(id, patch);
+            if (res?.success) {
+              message.success('Saved');
+              setEditModalOpen(false);
+              setEditingRow(null);
+              editForm.resetFields();
+              fetchData();
+            } else {
+              message.error(res?.message || 'Save failed');
+            }
+          } catch (e) {
+            if (e?.errorFields) return; // antd validation error
+            message.error('Save failed');
+          } finally {
+            setEditSaving(false);
+          }
+        }}
+        okText="Save"
+        confirmLoading={editSaving}
+        destroyOnClose
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item name="company" label="Company" rules={[{ required: true }]}> 
+            <Select 
+              showSearch 
+              optionFilterProp="children" 
+              placeholder={sheetOk ? 'Select company' : 'Type company'}
+              value={selCompany || undefined}
+              onChange={(v)=>{ setSelCompany(v); setSelModel(''); setSelVariant(''); editForm.setFieldsValue({ model: undefined, variant: undefined }); }}
+              disabled={!sheetOk}
+            >
+              {companyOptions.map((c)=> <Select.Option key={c} value={c}>{c}</Select.Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="model" label="Model" rules={[{ required: true }]}> 
+            <Select 
+              showSearch 
+              optionFilterProp="children"
+              placeholder={sheetOk ? 'Select model' : 'Type model'}
+              value={selModel || undefined}
+              onChange={(v)=>{ setSelModel(v); setSelVariant(''); editForm.setFieldsValue({ variant: undefined }); }}
+              disabled={!sheetOk || !selCompany}
+            >
+              {modelOptions.map((m)=> <Select.Option key={m} value={m}>{m}</Select.Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="variant" label="Variant" rules={[{ required: true }]}> 
+            <Select 
+              showSearch 
+              optionFilterProp="children"
+              placeholder={sheetOk ? 'Select variant' : 'Type variant'}
+              value={selVariant || undefined}
+              onChange={(v)=> setSelVariant(v)}
+              disabled={!sheetOk || !selModel}
+            >
+              {variantOptions.map((v)=> <Select.Option key={v} value={v}>{v}</Select.Option>)}
+            </Select>
+          </Form.Item>
+          <Form.Item name="color" label="Color" rules={[{ required: true }]}> 
+            {colorOptions.length ? (
+              <Select showSearch optionFilterProp="children" placeholder="Select color">
+                {colorOptions.map((c)=> <Select.Option key={c} value={c}>{c}</Select.Option>)}
+              </Select>
+            ) : (
+              <Input placeholder="Color" />
+            )}
+          </Form.Item>
+          <Form.Item name="notes" label="Notes"> <Input.TextArea rows={3} placeholder="Optional notes" /> </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Book Modal (Owner) */}
+      <Modal
+        title="Book"
         open={invoiceModalOpen}
         onCancel={() => { setInvoiceModalOpen(false); setInvoicePrefill(null); setInvoiceBaseRow(null); }}
         footer={null}
@@ -332,10 +500,10 @@ export default function InStockUpdate() {
                 Action: 'invoice',
                 Customer_Name: payload?.customerName || '',
                 Source_Branch: invoiceBaseRow?.branch || '',
-                Notes: response?.bookingId ? `Invoice via Booking ID ${response.bookingId}` : 'Invoice via Booking form',
+                Notes: response?.bookingId ? `Book via Booking ID ${response.bookingId}` : 'Book via Booking form',
               };
               await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'owner' });
-              message.success('Stock updated: vehicle marked invoiced / out of stock');
+              message.success('Stock updated: vehicle marked booked / out of stock');
               setInvoiceModalOpen(false);
               setInvoicePrefill(null);
               setInvoiceBaseRow(null);

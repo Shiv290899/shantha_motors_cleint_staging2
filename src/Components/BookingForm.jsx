@@ -196,8 +196,16 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   }, [totalVehicleCost, bookingAmountWatch]);
 
   const [submitting, setSubmitting] = useState(false);
+  const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
+  const startActionCooldown = (ms = 6000) => {
+    const until = Date.now() + ms;
+    setActionCooldownUntil(until);
+    setTimeout(() => setActionCooldownUntil(0), ms + 50);
+  };
 
   const handlePrint = () => {
+    if (Date.now() < actionCooldownUntil) return;
+    startActionCooldown(6000);
     try { handleSmartPrint(printRef.current); } catch { /* ignore */ }
   };
 
@@ -570,6 +578,8 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
 
   const onFinish = async (values) => {
     try {
+      if (Date.now() < actionCooldownUntil) return;
+      startActionCooldown(6000);
       // Require at least one document uploaded (independent of address proof)
       if (!addressProofFiles || addressProofFiles.length === 0) {
         message.error('Please upload a PDF document');
@@ -1285,10 +1295,10 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       {/* Submit */}
       <Form.Item style={{ marginTop: 8, marginBottom: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr auto', gap: 8 }}>
-          <Button type="primary" htmlType="submit" size={isMobile ? "middle" : "large"} loading={submitting}>
+          <Button type="primary" htmlType="submit" size={isMobile ? "middle" : "large"} loading={submitting} disabled={actionCooldownUntil > Date.now()}>
             Save Booking
           </Button>
-          <Button className="no-print" icon={<PrinterOutlined />} size={isMobile ? "middle" : "large"} onClick={handlePrint}>
+          <Button className="no-print" icon={<PrinterOutlined />} size={isMobile ? "middle" : "large"} onClick={handlePrint} disabled={actionCooldownUntil > Date.now()}>
             Print Booking Slip
           </Button>
         </div>

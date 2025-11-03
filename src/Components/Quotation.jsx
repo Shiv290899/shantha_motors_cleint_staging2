@@ -7,7 +7,8 @@ import {
 import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import FetchQuot from "./FetchQuot"; // for fetching saved quotations
 import { GetCurrentUser } from "../apiCalls/users";
-import { getBranch } from "../apiCalls/branches";
+import { getBranch, listBranchesPublic } from "../apiCalls/branches";
+import { listUsersPublic } from "../apiCalls/adminUsers";
 import { saveBookingViaWebhook, reserveQuotationSerial } from "../apiCalls/forms";
 // GAS webhook for Quotation save/search/nextSerial
 // Default set in code so it works even without env var
@@ -250,6 +251,12 @@ export default function Quotation() {
   const [variant, setVariant] = useState("");
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
+  const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
+  const startActionCooldown = (ms = 6000) => {
+    const until = Date.now() + ms;
+    setActionCooldownUntil(until);
+    setTimeout(() => setActionCooldownUntil(0), ms + 50);
+  };
 
   const [onRoadPrice, setOnRoadPrice] = useState(0);
   // Manual mode can be toggled; default to auto (sheet) when available
@@ -278,6 +285,7 @@ export default function Quotation() {
   const [defaultExecutiveName, setDefaultExecutiveName] = useState("");
   const [branchCode, setBranchCode] = useState("");
   const [branchId, setBranchId] = useState("");
+  const [execOptions, setExecOptions] = useState([]); // [{name, phone}]
   // Follow-up
   const [followUpEnabled, setFollowUpEnabled] = useState(true);
   const [followUpAt, setFollowUpAt] = useState(() => dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
@@ -382,23 +390,42 @@ export default function Quotation() {
           // who can switch branches
           const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
           setCanSwitch(can);
-          // Build allowed branch list from primary + branches
+          // Build allowed branch list
           try {
-            const list = [];
-            const push = (b) => {
-              if (!b) return;
-              const id = (b && (b._id || b.id || b.$oid || b)) || '';
-              const name = typeof b === 'string' ? '' : (b?.name || '');
-              const code = typeof b === 'string' ? '' : (b?.code || '');
-              if (!id || !name) return;
-              list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
-            };
-            if (user?.primaryBranch) push(user.primaryBranch);
-            if (Array.isArray(user?.branches)) user.branches.forEach(push);
-            const seen = new Set();
-            const uniq = [];
-            list.forEach((b) => { if (!seen.has(b.id)) { seen.add(b.id); uniq.push(b); } });
-            setAllowedBranches(uniq);
+            const roleLc = String(role || '').toLowerCase();
+            if (["owner","admin"].includes(roleLc)) {
+              // Owners/Admins: all branches from server
+              const res = await listBranchesPublic({ limit: 500 });
+              if (res?.success && Array.isArray(res?.data?.items)) {
+                const all = res.data.items.map((b) => ({ id: String(b.id || b._id || ''), name: b.name, code: b.code ? String(b.code).toUpperCase() : '' }));
+                setAllowedBranches(all);
+              }
+              // Also load staff list for Executive dropdown
+              try {
+                const users = await listUsersPublic({ role: 'staff', status: 'active', limit: 100000 });
+                if (users?.success && Array.isArray(users?.data?.items)) {
+                  const items = users.data.items.map((u) => ({ name: u.name, phone: u.phone || '' }));
+                  setExecOptions(items);
+                }
+              } catch { /* ignore */ }
+            } else {
+              // Staff: only own + additional branches
+              const list = [];
+              const push = (b) => {
+                if (!b) return;
+                const id = (b && (b._id || b.id || b.$oid || b)) || '';
+                const name = typeof b === 'string' ? '' : (b?.name || '');
+                const code = typeof b === 'string' ? '' : (b?.code || '');
+                if (!id || !name) return;
+                list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
+              };
+              if (user?.primaryBranch) push(user.primaryBranch);
+              if (Array.isArray(user?.branches)) user.branches.forEach(push);
+              const seen = new Set();
+              const uniq = [];
+              list.forEach((b) => { if (!seen.has(b.id)) { seen.add(b.id); uniq.push(b); } });
+              setAllowedBranches(uniq);
+            }
           } catch { /* ignore */ }
           let branchName = user?.formDefaults?.branchName;
           const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
@@ -551,7 +578,7 @@ export default function Quotation() {
     setBusy(true);
     try {
       const now = Date.now();
-      if (now - lastSavedAt < 3000) return null; // debounce rapid taps
+      if (now - lastSavedAt < 6000) return null; // stronger debounce for slow devices
       const result = await handleSaveToForm();   // validates + queues background save
       setLastSavedAt(Date.now());
       return result;
@@ -564,6 +591,8 @@ export default function Quotation() {
   // ---------- Android-proof A4 print ----------
   const handlePrint = async () => {
     try {
+      if (Date.now() < actionCooldownUntil) return; // ignore rapid re-clicks
+      startActionCooldown(6000);
       await validateCore(form);
       await safeAutoSave();
       await toastSaved("Saved (background sync). Preparing print…");
@@ -963,6 +992,8 @@ export default function Quotation() {
 
   const handleWhatsAppClick = async () => {
     try {
+      if (Date.now() < actionCooldownUntil) return; // ignore rapid re-clicks
+      startActionCooldown(6000);
       await validateCore(form);
       // validate + save first (will assign serial)
       await safeAutoSave();
@@ -999,7 +1030,15 @@ export default function Quotation() {
         })),
       ];
 
-      const execPhone = (EXECUTIVES.find(e => e.name === executiveName) || {}).phone || "-";
+      // Resolve executive phone for WhatsApp footer
+      // Staff: always use logged-in user's phone
+      // Owner/Admin: try DB staff list by selected executive; fallback to predefined mapping; then own phone
+      const curUser = (() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } })();
+      const roleLc = String(curUser?.role || '').toLowerCase();
+      const ownPhoneRaw = String(curUser?.phone || '').replace(/\D/g,'');
+      const fromDb = (execOptions || []).find(e => e.name === executiveName)?.phone || '';
+      const mapped = (EXECUTIVES.find(e => e.name === executiveName) || {}).phone || '';
+      const execPhone = (!["owner","admin"].includes(roleLc) ? ownPhoneRaw : (fromDb || mapped || ownPhoneRaw || "-"));
       const qDate = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
       // Header
@@ -1041,7 +1080,7 @@ export default function Quotation() {
 
       const footer = [
         ``,
-        `• *Sales Executive:* ${executiveName || "-"} (${execPhone})`,
+        `• *Sales Executive:* ${executiveName || "-"} (${execPhone || '-'})`,
         `*Our Locations* 📍`,
         `Muddinapalya • Hegganahalli • Nelagadrahalli • Andrahalli`,
         `Kadabagere • Channenahalli • Tavarekere • D-Group Layout`,
@@ -1223,7 +1262,7 @@ export default function Quotation() {
                       placeholder="Select branch"
                       value={watchedBranch}
                       onChange={(v) => onBranchChange(v)}
-                      options={allowedBranches.map((b) => ({ value: b.name, label: b.code ? `${b.name} (${b.code})` : b.name }))}
+                      options={allowedBranches.map((b) => ({ value: b.name, label: b.name }))}
                     />
                   ) : (
                     <Input readOnly placeholder="Auto-fetched from your profile" />
@@ -1237,7 +1276,16 @@ export default function Quotation() {
                   name="executive"
                   rules={[{ required: true, message: "Executive is required" }]}
                 >
-                  <Input readOnly placeholder="Auto-fetched from your profile" />
+                  {canSwitch ? (
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="Select executive"
+                      options={(execOptions.length ? execOptions : EXECUTIVES).map((e) => ({ value: e.name, label: e.name }))}
+                    />
+                  ) : (
+                    <Input readOnly placeholder="Auto-fetched from your profile" />
+                  )}
                 </Form.Item>
               </Col>
 
@@ -1660,13 +1708,13 @@ export default function Quotation() {
                 <Button
                   className="no-print"
                   onClick={handleWhatsAppClick}
-                  disabled={!canAct || busy}
+                  disabled={!canAct || busy || actionCooldownUntil > 0}
                   style={{ marginRight: 8, background: "#25D366", borderColor: "#25D366", color: "#fff" }}
                 >
                   WhatsApp
                 </Button>
 
-                <Button className="no-print" type="primary" icon={<PrinterOutlined />} onClick={handlePrint} disabled={!canAct || busy}>
+                <Button className="no-print" type="primary" icon={<PrinterOutlined />} onClick={handlePrint} disabled={!canAct || busy || actionCooldownUntil > 0}>
                   Print
                 </Button>
               </Col>

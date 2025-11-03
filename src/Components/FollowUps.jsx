@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip } from 'antd';
+import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip, Popover } from 'antd';
 import { CheckCircleOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { GetCurrentUser } from "../apiCalls/users";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
-import PostServiceQuickModal from "./PostServiceQuickModal";
-import JobCardInlineModal from "./JobCardInlineModal";
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -104,8 +102,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
 
   const [reschedule, setReschedule] = useState({ open: false, serial: null, at: null, notes: '' });
   const [closing, setClosing] = useState({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
-  const [postModal, setPostModal] = useState({ open: false, row: null });
-  const [prefillModal, setPrefillModal] = useState({ open: false, row: null });
+ 
+  // No inline actions/modal for Jobcard follow-ups as requested
 
   useEffect(() => {
     (async () => {
@@ -147,6 +145,95 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     return await saveBookingViaWebhook({ webhookUrl, method, payload });
   };
 
+  // Minimal Google Drive helper for booking file previews
+  const extractDriveId = (u) => {
+    try {
+      const url = new URL(u);
+      if (url.hostname.includes('drive.google.com')) {
+        const parts = url.pathname.split('/');
+        const i = parts.indexOf('d');
+        if (i >= 0 && parts[i + 1]) return parts[i + 1];
+        const id = url.searchParams.get('id');
+        if (id) return id;
+      }
+    } catch { 
+
+    //skfdv
+    }
+    const m = String(u || '').match(/[?&]id=([^&]+)/);
+    return m ? m[1] : null;
+  };
+  const driveLinks = (u) => {
+    if (!u) return { view: '', download: '', embed: '' };
+    const id = extractDriveId(u);
+    if (!id) return { view: u, download: u, embed: u };
+    return {
+      view: `https://drive.google.com/uc?export=view&id=${id}`,
+      download: `https://drive.google.com/uc?export=download&id=${id}`,
+      embed: `https://drive.google.com/file/d/${id}/preview`,
+    };
+  };
+  const LinkCell = ({ url }) => {
+    if (!url) return <span style={{ color: '#999' }}>—</span>;
+    const { view, download, embed } = driveLinks(url);
+    const content = (
+      <div style={{ width: 320 }}>
+        <div style={{ height: 220, border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden', marginBottom: 8 }}>
+          <iframe src={embed} title="preview" width="100%" height="100%" style={{ display: 'block', border: 0 }} allow="fullscreen" />
+        </div>
+        <Space>
+          <a href={view} target="_blank" rel="noopener">Open</a>
+          <a href={download}>Download</a>
+        </Space>
+      </div>
+    );
+    return (
+      <Space size={6}>
+        <Popover content={content} title="Preview" trigger="click">
+          <Button size="small" title='Preview' aria-label='Preview'>🔍</Button>
+        </Popover>
+        <a href={download} title='Download' aria-label='Download'>⬇️</a>
+      </Space>
+    );
+  };
+
+  // Try to derive a usable file URL from payload or raw values
+  const pickFileUrl = (payload, values) => {
+    const v = values || {};
+    const p = payload || {};
+    const keys = [
+      'File URL','File','Document URL','Document','Doc URL','Doc','Drive URL','Drive',
+      'fileUrl','file','documentUrl','document','driveUrl'
+    ];
+    for (const k of keys) {
+      const val = v[k] ?? p[k];
+      if (typeof val === 'string' && val.trim()) return val.trim();
+    }
+    // Arrays inside payload: files, documents, attachments
+    const arrays = [p.files, p.documents, p.attachments, p.docs];
+    for (const arr of arrays) {
+      if (Array.isArray(arr)) {
+        const s = arr.find((x) => typeof x === 'string' && x.trim());
+        if (s) return s.trim();
+        const o = arr.find((x) => x && typeof x.url === 'string' && x.url.trim());
+        if (o) return o.url.trim();
+      }
+    }
+    // Last resort: scan all string fields for a plausible http(s) link
+    const scan = (obj) => {
+      try {
+        for (const k of Object.keys(obj || {})) {
+          const val = obj[k];
+          if (typeof val === 'string' && /^https?:\/\//i.test(val)) return val;
+        }
+      } catch {
+        //sdh
+      }
+      return '';
+    };
+    return scan(v) || scan(p) || '';
+  };
+
   // Normalize branch names for strict comparisons
   const norm = (s) => String(s || '').trim().toLowerCase();
 
@@ -163,6 +250,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       // For bookings, many deployments expose only `action=list`.
       // Use that and client-side filter instead of `followups`.
       const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
+      const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
       const payload = isBooking ? (
         BOOKING_SECRET ? { action: 'list', secret: BOOKING_SECRET } : { action: 'list' }
       ) : (() => {
@@ -176,9 +264,15 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           executive: '', // never restrict by executive
         };
       })();
-      const resp = await callWebhook({ method: 'GET', payload });
-      const j = resp?.data || resp;
-      const list = Array.isArray(j?.rows) ? j.rows : (Array.isArray(j?.data) ? j.data : []);
+      let resp = await callWebhook({ method: 'GET', payload }).catch(() => null);
+      let j = resp?.data || resp || {};
+      let list = Array.isArray(j?.rows) ? j.rows : (Array.isArray(j?.data) ? j.data : []);
+      // Robust fallback: if jobcard follow-ups not available, try `action=list`
+      if (isJobcard && (!Array.isArray(list) || list.length === 0)) {
+        const listResp = await callWebhook({ method: 'GET', payload: JOB_SECRET ? { action: 'list', secret: JOB_SECRET } : { action: 'list' } }).catch(() => null);
+        const lj = listResp?.data || listResp || {};
+        list = Array.isArray(lj?.rows) ? lj.rows : (Array.isArray(lj?.data) ? lj.data : []);
+      }
       // Normalize various row shapes from webhook
       const asPayload = (r) => {
         if (!r) return null;
@@ -214,6 +308,18 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         ].filter(Boolean).join(' ');
         // Prefer trimmed branch for display; filtering uses `norm`
         const branchDisp = (fv.branch || p.branch || values.Branch || values['Branch Name'] || '-');
+        // Determine post-service completion for jobcard
+        const postServiced = (() => {
+          // Prefer explicit payload flags from our app
+          if (p.postServiceAt) return true;
+          if (p.paymentMode || p.utr || p.utrNo) return true;
+          // Fallback to sheet columns
+          const vs = (k) => String(values[k] || '').trim().toLowerCase();
+          if (['yes','done','completed','true'].includes(vs('Post Service'))) return true;
+          if (values['Post Service At'] || values['PostServiceAt'] || values['Post_Service_At']) return true;
+          return false;
+        })();
+
         return {
           key: serial || i,
           serialNo: serial || '-',
@@ -226,7 +332,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           // Make notes resilient to varying key names from webhook/sheet
           followUpNotes: fu.notes || p.notes || p.closeNotes || fv.remarks || p.remarks || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Notes'] || '',
           closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
-          status: (() => {
+          // For jobcard: force 'pending' until post-serviced; once post-serviced, we will hide it
+          status: isJobcard ? (postServiced ? 'completed' : 'pending') : (() => {
             const s = fu.status || p.status || fv.status || values.Status || values['Booking Status'] || '';
             return String(s || 'pending').toLowerCase();
           })(),
@@ -238,6 +345,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           model: fv.model || values.Model || '',
           amount: fv.amount || values['Collected Amount'] || values.Amount || 0,
           availability: values['Chassis Availability'] || values['Availability'] || values['Stock'] || values['Stock Status'] || (p?.vehicle?.availability || fv?.vehicle?.availability || ''),
+          fileUrl: pickFileUrl(p, values),
+          postServiced,
           payload: p,
           values,
         };
@@ -246,6 +355,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const startToday = dayjs().startOf('day');
       const endToday = dayjs().endOf('day');
       const filtered = items.filter((it) => {
+        // For jobcard follow-ups, hide items that are already post-serviced
+        if (isJobcard && it.postServiced) return false;
         const itB = norm(it.branch);
         const meB = norm(me.branch || allowedBranches[0] || '');
 
@@ -266,6 +377,12 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         if (filter === 'upcoming') return d.isAfter(endToday);
         return true;
       });
+      // Always show most recent follow-ups first by scheduled time
+      filtered.sort((a, b) => {
+        const ta = a?.followUpAt && typeof a.followUpAt.valueOf === 'function' ? a.followUpAt.valueOf() : 0;
+        const tb = b?.followUpAt && typeof b.followUpAt.valueOf === 'function' ? b.followUpAt.valueOf() : 0;
+        return tb - ta;
+      });
       setRows(filtered);
       setPage(1); // reset to first page after refresh/filters
     } catch (e) {
@@ -276,7 +393,18 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
   };
 
-  useEffect(() => { if (webhookUrl) fetchFollowUps(); }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, me.name, mode, userRole, allowedBranches.length]);
+  // Fetch when ready: ensure branch is resolved for staff before first call
+  useEffect(() => {
+    if (!webhookUrl) return;
+    const needsBranch = !['owner','admin'].includes(userRole) || !!branchOnly;
+    const hasBranch = Boolean(String(me.branch || allowedBranches[0] || '').trim());
+    if (needsBranch && !hasBranch) {
+      // Wait for branch resolution to avoid empty first render
+      return;
+    }
+    fetchFollowUps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, mode, userRole, allowedBranches.length]);
 
   const updateFollowUp = async (serialNo, patch) => {
     try {
@@ -308,45 +436,57 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
   };
 
+  // Render up to 3 lines for Notes with CSS line clamp
+  const clamp3 = (text) => (
+    <span
+      style={{
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: 3,
+        overflow: 'hidden',
+        whiteSpace: 'normal',
+      }}
+    >
+      {String(text || '')}
+    </span>
+  );
+
   const columns = isJobcard ? [
-    { title: 'JC No.', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
-    { title: 'Notes', dataIndex: 'followUpNotes', key: 'followUpNotes', ellipsis: true },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
+    { title: 'Vehicle No.', dataIndex: 'regNo', key: 'regNo', width: 30 },
+    { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 20 },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 20 },
+    { title: 'Status', dataIndex: 'status',width: 20, key: 'status', render: (_, r) => (
       <Tooltip title={r.closeReason || r.followUpNotes || ''}>
         <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
       </Tooltip>
     ) },
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
-    {
-      title: 'Actions', key: 'actions',
-      render: (_, r) => (
-        <Space>
-          <Button size="small" type="primary" onClick={() => setPostModal({ open: true, row: r })}>Post Service</Button>
-          <Button size="small" onClick={() => setPrefillModal({ open: true, row: r })}>Open Prefilled JC</Button>
-          <Button size="small" onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}>Reschedule</Button>
-        </Space>
-      ),
-    }
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 20 },
   ] : (isBooking ? [
-    { title: 'Booking ID', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
-    { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 220, ellipsis: true },
-    { title: 'Availability', dataIndex: 'availability', key: 'availability', width: 130 },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
+
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 50 },
+    { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 50, ellipsis: true },
+    { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 40, render: (v)=> <LinkCell url={v} /> },
+    { title: 'Availability', dataIndex: 'availability', key: 'availability', width: 50 },
+    { title: 'Status', dataIndex: 'status',width: 50, key: 'status', render: (_, r) => (
       <Tooltip title={r.followUpNotes || ''}>
         <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
       </Tooltip>
     ) },
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 50 },
+    
   ] : [
     // Quotation ordering: Quotation_ID, Customer, Mobile, Notes, Status, Actions, Remarks
-    { title: 'Quotation ID', dataIndex: 'serialNo', key: 'serialNo', width: 160 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 180 },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
-    { title: 'Notes', dataIndex: 'followUpNotes', key: 'followUpNotes', ellipsis: true },
+    // Use nowrap titles to keep headers on a single line
+    
+    { title: (<span style={{ whiteSpace: 'nowrap' }}>Customer</span>), dataIndex: 'name', key: 'name', width: 180, align: 'left' },
+    { title: (<span style={{ whiteSpace: 'nowrap' }}>Mobile</span>), dataIndex: 'mobile', key: 'mobile', width: 140, align: 'left' },
+    { title: (<span style={{ whiteSpace: 'nowrap' }}>Notes</span>), dataIndex: 'followUpNotes', key: 'followUpNotes', width: 180, align: 'left', render: (v) => (
+      <Tooltip title={String(v || '').trim() || undefined}>
+        {clamp3(v)}
+      </Tooltip>
+    ) },
     { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
       <Tooltip title={r.closeReason || r.followUpNotes || ''}>
         <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
@@ -365,11 +505,9 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         </Space>
       ),
     },
-    { title: 'Remarks', dataIndex: 'remarks', key: 'remarks', render: (t) => (
-      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{String(t || '-')}
-      </div>
-    ) },
+   
     { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
+    { title: (<span style={{ whiteSpace: 'nowrap' }}>Quotation ID</span>), dataIndex: 'serialNo', key: 'serialNo', width: 160, align: 'left' },
   ]);
 
   return (
@@ -405,11 +543,12 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         columns={columns}
         loading={loading}
         size="small"
+        tableLayout="fixed"
         pagination={{
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => {
             setPage(p);
             if (ps !== pageSize) setPageSize(ps);
@@ -419,33 +558,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         scroll={{ x: true }}
       />
 
-      {/* Inline modals for Jobcard follow-ups */}
-      {isJobcard && (
-        <>
-          <PostServiceQuickModal
-            open={postModal.open}
-            onClose={() => setPostModal({ open: false, row: null })}
-            row={postModal.row}
-            webhookUrl={webhookUrl}
-          />
-          <JobCardInlineModal
-            open={prefillModal.open}
-            onClose={() => setPrefillModal({ open: false, row: null })}
-            initialValues={(prefillModal.row?.payload && prefillModal.row.payload.formValues) ? prefillModal.row.payload : (prefillModal.row ? { formValues: {
-              jcNo: prefillModal.row.jcNo || prefillModal.row.serialNo,
-              branch: prefillModal.row.branch,
-              executive: prefillModal.row.executive,
-              regNo: prefillModal.row.regNo,
-              model: prefillModal.row.model,
-              custName: prefillModal.row.name,
-              custMobile: prefillModal.row.mobile,
-              serviceType: prefillModal.row.serviceType,
-              vehicleType: prefillModal.row.vehicleType,
-              obs: prefillModal.row.followUpNotes,
-            } } : null)}
-          />
-        </>
-      )}
+      {/* No jobcard inline actions/modal */}
 
       <Modal
         title={`Reschedule ${reschedule.serial || ''}`}

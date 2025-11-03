@@ -306,7 +306,7 @@ export default function Branches({ readOnly = false }) {
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}

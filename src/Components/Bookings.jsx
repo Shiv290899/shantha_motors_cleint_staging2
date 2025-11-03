@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography } from "antd";
+import dayjs from 'dayjs';
 import BookingPrintQuickModal from "./BookingPrintQuickModal";
+import BookingInlineModal from "./BookingInlineModal";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 
 const { Text } = Typography;
@@ -32,8 +34,9 @@ export default function Bookings() {
   const [loading, setLoading] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [updating, setUpdating] = useState(null);
+  const [, setUpdating] = useState(null);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
+  const [detailModal, setDetailModal] = useState({ open: false, row: null });
   // Prefilled inline form modal removed per request; use Print modal only
   const [q, setQ] = useState("");
   // Controlled pagination
@@ -187,31 +190,41 @@ export default function Bookings() {
   };
 
   const columns = [
-    
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 200, ellipsis: true },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 140 },
-    { title: 'Model', dataIndex: 'model', key: 'model', width: 160 },
-    { title: 'Variant', dataIndex: 'variant', key: 'variant', width: 140 },
-    { title: 'Chassis', dataIndex: 'chassis', key: 'chassis', width: 260, ellipsis: false, render: (v)=> (
+    { title: 'Timestamp', dataIndex: 'ts', key: 'ts', width: 50, ellipsis: true, render: (v) => {
+      const ms = parseTsMs(v);
+      return ms ? dayjs(ms).format('YYYY-MM-DD HH:mm:ss') : '—';
+    } },
+    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 50 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 50, ellipsis: true },
+    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 20 },
+    { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
+    { title: 'Variant', dataIndex: 'variant', key: 'variant', width: 20 },
+    { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 50, render: (v, r)=> (
+      <Space size={6}>
+        <LinkCell url={v} />
+        <Button size='small' type='primary' onClick={()=> setPrintModal({ open: true, row: r })} title='Print' aria-label='Print'>🖨️</Button>
+        <Button size='small' onClick={()=> setDetailModal({ open: true, row: r })} title='View details' aria-label='View details'>👁️</Button>
+      </Space>
+    ) },
+    { title: 'Chassis', dataIndex: 'chassis', key: 'chassis', width: 20, ellipsis: false, render: (v)=> (
       <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
     ) },
-    { title: 'Stk Status', dataIndex: 'availability', key: 'stk', width: 120, render: (v, r)=> {
+    { title: 'Stk Status', dataIndex: 'availability', key: 'stk', width: 20, render: (v, r)=> {
       const lbl = stockLabel(r.chassis, v);
       return (<Tag color={stockColor(lbl)}>{lbl}</Tag>);
     } },
-    { title: 'Status', dataIndex: 'status', key: 'status', width: 120, render: (s)=> <Tag color={STATUS_COLOR[String(s||'').toLowerCase()] || 'default'}>{String(s||'pending').replace(/_/g,' ')}</Tag> },
+    { title: 'Status', dataIndex: 'status', key: 'status', width: 20, render: (s)=> <Tag color={STATUS_COLOR[String(s||'').toLowerCase()] || 'default'}>{String(s||'pending').replace(/_/g,' ')}</Tag> },
    
     
      
     {
-      title: 'Actions', key: 'actions', width: 320,
+      title: 'Actions', key: 'actions', width: 20,
       render: (_, r) => (
         <Space size={6}>
           <Select
             size='small'
             defaultValue={r.status || 'pending'}
-            style={{ width: 130 }}
+            style={{ width: 90 }}
             onChange={(v)=> updateBooking(r.bookingId, { status: v }, r.mobile)}
             options={[
               { value: 'pending', label: 'Pending' },
@@ -224,7 +237,7 @@ export default function Bookings() {
           <Select
             size='small'
             placeholder='Quick note'
-            style={{ width: 170 }}
+            style={{ width: 150 }}
             onChange={(v)=> updateBooking(r.bookingId, { status: r.status || 'seen', notes: v }, r.mobile)}
             options={[
               { value: 'Checked – proceed.', label: 'Checked – proceed.' },
@@ -232,17 +245,12 @@ export default function Bookings() {
               { value: 'Please call showroom.', label: 'Please call showroom.' },
             ]}
           />
-          <Button size='small' loading={updating===r.bookingId} onClick={()=> updateBooking(r.bookingId, { status: 'seen' }, r.mobile)}>Mark Seen</Button>
+          {/* Removed per request: Mark Seen button */}
         </Space>
       )
     },
-    { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 300, render: (v, r)=> (
-      <Space size={6}>
-        <LinkCell url={v} />
-        <Button size='small' type='primary' onClick={()=> setPrintModal({ open: true, row: r })}>Print</Button>
-      </Space>
-    ) },
-    { title: 'Booking ID', dataIndex: 'bookingId', key: 'bookingId', width: 180, ellipsis: true },
+    
+    { title: 'Booking ID', dataIndex: 'bookingId', key: 'bookingId', width: 20, ellipsis: true },
     
   ];
 
@@ -284,7 +292,7 @@ export default function Bookings() {
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
@@ -299,7 +307,13 @@ export default function Bookings() {
         webhookUrl={GAS_URL_STATIC}
         secret={GAS_SECRET_STATIC}
       />
-      {/* Prefilled form modal removed */}
+      {/* Prefilled Booking form (View details) */}
+      <BookingInlineModal
+        open={detailModal.open}
+        onClose={()=> setDetailModal({ open: false, row: null })}
+        row={detailModal.row}
+        webhookUrl={GAS_URL_STATIC}
+      />
     </div>
   );
 }
@@ -377,9 +391,9 @@ function LinkCell({ url }) {
   return (
     <Space size={6}>
       <Popover content={content} title="Preview" trigger="click">
-        <Button size="small">Preview</Button>
+        <Button size="small" title='Preview' aria-label='Preview'>🔍</Button>
       </Popover>
-      <a href={download}>Download</a>
+      <a href={download} title='Download' aria-label='Download'>⬇️</a>
     </Space>
   );
 }

@@ -42,7 +42,7 @@ export default function useAnnouncementBadge() {
           const resp = await GetCurrentUser().catch(()=>null);
           if (resp?.success && resp.data) { setUser(resp.data); localStorage.setItem('user', JSON.stringify(resp.data)); }
         }
-      } catch {}
+      } catch (e) { void e; }
     })();
   }, []);
 

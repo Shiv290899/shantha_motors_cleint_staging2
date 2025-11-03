@@ -152,7 +152,7 @@ export default function Jobcards() {
 
   const filtered = useMemo(() => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
-    return rows.filter((r) => {
+    const list = rows.filter((r) => {
       if (allowedSet.size && !["owner","admin"].includes(userRole)) {
         if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
       }
@@ -172,24 +172,26 @@ export default function Jobcards() {
       }
       return true;
     });
+    // Always show most recent first
+    return list.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
   }, [rows, branchFilter, serviceFilter, q, dateRange, userRole, allowedBranches]);
 
   // Reset pagination when filters/search/date change
   useEffect(() => { setPage(1); }, [branchFilter, serviceFilter, q, dateRange]);
 
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, render: (v)=> formatTs(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
-    { title: "Customer Name", dataIndex: "name", key: "name", width: 200, ellipsis: true },
-    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 140 },
-    { title: "Model", dataIndex: "model", key: "model", width: 160 },
-    { title: "Service Type", dataIndex: "serviceType", key: "serviceType", width: 140, align: 'center', render: (v)=> String(v||'') },
-    { title: "Service Amount", dataIndex: "amount", key: "amount", width: 130, align: 'right' },
-    { title: "Mode of Payment", dataIndex: "paymentMode", key: "paymentMode", width: 160, align: 'center', render: (v)=> String(v||'').toUpperCase() },
-    { title: "Executive", dataIndex: "executive", key: "executive", width: 170 },
-    { title: "Job Card", dataIndex: "jcNo", key: "jcNo", width: 200, ellipsis: true },
-    { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 160 },
-    { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 120, align: 'center', render: (v)=> String(v||'') },
+    { title: "Time", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v)=> formatTs(v) },
+    { title: "Branch", dataIndex: "branch", key: "branch", width: 50 },
+    { title: "Customer Name", dataIndex: "name", key: "name", width: 50, ellipsis: true },
+    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 50 },
+    { title: "Model", dataIndex: "model", key: "model", width: 20 },
+    { title: "Service Type", dataIndex: "serviceType", key: "serviceType", width: 20, align: 'center', render: (v)=> String(v||'') },
+    { title: "Service Amount", dataIndex: "amount", key: "amount", width: 20, align: 'right' },
+    { title: "Mode of Payment", dataIndex: "paymentMode", key: "paymentMode", width: 20, align: 'center', render: (v)=> String(v||'').toUpperCase() },
+    { title: "Executive", dataIndex: "executive", key: "executive", width: 50 },
+    { title: "Job Card", dataIndex: "jcNo", key: "jcNo", width: 20, ellipsis: true },
+    { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 20 },
+    { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 20, align: 'center', render: (v)=> String(v||'') },
   ];
 
   const total = rows.length;
@@ -233,7 +235,7 @@ export default function Jobcards() {
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}

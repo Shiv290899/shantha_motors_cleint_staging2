@@ -1,6 +1,6 @@
 // FetchBooking.jsx
 import React, { useState } from "react";
-import { Button, Modal, Radio, Input, List, Space, Spin, message } from "antd";
+import { Button, Modal, Input, List, Space, Spin, message } from "antd";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 
@@ -13,7 +13,8 @@ import { saveBookingViaWebhook } from "../apiCalls/forms";
  */
 export default function FetchBooking({ form, webhookUrl, setSelectedCompany, setSelectedModel }) {
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState("booking"); // 'booking' | 'mobile'
+  // Restrict to Mobile-only search
+  
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
@@ -22,7 +23,7 @@ export default function FetchBooking({ form, webhookUrl, setSelectedCompany, set
 
   const fetchRows = async () => {
     if (!webhookUrl) throw new Error("Booking webhook URL not configured");
-    const resp = await saveBookingViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode, query: String(query || '') } });
+    const resp = await saveBookingViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode: 'mobile', query: String(query || '') } });
     const j = resp?.data || resp;
     const rows = Array.isArray(j?.rows) ? j.rows : [];
     return rows;
@@ -87,7 +88,7 @@ export default function FetchBooking({ form, webhookUrl, setSelectedCompany, set
 
   const runSearch = async () => {
     const q = String(query || '').trim();
-    if (!q) { message.warning(mode === 'booking' ? 'Enter Booking ID' : 'Enter Mobile'); return; }
+    if (!q) { message.warning('Enter Mobile'); return; }
     setLoading(true);
     try {
       const rows = await fetchRows();
@@ -135,12 +136,8 @@ export default function FetchBooking({ form, webhookUrl, setSelectedCompany, set
         ]}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
-          <Radio.Group value={mode} onChange={(e)=>setMode(e.target.value)}>
-            <Radio.Button value="booking">Booking ID</Radio.Button>
-            <Radio.Button value="mobile">Mobile</Radio.Button>
-          </Radio.Group>
           <Input
-            placeholder={mode === 'booking' ? 'Enter Booking ID' : 'Enter 10-digit Mobile'}
+            placeholder={'Enter 10-digit Mobile'}
             value={query}
             onChange={(e)=>setQuery(e.target.value)}
             onPressEnter={runSearch}

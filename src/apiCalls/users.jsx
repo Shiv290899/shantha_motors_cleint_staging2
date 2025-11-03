@@ -25,16 +25,22 @@ export const RegisterUser = async (values) => {
 };
 
 // Login
+// Login with clear status handling (no throw) so UI can show precise messages
 export const LoginUser = async (values) => {
   try {
-    const { data } = await axiosInstance.post("/users/login", values);
-    if (data?.token) {
-      localStorage.setItem("token", data.token); // 👈 Save token
+    const res = await axiosInstance.post("/users/login", values, { validateStatus: () => true });
+    const status = res?.status;
+    const payload = res?.data || {};
+    if (status >= 200 && status < 300) {
+      if (payload?.token) localStorage.setItem("token", payload.token);
+      return { ...payload, code: status, success: true };
     }
-    return data;
+    // Non-2xx: normalize into a friendly object (do not throw)
+    const message = payload?.message || (status === 401 ? "Invalid password" : status === 404 ? "User does not exist" : "Login failed");
+    return { success: false, code: status, message };
   } catch (error) {
-    console.error("LoginUser failed", error);
-    throw error;
+    const message = error?.message || "Network error. Please try again.";
+    return { success: false, code: 0, message };
   }
 };
 

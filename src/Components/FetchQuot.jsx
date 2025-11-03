@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
-import { Button, Modal, Radio, Input, List, Space, Spin, message } from "antd";
+import { Button, Modal, Input, List, Space, Spin, message } from "antd";
 
 /**
  * Props:
@@ -35,7 +35,8 @@ export default function FetchQuot({
   buttonProps = {},
 }) {
   const [open, setOpen] = useState(false);
-  const [mode, setSearchMode] = useState("serial"); // 'serial' | 'mobile'
+  // Restrict to Mobile-only search
+  
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
@@ -53,7 +54,7 @@ export default function FetchQuot({
     const resp = await saveBookingViaWebhook({
       webhookUrl,
       method: 'GET',
-      payload: { action: 'search', mode, query: String(query || '') },
+      payload: { action: 'search', mode: 'mobile', query: String(query || '') },
     });
     const j = resp?.data || resp;
     const rows = Array.isArray(j?.rows) ? j.rows : [];
@@ -197,10 +198,7 @@ export default function FetchQuot({
   // ---------------- search ----------------
   const runSearch = async () => {
     const q = String(query || "").trim();
-    if (!q) {
-      message.warning(mode === "serial" ? "Enter a Quotation No." : "Enter a Mobile number.");
-      return;
-    }
+    if (!q) { message.warning("Enter a mobile number."); return; }
 
     setLoading(true);
     try {
@@ -290,23 +288,8 @@ export default function FetchQuot({
         ]}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Radio.Group
-            value={mode}
-            onChange={(e) => {
-              setSearchMode(e.target.value);
-              setMatches([]);
-            }}
-          >
-            <Radio.Button value="serial">Quotation No</Radio.Button>
-            <Radio.Button value="mobile">Mobile</Radio.Button>
-          </Radio.Group>
-
           <Input
-            placeholder={
-              mode === "serial"
-                ? "Enter Quotation No. (exact, e.g., 57)"
-                : "Enter Mobile (10-digit or last few digits)"
-            }
+            placeholder={"Enter Mobile (10-digit or last few digits)"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onPressEnter={runSearch}

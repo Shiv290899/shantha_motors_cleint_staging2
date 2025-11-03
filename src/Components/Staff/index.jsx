@@ -6,6 +6,7 @@ import { FileTextOutlined, ToolOutlined, CalendarOutlined, SoundOutlined, Appsto
 import Quotation from "../Quotation";
 import JobCard from "../JobCard";
 import BookingForm from "../BookingForm";
+import InStockUpdate from "../InStockUpdate";
 import StockUpdate from "../StockUpdate";
 import FollowUpsTabs from "../FollowUpsTabs";
 import Announcements from "../Announcements";
@@ -98,10 +99,19 @@ export default function Staff() {
     },
     {
       key: "stock",
-      label: tabLabel(<AppstoreAddOutlined />, "Stock Updates"),
+      label: tabLabel(<AppstoreAddOutlined />, "Stock Finder"),
       children: (
         <div style={wrap}>
-         <StockUpdate/>
+          <InStockUpdate />
+        </div>
+      ),
+    },
+    {
+      key: "stock-update",
+      label: tabLabel(<AppstoreAddOutlined />, "Stock Update"),
+      children: (
+        <div style={wrap}>
+          <StockUpdate />
         </div>
       ),
     },

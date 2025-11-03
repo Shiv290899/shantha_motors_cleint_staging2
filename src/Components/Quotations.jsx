@@ -153,7 +153,7 @@ export default function Quotations() {
 
   const filtered = useMemo(() => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
-    return rows.filter((r) => {
+    const list = rows.filter((r) => {
       if (allowedSet.size && !["owner","admin"].includes(userRole)) {
         if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
       }
@@ -174,6 +174,8 @@ export default function Quotations() {
       }
       return true;
     });
+    // Always show most recent first
+    return list.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
   }, [rows, branchFilter, modeFilter, statusFilter, q, dateRange, userRole, allowedBranches]);
 
   // Reset pagination on filters/search/date change
@@ -193,18 +195,18 @@ export default function Quotations() {
   };
 
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 170, ellipsis: true, render: (v)=> formatTs(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 160 },
-    { title: "Customer Name", dataIndex: "name", key: "name", width: 220, ellipsis: true },
-    { title: "Mobile No", dataIndex: "mobile", key: "mobile", width: 140 },
-    { title: "Status", dataIndex: "status", key: "status", width: 130, render: (v)=> <Tag color={statusColor(v)}>{String(v||'').replace(/_/g,' ')||'—'}</Tag> },
-    { title: "Model", dataIndex: "model", key: "model", width: 160 },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 180 },
-    { title: "On-Road Price", dataIndex: "price", key: "price", width: 140, align: 'right' },
-    { title: "Mode", dataIndex: "mode", key: "mode", width: 110, align: 'center', render: (v)=> String(v||'').toUpperCase() },
-    { title: "Executive", dataIndex: "executive", key: "executive", width: 160 },
-    { title: "Company", dataIndex: "company", key: "company", width: 160 },
-    { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 200, ellipsis: true },
+    { title: "Time", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v)=> formatTs(v) },
+    { title: "Branch", dataIndex: "branch", key: "branch", width: 50 },
+    { title: "Customer Name", dataIndex: "name", key: "name", width: 50, ellipsis: true },
+    { title: "Mobile No", dataIndex: "mobile", key: "mobile", width: 80 },
+    { title: "Status", dataIndex: "status", key: "status", width: 50, render: (v)=> <Tag color={statusColor(v)}>{String(v||'').replace(/_/g,' ')||'—'}</Tag> },
+    { title: "Model", dataIndex: "model", key: "model", width: 50 },
+    { title: "Variant", dataIndex: "variant", key: "variant", width: 50 },
+    { title: "On-Road Price", dataIndex: "price", key: "price", width: 30, align: 'right' },
+    { title: "Mode", dataIndex: "mode", key: "mode", width: 30, align: 'center', render: (v)=> String(v||'').toUpperCase() },
+    { title: "Executive", dataIndex: "executive", key: "executive", width: 30 },
+    { title: "Company", dataIndex: "company", key: "company", width: 30 },
+    { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 50, ellipsis: true },
   ];
 
   const total = rows.length;
@@ -251,12 +253,12 @@ export default function Quotations() {
           current: page,
           pageSize,
           showSizeChanger: true,
-          pageSizeOptions: ['25','50','75','100'],
+          pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
         rowKey={(r) => `${r.serialNo}-${r.mobile}-${r.ts}-${r.key}`}
-        scroll={{ x: 'max-content' }}
+        
       />
     </div>
   );

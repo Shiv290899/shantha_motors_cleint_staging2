@@ -249,10 +249,16 @@ export default function JobCard({ initialValues = null } = {}) {
   const [postOpen, setPostOpen] = useState(false);
   const [postPayment, setPostPayment] = useState('cash'); // 'cash' | 'online'
   const [postUtr, setPostUtr] = useState('');
+  const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
+  const startActionCooldown = (ms = 6000) => {
+    const until = Date.now() + ms;
+    setActionCooldownUntil(until);
+    setTimeout(() => setActionCooldownUntil(0), ms + 50);
+  };
   // Follow-up state (similar to Quotation)
-  const [followUpEnabled, setFollowUpEnabled] = useState(true);
-  const [followUpAt, setFollowUpAt] = useState(() => dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
-  const [followUpNotes, setFollowUpNotes] = useState("");
+  const [, setFollowUpEnabled] = useState(false);
+  const [, setFollowUpAt] = useState(() => dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
+  const [, setFollowUpNotes] = useState("");
 
   // ★ required field helpers
   const BASE_REQUIRED = [
@@ -352,7 +358,7 @@ export default function JobCard({ initialValues = null } = {}) {
       km: undefined,
       custName: "",
       custMobile: "",
-      callStatus: undefined,
+      
       obs: "",
       labourRows: [],
       gstLabour: DEFAULT_GST_LABOUR,
@@ -383,7 +389,7 @@ export default function JobCard({ initialValues = null } = {}) {
         colour: fv.colour || '',
         km: kmVal,
         fuelLevel: fv.fuelLevel || undefined,
-        callStatus: fv.callStatus || '',
+        
         custName: fv.custName || '',
         custMobile: String(fv.custMobile || '').replace(/\D/g,'').slice(-10),
         obs: (fv.obs || '').replace(/\s*#\s*/g, "\n"),
@@ -473,9 +479,14 @@ export default function JobCard({ initialValues = null } = {}) {
           }
           if (staffName) setUserStaffName(staffName);
           if (role) setUserRole(role);
+          // Only set defaults if fields are empty to avoid overwriting
+          // prefilled values when opened from Follow-Ups → Post Service
           const patch = {};
-          if (staffName) patch.executive = staffName;
-          if (branchName) patch.branch = branchName;
+          try {
+            const existing = form.getFieldsValue(["branch", "executive"]) || {};
+            if (!existing?.executive && staffName) patch.executive = staffName;
+            if (!existing?.branch && branchName) patch.branch = branchName;
+          } catch { /* noop */ }
           if (Object.keys(patch).length) form.setFieldsValue(patch);
           if (branchName) setDefaultBranchName(branchName);
           if (staffName) setDefaultExecutiveName(staffName);
@@ -587,6 +598,8 @@ export default function JobCard({ initialValues = null } = {}) {
   }, []);
 
   const handlePrint = async (which) => {
+    if (Date.now() < actionCooldownUntil) return;
+    startActionCooldown(6000);
     await new Promise(requestAnimationFrame);
     if (which === "pre") {
       await handleSmartPrint(preRef.current);
@@ -642,15 +655,7 @@ export default function JobCard({ initialValues = null } = {}) {
       // Build a payload compatible with FetchJobcard (stores JSON in sheet)
       const payload = {
         savedAt: new Date().toISOString(),
-        followUp: {
-          enabled: Boolean(followUpEnabled),
-          at: followUpEnabled && followUpAt && dayjs(followUpAt).isValid() ? dayjs(followUpAt).toISOString() : null,
-          notes: String(followUpNotes || ''),
-          assignedTo: vals.executive || '',
-          branch: vals.branch || '',
-          customer: { name: vals.custName || '', mobile: String(vals.custMobile || '') },
-          status: 'pending',
-        },
+        // follow-up removed per request
         formValues: {
           jcNo: jc,
           branch: vals.branch || "",
@@ -662,7 +667,7 @@ export default function JobCard({ initialValues = null } = {}) {
           colour: vals.colour || "",
           km: kmOnlyDigits || "",
           fuelLevel: vals.fuelLevel || "",
-          callStatus: vals.callStatus || "",
+          
           custName: vals.custName || "",
           custMobile: String(vals.custMobile || ""),
           obs: obsOneLine,
@@ -701,6 +706,8 @@ export default function JobCard({ initialValues = null } = {}) {
   // ---- Post-service: update existing row by mobile, with payment mode ----
   const handlePostServiceFlow = async (shouldPrint) => {
     try {
+      if (Date.now() < actionCooldownUntil) return;
+      startActionCooldown(6000);
       const valsNow = form.getFieldsValue(true);
       const mobile10 = String(valsNow.custMobile || '').replace(/\D/g, '').slice(-10);
       if (mobile10.length !== 10) {
@@ -753,7 +760,7 @@ export default function JobCard({ initialValues = null } = {}) {
           colour: valsNow.colour || '',
           km: kmOnlyDigits || '',
           fuelLevel: valsNow.fuelLevel || '',
-          callStatus: valsNow.callStatus || '',
+          
           custName: valsNow.custName || '',
           custMobile: String(valsNow.custMobile || ''),
           obs: obsOneLine,
@@ -807,6 +814,8 @@ export default function JobCard({ initialValues = null } = {}) {
   // --- Auto-save then WhatsApp ---
   const handleShareWhatsApp = async () => {
     try {
+      if (Date.now() < actionCooldownUntil) return;
+      startActionCooldown(6000);
       await handleAutoSave(); // will throw if invalid
 
       const valsNow = form.getFieldsValue(true);
@@ -920,7 +929,7 @@ export default function JobCard({ initialValues = null } = {}) {
                       placeholder="Select branch"
                       value={watchedBranch}
                       onChange={(v) => onBranchChange(v)}
-                      options={allowedBranches.map((b) => ({ value: b.name, label: b.code ? `${b.name} (${b.code})` : b.name }))}
+                      options={allowedBranches.map((b) => ({ value: b.name, label: b.name }))}
                     />
                   ) : (
                     <Input readOnly placeholder="Auto-fetched from your profile" />
@@ -1060,11 +1069,7 @@ export default function JobCard({ initialValues = null } = {}) {
                 </Form.Item>
               </Col>
 
-              <Col xs={24} sm={24} md={8}>
-                <Form.Item label="Call Status" name="callStatus">
-                  <Input placeholder="Connected / Not reachable / Will call back" />
-                </Form.Item>
-              </Col>
+              {/* Call Status removed per request */}
 
               <Col xs={24}>
                 <Form.Item label="Customer Observation (additional notes)" name="obs">
@@ -1224,53 +1229,17 @@ export default function JobCard({ initialValues = null } = {}) {
             </div>
           </Card>
 
-          {/* Follow-up */}
-          <Card size="small" bordered style={{ marginTop: 12 }} title="Follow-up">
-            <Row gutter={12}>
-              <Col xs={24} md={8}>
-                <Form.Item label="Schedule follow-up?" style={{ marginBottom: 0 }}>
-                  <Checkbox
-                    checked={!!followUpEnabled}
-                    onChange={(e) => setFollowUpEnabled(e.target.checked)}
-                  >
-                    Enable
-                  </Checkbox>
-                </Form.Item>
-              </Col>
-              <Col xs={24} md={8}>
-                <Form.Item label="Follow-up date & time" style={{ marginBottom: 0 }}>
-                  <DatePicker
-                    showTime
-                    style={{ width: '100%' }}
-                    value={followUpAt}
-                    onChange={setFollowUpAt}
-                    disabled={!followUpEnabled}
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={24} md={8}>
-                <Form.Item label="Notes" style={{ marginBottom: 0 }}>
-                  <Input.TextArea
-                    rows={1}
-                    placeholder="Notes for this follow-up"
-                    value={followUpNotes}
-                    onChange={(e) => setFollowUpNotes(e.target.value)}
-                    disabled={!followUpEnabled}
-                  />
-                </Form.Item>
-              </Col>
-            </Row>
-          </Card>
+          {/* Follow-up section removed per request */}
 
           {/* ACTION BUTTONS — gated by isReady */}
           <Row justify="end" style={{ marginTop: 12 }} gutter={8}>
             <Col>
               <Tooltip title={isReady ? "" : (notReadyWhy || "Fill all required fields")} placement="top">
-                <Button
+              <Button
                   type="default"
                   icon={<FaWhatsapp style={{ color: "#25D366" }} />}
                   onClick={handleShareWhatsApp}
-                  disabled={!isReady} // ★
+                  disabled={!isReady || actionCooldownUntil > Date.now()}
                 >
                   WhatsApp/SMS
                 </Button>
@@ -1279,7 +1248,7 @@ export default function JobCard({ initialValues = null } = {}) {
 
             <Col>
               <Tooltip title={isReady ? "" : (notReadyWhy || "Fill all required fields")} placement="top">
-                <Button type="primary" onClick={handlePreService} disabled={!isReady} /* ★ */>
+                <Button type="primary" onClick={handlePreService} disabled={!isReady || actionCooldownUntil > Date.now()} /* ★ */>
                   Pre-service
                 </Button>
               </Tooltip>
@@ -1322,8 +1291,8 @@ export default function JobCard({ initialValues = null } = {}) {
         )}
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={() => setPostOpen(false)}>Cancel</Button>
-          <Button onClick={() => handlePostServiceFlow(false)}>Save Only</Button>
-          <Button type="primary" onClick={() => handlePostServiceFlow(true)}>Save & Print</Button>
+          <Button onClick={() => handlePostServiceFlow(false)} disabled={actionCooldownUntil > Date.now()}>Save Only</Button>
+          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={actionCooldownUntil > Date.now()}>Save & Print</Button>
         </div>
       </Modal>
 

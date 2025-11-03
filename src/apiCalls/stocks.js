@@ -54,3 +54,8 @@ export const updateStock = async (movementId, patch) => {
   const { data } = await axiosInstance.patch(`/stocks/${movementId}`, { data: patch });
   return data; // { success, data }
 };
+
+export const deleteStock = async (movementId) => {
+  const res = await axiosInstance.delete(`/stocks/${movementId}`, { validateStatus: () => true });
+  return res?.data || { success: false, message: 'Delete failed' };
+};

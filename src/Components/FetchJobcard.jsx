@@ -1,6 +1,6 @@
 // FetchJobcard.jsx
 import React, { useMemo, useState } from "react";
-import { Button, Modal, Radio, Input, List, Space, Spin, message } from "antd";
+import { Button, Modal, Input, List, Space, Spin, message } from "antd";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
@@ -32,8 +32,10 @@ export default function FetchJobcard({
   setFollowUpAt,
   setFollowUpNotes,
 }) {
+  const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
   const [open, setOpen] = useState(false);
-  const [mode, setMode] = useState("jc"); // 'jc' | 'mobile'
+  // Restrict search to Mobile only
+  const mode = "mobile";
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
@@ -152,14 +154,33 @@ export default function FetchJobcard({
     if (webhookUrl) {
       try {
         // Try GET first; some deployments allow only GET
-        let resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode, query: String(query || '') } });
+        let resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode: 'mobile', query: String(query || '') } });
         let j = resp?.data || resp;
         let rows = Array.isArray(j?.rows) ? j.rows : [];
         if (!rows.length) {
           // Fallback to POST
-          resp = await saveJobcardViaWebhook({ webhookUrl, method: 'POST', payload: { action: 'search', mode, query: String(query || '') } });
+          resp = await saveJobcardViaWebhook({ webhookUrl, method: 'POST', payload: { action: 'search', mode: 'mobile', query: String(query || '') } });
           j = resp?.data || resp;
           rows = Array.isArray(j?.rows) ? j.rows : [];
+        }
+        if (!rows.length) {
+          // Final fallback: fetch full list and filter client-side
+          const listResp = await saveJobcardViaWebhook({
+            webhookUrl,
+            method: 'GET',
+            payload: JOB_SECRET ? { action: 'list', secret: JOB_SECRET } : { action: 'list' },
+          });
+          const lj = listResp?.data || listResp;
+          const dataArr = Array.isArray(lj?.data) ? lj.data : (Array.isArray(lj?.rows) ? lj.rows : []);
+          const q = String(query || '').trim().toLowerCase();
+          const filtered = dataArr.filter((o) => {
+            const v = o && o.values ? o.values : o || {};
+            
+            const mobile = String(v['Mobile'] || v['Mobile Number'] || v['Phone'] || '').replace(/\D/g,'');
+            const q10 = q.replace(/\D/g,'');
+            return q10 && mobile.endsWith(q10);
+          });
+          rows = filtered.map((o) => ({ values: o && o.values ? o.values : o }));
         }
         // Normalize rows: merge sheet values into payload.formValues so all fields reflect
         const norm = rows.map((r) => {
@@ -340,7 +361,7 @@ export default function FetchJobcard({
   const runSearch = async () => {
     const raw = (query || "").trim();
     if (!raw) {
-      message.warning("Enter a JC No or Mobile.");
+      message.warning("Enter a mobile number.");
       return;
     }
     setLoading(true);
@@ -439,23 +460,8 @@ export default function FetchJobcard({
         ]}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Radio.Group
-            value={mode}
-            onChange={(e) => {
-              setMode(e.target.value);
-              setMatches([]);
-            }}
-          >
-            <Radio.Button value="jc">JC No</Radio.Button>
-            <Radio.Button value="mobile">Mobile</Radio.Button>
-          </Radio.Group>
-
           <Input
-            placeholder={
-              mode === "jc"
-                ? "Enter JC No (exact)"
-                : "Enter Mobile (10-digit or last few digits)"
-            }
+            placeholder={"Enter Mobile (10-digit or last few digits)"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onPressEnter={runSearch}

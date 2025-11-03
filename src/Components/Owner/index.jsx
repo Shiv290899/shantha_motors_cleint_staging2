@@ -4,6 +4,7 @@ import InStockUpdate from '../InStockUpdate'
 import StockUpdate from '../StockUpdate'
 import Bookings from '../Bookings'
 import Quotations from '../Quotations'
+import Quotation from '../Quotation'
 import Jobcards from '../Jobcards'
 import Branches from '../Admin/Branches'
 import Announcements from '../Announcements'
@@ -23,6 +24,13 @@ export default function OwnerIndex() {
     h2: { fontSize: 18, fontWeight: 600, margin: '0 0 8px' },
     p: { color: '#4b5563', margin: 0 },
   }
+
+  const AnalyticsReports = () => (
+    <div style={styles.panel}>
+      <div style={styles.h2}>Analytics & Reports</div>
+      <p style={styles.p}>KPIs, trends, and printable/exportable reports.</p>
+    </div>
+  )
 
   const BranchSales = () => (
     <div style={styles.panel}>
@@ -51,14 +59,20 @@ export default function OwnerIndex() {
     <span style={{ marginLeft:6, padding:'0 6px', borderRadius:10, fontSize:11, color:'#fff', fontWeight:700, background:pillColor(latestItem?.type), display:'inline-block', animation:'annPulse 1.6s ease-in-out infinite' }}>NEW</span>
   ) : null
   const items = [
+    // 1) Quotation (form), 2) Quotations (list), 3) Job Cards, 4) Bookings
+    { key: 'quotation', label: 'Quotation', children: <Quotation /> },
+    { key: 'quotations', label: 'Quotations', children: <Quotations /> },
+    { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
+    { key: 'bookings', label: 'Bookings', children: <Bookings /> },
+    // 4) Stock Update, 5) In-Stock Update
+    { key: 'stock', label: 'Stock Update', children: <StockUpdate /> },
+    { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
+    // 6) Branches, 7) Users, 8) Announcements
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
-    { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
-    { key: 'stock', label: 'Stock Update', children: <StockUpdate /> },
-    { key: 'bookings', label: 'Bookings', children: <Bookings /> },
-    { key: 'quotations', label: 'Quotations', children: <Quotations /> },
-    { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
+    // 9) Analytics & Reports, 10) Branch-level Sales, 11) Multi-branch Compare, 12) Sales Performance
+    { key: 'analytics', label: 'Analytics & Reports', children: <AnalyticsReports /> },
     { key: 'branch', label: 'Branch-level Sales', children: <BranchSales /> },
     { key: 'compare', label: 'Multi-branch Compare', children: <MultiBranchCompare /> },
     { key: 'performance', label: 'Sales Performance', children: <SalesPerformance /> },
@@ -69,7 +83,7 @@ export default function OwnerIndex() {
       <h2 style={styles.h1}>Analytics & Reports</h2>
       <div style={styles.sub}>Owner insights across all branches</div>
       <Tabs
-        defaultActiveKey="branches"
+        defaultActiveKey="quotations"
         items={items}
         animated
         size={isMobile ? 'small' : 'middle'}

@@ -2,58 +2,43 @@ import React, { useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { GetCurrentUser } from "../apiCalls/users";
 
+// Goal: keep users "logged in" when navigating back/refreshing as long as a token exists.
+// We fall back to cached user from localStorage and refresh it quietly in the background.
 export default function ProtectedRoute({ children, roles }) {
   const [loading, setLoading] = useState(true);
-  // Seed from localStorage so UI can recover if token validation fails but we still know the role
   const [user, setUser] = useState(() => {
-    try {
-      const raw = localStorage.getItem("user");
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
+    try { return JSON.parse(localStorage.getItem("user") || "null"); } catch { return null; }
   });
 
   useEffect(() => {
-    const init = async () => {
-      const token = localStorage.getItem("token");
+    const token = localStorage.getItem("token");
+    // If no token and no cached user, we can immediately gate to login
+    if (!token && !user) { setLoading(false); return; }
 
-      if (!token) {
-        // No token: treat as unauthenticated (do not rely on cached user)
-        try { localStorage.removeItem("user"); } catch {
-          //ijhishd
-        }
-        setUser(null);
-        setLoading(false);
-        return;
-      }
-
+    // If we have a token or cached user, allow the page to render and refresh user in background
+    (async () => {
       try {
         const result = await GetCurrentUser();
-        if (result && result.success && result.data) {
+        if (result?.success && result?.data) {
           setUser(result.data);
-          try { localStorage.setItem("user", JSON.stringify(result.data)); } catch {
-            //ignore
-          }
+          try { localStorage.setItem("user", JSON.stringify(result.data)); } catch (e) { void e; }
         }
       } catch {
-        // On auth failure, clear user to force login again
-        try { localStorage.removeItem("user"); } catch {
-          //sdbf
-        }
-        setUser(null);
+        // Do NOT clear token/user on transient failures; keep session.
       } finally {
         setLoading(false);
       }
-    };
-    init();
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (loading) return null; // or a spinner
+  if (loading) return null; // could show a spinner
 
-  if (!user) return <Navigate to="/login" replace />;
+  const tokenPresent = Boolean(localStorage.getItem("token"));
+  if (!tokenPresent && !user) return <Navigate to="/login" replace />;
 
-  if (Array.isArray(roles) && roles.length) {
+  // Role guard only if we have a user object to infer role from
+  if (user && Array.isArray(roles) && roles.length) {
     const role = String(user.role || "").toLowerCase();
     const ok = roles.map((r) => String(r).toLowerCase()).includes(role);
     if (!ok) return <Navigate to="/" replace />;
