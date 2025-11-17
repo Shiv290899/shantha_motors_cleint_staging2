@@ -1,7 +1,6 @@
 import React from "react";
 import { Tabs, Grid } from "antd";
-import { FileTextOutlined, ToolOutlined, CalendarOutlined, SoundOutlined, AppstoreAddOutlined, PhoneOutlined } from "@ant-design/icons";
-// dynamic new pill (animated) on tab label
+// Replaced Ant icons with simple emojis for clearer tab labels
 
 import Quotation from "../Quotation";
 import JobCard from "../JobCard";
@@ -10,8 +9,11 @@ import InStockUpdate from "../InStockUpdate";
 import StockUpdate from "../StockUpdate";
 import FollowUpsTabs from "../FollowUpsTabs";
 import Announcements from "../Announcements";
+import MinorSales from "../MinorSales";
 import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 import { GetCurrentUser } from "../../apiCalls/users";
+
+
 
 export default function Staff() {
   const screens = Grid.useBreakpoint();
@@ -35,9 +37,10 @@ export default function Staff() {
       animation: 'annPulse 1.6s ease-in-out infinite'
     }}>NEW</span>
   ) : null;
-  const tabLabel = (icon, text) => (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-      {icon}
+
+  const tabLabel = (emoji, text) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <span aria-hidden style={{ fontSize: 16 }}>{emoji}</span>
       <span>{text}</span>
     </span>
   );
@@ -61,7 +64,7 @@ export default function Staff() {
   const items = [
     {
       key: "quotation",
-      label: tabLabel(<FileTextOutlined />, "Quotation"),
+      label: tabLabel('🧾', "Quotation"),
       children: (
         <div style={wrap}>
           <Quotation />
@@ -70,7 +73,7 @@ export default function Staff() {
     },
     {
       key: "jobcard",
-      label: tabLabel(<ToolOutlined />, "Job Card"),
+      label: tabLabel('🔧', "Job Card"),
       children: (
         <div style={wrap}>
           <JobCard />
@@ -79,18 +82,16 @@ export default function Staff() {
     },
     {
       key: "followups",
-      label: tabLabel(<PhoneOutlined />, "Follow-ups"),
+      label: tabLabel('📞', "Follow-ups"),
       children: (
         <div style={wrap}>
           <FollowUpsTabs />
         </div>
       ),
     },
-    
-    
     {
       key: "booking",
-      label: tabLabel(<CalendarOutlined />, "Booking"),
+      label: tabLabel('📅', "Booking"),
       children: (
         <div style={wrap}>
           <BookingForm />
@@ -99,7 +100,7 @@ export default function Staff() {
     },
     {
       key: "stock",
-      label: tabLabel(<AppstoreAddOutlined />, "Stock Finder"),
+      label: tabLabel('🔎', "Stock Finder"),
       children: (
         <div style={wrap}>
           <InStockUpdate />
@@ -108,7 +109,7 @@ export default function Staff() {
     },
     {
       key: "stock-update",
-      label: tabLabel(<AppstoreAddOutlined />, "Stock Update"),
+      label: tabLabel('📦', "Stock Update"),
       children: (
         <div style={wrap}>
           <StockUpdate />
@@ -116,11 +117,27 @@ export default function Staff() {
       ),
     },
     {
+      key: "minorsales",
+      label: (
+        <>
+          <style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style>
+          <span>{tabLabel('🛒', "Minor Sales")}<NewPill/></span>
+        </>
+      ),
+      children: (
+        <div style={wrap}>
+          <MinorSales />
+        </div>
+      ),
+    },
+   
+    
+    {
       key: "announcements",
       label: (
         <>
           <style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style>
-          <span>{tabLabel(<SoundOutlined />, "Announcements")}<NewPill/></span>
+          <span>{tabLabel('📣', "Announcements")}<NewPill/></span>
         </>
       ),
       children: (

@@ -1,7 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal } from "antd";
+import useDebouncedValue from "../hooks/useDebouncedValue";
+// Sheet-only remarks; no backend remarks API
 import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
+
+// GAS endpoints (module-level) so both list + remark share same URL/secret
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbzZMHPqNcqY6HuKK6Y8vI02UXIC5IyHhbIo0Wu1iCtQgCmwigQJ8DPUPy_9vYIZLI6uNQ/exec";
+const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
+const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
 const { Text } = Typography;
 
@@ -33,13 +40,21 @@ export default function Jobcards() {
   const [branchFilter, setBranchFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all"); // free | paid | all
   const [q, setQ] = useState("");
+  const debouncedQ = useDebouncedValue(q, 300);
   const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
   // Controlled pagination
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(10);
+  const [renderMode, setRenderMode] = useState('pagination');
+  const [loadedCount, setLoadedCount] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const USE_SERVER_PAG = String(import.meta.env.VITE_USE_SERVER_PAGINATION || '').toLowerCase() === 'true';
+  
+  const [remarksMap, setRemarksMap] = useState({});
+  const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
 
   useEffect(() => {
     try {
@@ -58,30 +73,40 @@ export default function Jobcards() {
   }, []);
 
   useEffect(() => {
-    const isPriv = ["owner","admin"].includes(userRole);
+    const isPriv = ["owner","admin","backend"].includes(userRole);
     if (!isPriv && allowedBranches.length && branchFilter === 'all') {
       setBranchFilter(allowedBranches[0]);
     }
   }, [userRole, allowedBranches, branchFilter]);
 
+  // Server-mode: refetch on filters/page/date change
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       try {
-        const DEFAULT_JC_URL =
-          "https://script.google.com/macros/s/AKfycbx7Q36rQ4tzFCDZKJbR5SUabuunYL2NKd0jNJxdUgaqIQ8BUX2kfINq5WppF5NJLxA6YQ/exec";
-        const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
-        const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
         if (!GAS_URL) {
           message.info('Jobcards: Apps Script URL not configured — showing empty list.');
-          if (!cancelled) setRows([]);
+          if (!cancelled) { setRows([]); setTotalCount(0); }
           return;
         }
+        const base = { action: 'list' };
+        const filters = {
+          q: debouncedQ || '',
+          branch: branchFilter !== 'all' ? branchFilter : '',
+          service: serviceFilter !== 'all' ? serviceFilter : '',
+        };
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          filters.start = dateRange[0].startOf('day').valueOf();
+          filters.end = dateRange[1].endOf('day').valueOf();
+        }
+        const payload = USE_SERVER_PAG
+          ? (GAS_SECRET ? { ...base, page, pageSize, ...filters, secret: GAS_SECRET } : { ...base, page, pageSize, ...filters })
+          : (GAS_SECRET ? { ...base, secret: GAS_SECRET } : base);
         const resp = await saveJobcardViaWebhook({
           webhookUrl: GAS_URL,
           method: 'GET',
-          payload: SECRET ? { action: 'list', secret: SECRET } : { action: 'list' },
+          payload,
         });
         const js = resp?.data || resp;
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
@@ -122,12 +147,21 @@ export default function Jobcards() {
             vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
             amount: serviceAmount.trim(),
             paymentMode: payMode.trim(),
+            // remarks (if present in sheet)
+            RemarkLevel: (obj && (obj.RemarkLevel || obj['Remark Level'])) || '',
+            RemarkText: (obj && (obj.RemarkText || obj['Remark Text'])) || '',
           };
         });
-        if (!cancelled) setRows(data.filter((r)=>r.jcNo || r.name || r.mobile));
+        const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
+        if (!cancelled) {
+          setRows(filteredRows);
+          setTotalCount(typeof js.total === 'number' ? js.total : filteredRows.length);
+          const map = {}; filteredRows.forEach(rr => { if (rr.jcNo) map[rr.jcNo] = { level: String(rr.RemarkLevel||'').toLowerCase(), text: rr.RemarkText||'' }; });
+          setRemarksMap(map);
+        }
       } catch  {
         message.error('Could not load job cards via Apps Script. Check JOBCARD Web App URL / access.');
-        if (!cancelled) setRows([]);
+        if (!cancelled) { setRows([]); setTotalCount(0); }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -136,7 +170,7 @@ export default function Jobcards() {
     const handler = () => load();
     window.addEventListener('reload-jobcards', handler);
     return () => { cancelled = true; window.removeEventListener('reload-jobcards', handler); };
-  }, []);
+  }, [branchFilter, serviceFilter, debouncedQ, dateRange, page, pageSize, USE_SERVER_PAG]);
 
   const branches = useMemo(() => {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
@@ -152,8 +186,17 @@ export default function Jobcards() {
 
   const filtered = useMemo(() => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
+    if (USE_SERVER_PAG) {
+      const scoped = rows.filter((r)=>{
+        if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
+          if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        }
+        return true;
+      });
+      return scoped.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
+    }
     const list = rows.filter((r) => {
-      if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+      if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
         if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
       }
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
@@ -164,20 +207,23 @@ export default function Jobcards() {
         const t = r.tsMs ?? parseTsMs(r.ts);
         if (!t || t < start || t > end) return false;
       }
-      if (q) {
-        const s = q.toLowerCase();
+      if (debouncedQ) {
+        const s = debouncedQ.toLowerCase();
         if (![
           r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
     });
-    // Always show most recent first
     return list.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-  }, [rows, branchFilter, serviceFilter, q, dateRange, userRole, allowedBranches]);
+  }, [rows, branchFilter, serviceFilter, debouncedQ, dateRange, userRole, allowedBranches, USE_SERVER_PAG]);
 
   // Reset pagination when filters/search/date change
-  useEffect(() => { setPage(1); }, [branchFilter, serviceFilter, q, dateRange]);
+  useEffect(() => {
+    setPage(1);
+    setLoadedCount(pageSize);
+  }, [branchFilter, serviceFilter, debouncedQ, dateRange]);
+  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
 
   const columns = [
     { title: "Time", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v)=> formatTs(v) },
@@ -193,8 +239,23 @@ export default function Jobcards() {
     { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 20 },
     { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 20, align: 'center', render: (v)=> String(v||'') },
   ];
+  if (["backend","admin","owner"].includes(userRole)) {
+    columns.push({ title: "Remarks", key: "remarks", width: 60, render: (_, r) => {
+        const rem = remarksMap[r.jcNo];
+        const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';
+        return (
+          <Space size={6}>
+            <Tag color={color}>{rem?.level ? rem.level.toUpperCase() : '—'}</Tag>
+            <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+          </Space>
+        );
+      }
+    });
+  }
 
-  const total = rows.length;
+  const total = USE_SERVER_PAG ? totalCount : rows.length;
+  const tableHeight = isMobile ? 420 : 600;
+  const visibleRows = USE_SERVER_PAG ? filtered : (renderMode === 'loadMore' ? filtered.slice(0, loadedCount) : filtered);
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -204,7 +265,7 @@ export default function Jobcards() {
             value={branchFilter}
             onChange={setBranchFilter}
             style={{ minWidth: 160 }}
-            disabled={!['owner','admin'].includes(userRole)}
+            disabled={!['owner','admin','backend'].includes(userRole)}
             options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
           />
           <Select value={serviceFilter} onChange={setServiceFilter} style={{ minWidth: 140 }}
@@ -218,7 +279,15 @@ export default function Jobcards() {
         <div style={{ flex: 1 }} />
         <Space>
           <Tag color="blue">Total: {total}</Tag>
-          <Tag color="geekblue">Showing: {filtered.length}</Tag>
+          <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}</Tag>
+          {!USE_SERVER_PAG && (
+          <Select
+            size='small'
+            value={renderMode}
+            onChange={(v)=>{ setRenderMode(v); setLoadedCount(pageSize); }}
+            options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
+            style={{ width: 130 }}
+          />)}
           <Button onClick={() => {
             const ev = new Event('reload-jobcards');
             window.dispatchEvent(ev);
@@ -227,21 +296,66 @@ export default function Jobcards() {
       </div>
 
       <Table
-        dataSource={filtered}
+        dataSource={visibleRows}
         columns={columns}
         loading={loading}
         size={isMobile ? 'small' : 'middle'}
-        pagination={{
+        pagination={USE_SERVER_PAG ? {
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          pageSizeOptions: ['10','25','50','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (t, range) => `${range[0]}-${range[1]} of ${t}`,
+        } : (renderMode==='pagination' ? {
           current: page,
           pageSize,
           showSizeChanger: true,
           pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
-        }}
+        } : false)}
         rowKey={(r) => `${r.jcNo}-${r.mobile}-${r.ts}-${r.key}`}
-        scroll={{ x: 'max-content' }}
+        scroll={{ x: 'max-content', y: tableHeight }}
       />
+
+      {!USE_SERVER_PAG && renderMode==='loadMore' && visibleRows.length < filtered.length ? (
+        <div style={{ display:'flex', justifyContent:'center', padding: 8 }}>
+          <Button onClick={()=> setLoadedCount((n)=> Math.min(n + pageSize, filtered.length))}>
+            Load more ({filtered.length - visibleRows.length} more)
+          </Button>
+        </div>
+      ) : null}
+
+      <Modal
+        open={remarkModal.open}
+        title={`Update Remark: ${remarkModal.refId}`}
+        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onOk={async ()=>{
+          try {
+            if (!GAS_URL) { message.error('Jobcards GAS URL not configured'); return; }
+            const body = GAS_SECRET ? { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET } : { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
+            const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
+            if (resp && (resp.ok || resp.success)) {
+              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
+              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: remarkModal.text } : x));
+              message.success('Remark saved to sheet');
+              setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+            } else { message.error('Save failed'); }
+          } catch { message.error('Save failed'); }
+        }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Select
+            value={remarkModal.level}
+            onChange={(v)=> setRemarkModal((s)=> ({ ...s, level: v }))}
+            options={[{value:'ok',label:'OK (Green)'},{value:'warning',label:'Warning (Yellow)'},{value:'alert',label:'Alert (Red)'}]}
+            style={{ width: 220 }}
+          />
+          <Input maxLength={140} showCount value={remarkModal.text} onChange={(e)=> setRemarkModal((s)=> ({ ...s, text: e.target.value }))} placeholder="Short note (optional)" />
+        </Space>
+      </Modal>
     </div>
   );
 }

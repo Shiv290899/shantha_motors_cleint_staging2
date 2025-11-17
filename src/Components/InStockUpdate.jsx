@@ -14,8 +14,8 @@ export default function InStockUpdate() {
   const [branch, setBranch] = useState("all");
   const [q, setQ] = useState("");
   const [companies, setCompanies] = useState([]);
-  const [models, setModels] = useState([]);
-  const [variants, setVariants] = useState([]);
+  const [, setModels] = useState([]);
+  const [, setVariants] = useState([]);
   const [colors, setColors] = useState([]);
 
   const [selCompanies, setSelCompanies] = useState([]);
@@ -111,6 +111,57 @@ export default function InStockUpdate() {
     setVariants(uniq(items.map((r)=>r.variant)));
     setColors(uniq(items.map((r)=>r.color)));
   }, [items]);
+
+  // Helper for dependent option lists
+  const uniqList = (arr) => Array.from(new Set(arr.map((v) => String(v || "").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+
+  // Dependent options for Model and Variant based on current selections
+  const modelOptionsFiltered = useMemo(() => {
+    const base = selCompanies.length
+      ? items.filter((r) => selCompanies.includes(String(r.company || '').trim()))
+      : items;
+    return uniqList(base.map((r) => r.model));
+  }, [items, selCompanies]);
+
+  const variantOptionsFiltered = useMemo(() => {
+    const base1 = selCompanies.length
+      ? items.filter((r) => selCompanies.includes(String(r.company || '').trim()))
+      : items;
+    const base2 = selModels.length
+      ? base1.filter((r) => selModels.includes(String(r.model || '').trim()))
+      : base1;
+    return uniqList(base2.map((r) => r.variant));
+  }, [items, selCompanies, selModels]);
+
+  // When upstream selections change, prune downstream selections so they remain valid
+  const onCompaniesChange = (vals) => {
+    const base = vals.length
+      ? items.filter((r) => vals.includes(String(r.company || '').trim()))
+      : items;
+    const allowedModels = uniqList(base.map((r) => r.model));
+    const nextModels = selModels.filter((m) => allowedModels.includes(m));
+    const base2 = nextModels.length
+      ? base.filter((r) => nextModels.includes(String(r.model || '').trim()))
+      : base;
+    const allowedVariants = uniqList(base2.map((r) => r.variant));
+    const nextVariants = selVariants.filter((v) => allowedVariants.includes(v));
+    setSelModels(nextModels);
+    setSelVariants(nextVariants);
+    setSelCompanies(vals);
+  };
+
+  const onModelsChange = (vals) => {
+    const base1 = selCompanies.length
+      ? items.filter((r) => selCompanies.includes(String(r.company || '').trim()))
+      : items;
+    const base2 = vals.length
+      ? base1.filter((r) => vals.includes(String(r.model || '').trim()))
+      : base1;
+    const allowedVariants = uniqList(base2.map((r) => r.variant));
+    const nextVariants = selVariants.filter((v) => allowedVariants.includes(v));
+    setSelVariants(nextVariants);
+    setSelModels(vals);
+  };
 
   const filtered = useMemo(() => {
     const s = String(q || "").toLowerCase();
@@ -296,7 +347,7 @@ export default function InStockUpdate() {
             placeholder="Company"
             style={{ minWidth: 180 }}
             value={selCompanies}
-            onChange={setSelCompanies}
+            onChange={onCompaniesChange}
             options={companies.map((v)=>({ value: v, label: v }))}
             maxTagCount={isMobile ? 1 : 3}
           />
@@ -306,8 +357,8 @@ export default function InStockUpdate() {
             placeholder="Model"
             style={{ minWidth: 180 }}
             value={selModels}
-            onChange={setSelModels}
-            options={models.map((v)=>({ value: v, label: v }))}
+            onChange={onModelsChange}
+            options={modelOptionsFiltered.map((v)=>({ value: v, label: v }))}
             maxTagCount={isMobile ? 1 : 3}
           />
           <Select
@@ -317,7 +368,7 @@ export default function InStockUpdate() {
             style={{ minWidth: 200 }}
             value={selVariants}
             onChange={setSelVariants}
-            options={variants.map((v)=>({ value: v, label: v }))}
+            options={variantOptionsFiltered.map((v)=>({ value: v, label: v }))}
             maxTagCount={isMobile ? 1 : 3}
           />
           <Select

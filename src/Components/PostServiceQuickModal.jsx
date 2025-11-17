@@ -62,9 +62,6 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       }
       const payload = {
         postServiceAt: new Date().toISOString(),
-        paymentMode: payment,
-        utr: payment === 'online' ? String(utr || '').trim() : undefined,
-        utrNo: payment === 'online' ? String(utr || '').trim() : undefined,
         formValues: {
           jcNo: jc,
           branch: valsForPrint.branch || "",
@@ -91,6 +88,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
 
       // Save via webhook
       if (webhookUrl) {
+        // Single post-service update (no background pre-save to avoid duplicates)
         await saveJobcardViaWebhook({
           webhookUrl,
           method: 'POST',

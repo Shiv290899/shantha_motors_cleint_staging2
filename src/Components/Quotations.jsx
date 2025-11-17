@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal } from "antd";
+import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 
@@ -33,13 +34,20 @@ export default function Quotations() {
   const [modeFilter, setModeFilter] = useState("all"); // cash | loan | all
   const [statusFilter, setStatusFilter] = useState("all");
   const [q, setQ] = useState("");
+  const debouncedQ = useDebouncedValue(q, 300);
   const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
   // Controlled pagination
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
+  const [pageSize, setPageSize] = useState(10);
+  const [renderMode, setRenderMode] = useState('pagination');
+  const [loadedCount, setLoadedCount] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const USE_SERVER_PAG = String(import.meta.env.VITE_USE_SERVER_PAGINATION || '').toLowerCase() === 'true';
+  const [remarksMap, setRemarksMap] = useState({}); // key: serialNo -> { level, text }
+  const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
 
   useEffect(() => {
     try {
@@ -58,12 +66,13 @@ export default function Quotations() {
   }, []);
 
   useEffect(() => {
-    const isPriv = ["owner","admin"].includes(userRole);
+    const isPriv = ["owner","admin","backend"].includes(userRole);
     if (!isPriv && allowedBranches.length && branchFilter === 'all') {
       setBranchFilter(allowedBranches[0]);
     }
   }, [userRole, allowedBranches, branchFilter]);
 
+  // Server-mode: refetch on filters/page/date change
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -75,13 +84,27 @@ export default function Quotations() {
         const SECRET = import.meta.env.VITE_QUOTATION_GAS_SECRET || '';
         if (!GAS_URL) {
           message.info('Quotations: Apps Script URL not configured — showing empty list.');
-          if (!cancelled) setRows([]);
+          if (!cancelled) { setRows([]); setTotalCount(0); }
           return;
         }
+        const base = { action: 'list' };
+        const filters = {
+          q: debouncedQ || '',
+          branch: branchFilter !== 'all' ? branchFilter : '',
+          mode: modeFilter !== 'all' ? modeFilter : '',
+          status: statusFilter !== 'all' ? statusFilter : '',
+        };
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          filters.start = dateRange[0].startOf('day').valueOf();
+          filters.end = dateRange[1].endOf('day').valueOf();
+        }
+        const payload = USE_SERVER_PAG
+          ? { ...base, page, pageSize, ...filters, ...(SECRET ? { secret: SECRET } : {}) }
+          : (SECRET ? { ...base, secret: SECRET } : base);
         const resp = await saveBookingViaWebhook({
           webhookUrl: GAS_URL,
           method: 'GET',
-          payload: SECRET ? { action: 'list', secret: SECRET } : { action: 'list' },
+          payload,
         });
         const js = resp?.data || resp;
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
@@ -115,12 +138,28 @@ export default function Quotations() {
             mode: mode || (payload && payload.mode) || '',
             brand,
             status,
+            // carry remark fields through for display
+            RemarkLevel: obj.RemarkLevel || obj.remarkLevel || '',
+            RemarkText: obj.RemarkText || obj.remarkText || '',
           };
         });
-        if (!cancelled) setRows(data.filter((r)=>r.name || r.mobile || r.serialNo));
+        // Extract remarks from list rows (RemarkLevel/RemarkText columns)
+        const withRemarks = data.map(r => {
+          const lvlRaw = (r.remarkLevel || r.RemarkLevel || '').toString().toLowerCase();
+          const txt = r.remarkText || r.RemarkText || '';
+          return { ...r, _remarkLevel: lvlRaw, _remarkText: txt };
+        });
+        const filteredRows = withRemarks.filter((r)=>r.name || r.mobile || r.serialNo);
+        if (!cancelled) {
+          setRows(filteredRows);
+          setTotalCount(typeof js.total === 'number' ? js.total : filteredRows.length);
+          const map = {};
+          filteredRows.forEach(rr => { if (rr.serialNo) map[rr.serialNo] = { level: rr._remarkLevel || undefined, text: rr._remarkText || '' }; });
+          setRemarksMap(map);
+        }
       } catch  {
         message.error('Could not load quotations via Apps Script. Check QUOTATION Web App URL / access.');
-        if (!cancelled) setRows([]);
+        if (!cancelled) { setRows([]); setTotalCount(0); }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -129,12 +168,12 @@ export default function Quotations() {
     const handler = () => load();
     window.addEventListener('reload-quotations', handler);
     return () => { cancelled = true; window.removeEventListener('reload-quotations', handler); };
-  }, []);
+  }, [debouncedQ, branchFilter, modeFilter, statusFilter, page, pageSize, dateRange, USE_SERVER_PAG]);
 
   const branches = useMemo(() => {
     const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
     const all = ["all", ...Array.from(set)];
-    const isPriv = ["owner","admin"].includes(userRole);
+    const isPriv = ["owner","admin","backend"].includes(userRole);
     if (!isPriv && allowedBranches.length) return all.filter((b)=> b==='all' || allowedBranches.includes(b));
     return all;
   }, [rows, userRole, allowedBranches]);
@@ -152,9 +191,12 @@ export default function Quotations() {
   }, [rows]);
 
   const filtered = useMemo(() => {
+    if (USE_SERVER_PAG) {
+      return rows.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
+    }
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     const list = rows.filter((r) => {
-      if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+      if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
         if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
       }
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
@@ -166,8 +208,8 @@ export default function Quotations() {
         const t = r.tsMs ?? parseTsMs(r.ts);
         if (!t || t < start || t > end) return false;
       }
-      if (q) {
-        const s = q.toLowerCase();
+      if (debouncedQ) {
+        const s = debouncedQ.toLowerCase();
         if (![
           r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive, r.status
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
@@ -176,10 +218,14 @@ export default function Quotations() {
     });
     // Always show most recent first
     return list.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-  }, [rows, branchFilter, modeFilter, statusFilter, q, dateRange, userRole, allowedBranches]);
+  }, [rows, branchFilter, modeFilter, statusFilter, debouncedQ, dateRange, userRole, allowedBranches, USE_SERVER_PAG]);
 
   // Reset pagination on filters/search/date change
-  useEffect(() => { setPage(1); }, [branchFilter, modeFilter, statusFilter, q, dateRange]);
+  useEffect(() => {
+    setPage(1);
+    setLoadedCount(pageSize);
+  }, [branchFilter, modeFilter, statusFilter, debouncedQ, dateRange]);
+  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
 
   const statusColor = (s) => {
     const k = String(s || '').toLowerCase();
@@ -208,8 +254,23 @@ export default function Quotations() {
     { title: "Company", dataIndex: "company", key: "company", width: 30 },
     { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 50, ellipsis: true },
   ];
+  if (["backend","admin","owner"].includes(userRole)) {
+    columns.push({ title: "Remarks", key: "remarks", width: 60, render: (_, r) => {
+        const rem = remarksMap[r.serialNo];
+        const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';
+        return (
+          <Space size={6}>
+            <Tag color={color}>{rem?.level ? rem.level.toUpperCase() : '—'}</Tag>
+            <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.serialNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+          </Space>
+        );
+      }
+    });
+  }
 
-  const total = rows.length;
+  const total = USE_SERVER_PAG ? totalCount : rows.length;
+  const tableHeight = isMobile ? 420 : 600;
+  const visibleRows = USE_SERVER_PAG ? filtered : (renderMode === 'loadMore' ? filtered.slice(0, loadedCount) : filtered);
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -219,7 +280,7 @@ export default function Quotations() {
             value={branchFilter}
             onChange={setBranchFilter}
             style={{ minWidth: 160 }}
-            disabled={!['owner','admin'].includes(userRole)}
+            disabled={!['owner','admin','backend'].includes(userRole)}
             options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
           />
           <Select value={modeFilter} onChange={setModeFilter} style={{ minWidth: 140 }}
@@ -235,7 +296,15 @@ export default function Quotations() {
         <div style={{ flex: 1 }} />
         <Space>
           <Tag color="blue">Total: {total}</Tag>
-          <Tag color="geekblue">Showing: {filtered.length}</Tag>
+          <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}</Tag>
+          {!USE_SERVER_PAG && (
+          <Select
+            size='small'
+            value={renderMode}
+            onChange={(v)=>{ setRenderMode(v); setLoadedCount(pageSize); }}
+            options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
+            style={{ width: 130 }}
+          />)}
           <Button onClick={() => {
             const ev = new Event('reload-quotations');
             window.dispatchEvent(ev);
@@ -244,22 +313,70 @@ export default function Quotations() {
       </div>
 
       <Table
-        dataSource={filtered}
+        dataSource={visibleRows}
         columns={columns}
         loading={loading}
         size={isMobile ? 'small' : 'middle'}
-        scroll={{ x: 'max-content' }}
-        pagination={{
+        scroll={{ x: 'max-content', y: tableHeight }}
+        pagination={USE_SERVER_PAG ? {
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          pageSizeOptions: ['10','25','50','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (t, range) => `${range[0]}-${range[1]} of ${t}`,
+        } : (renderMode==='pagination' ? {
           current: page,
           pageSize,
           showSizeChanger: true,
           pageSizeOptions: ['10','25','50','100'],
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
-        }}
+        } : false)}
         rowKey={(r) => `${r.serialNo}-${r.mobile}-${r.ts}-${r.key}`}
         
       />
+
+      {!USE_SERVER_PAG && renderMode==='loadMore' && visibleRows.length < filtered.length ? (
+        <div style={{ display:'flex', justifyContent:'center', padding: 8 }}>
+          <Button onClick={()=> setLoadedCount((n)=> Math.min(n + pageSize, filtered.length))}>
+            Load more ({filtered.length - visibleRows.length} more)
+          </Button>
+        </div>
+      ) : null}
+
+      <Modal
+        open={remarkModal.open}
+        title={`Update Remark: ${remarkModal.refId}`}
+        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onOk={async ()=>{
+          try {
+            // Sheet-only: call GAS to persist
+            if (!GAS_URL) { message.error('Quotation GAS URL not configured'); return; }
+            const body = GAS_SECRET ? { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET } : { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
+            const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
+            if (resp && (resp.ok || resp.success)) {
+              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
+              // also update rows array for immediate tag color
+              setRows(prev => prev.map(x => x.serialNo === remarkModal.refId ? { ...x, _remarkLevel: remarkModal.level, _remarkText: remarkModal.text } : x));
+              message.success('Remark saved to sheet');
+              // Also mirror to Google Sheet via Apps Script (kept short and resilient)
+              setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+            } else { message.error('Save failed'); }
+          } catch { message.error('Save failed'); }
+        }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Select
+            value={remarkModal.level}
+            onChange={(v)=> setRemarkModal((s)=> ({ ...s, level: v }))}
+            options={[{value:'ok',label:'OK (Green)'},{value:'warning',label:'Warning (Yellow)'},{value:'alert',label:'Alert (Red)'}]}
+            style={{ width: 220 }}
+          />
+          <Input maxLength={140} showCount value={remarkModal.text} onChange={(e)=> setRemarkModal((s)=> ({ ...s, text: e.target.value }))} placeholder="Short note (optional)" />
+        </Space>
+      </Modal>
     </div>
   );
 }
@@ -299,3 +416,7 @@ function parseTsMs(v) {
   }
   return null;
 }
+  // GAS endpoints (same as used for list)
+  const DEFAULT_QUOT_URL = "https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec";
+  const GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
+  const GAS_SECRET = import.meta.env.VITE_QUOTATION_GAS_SECRET || '';

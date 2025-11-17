@@ -1,65 +1,67 @@
-// src/App.jsx
+import React, { Suspense, lazy } from "react";
 import { Routes, Route } from "react-router-dom";
-import About from "./Components/About";
-import Contact from "./Components/Contact";
-import BookingForm from "./Components/BookingForm";
-import EmiCalculator from "./Components/EmiCalculator";
-import Home from "./Components/Home";
-import Login from "./Components/Login";
-import Register from "./Components/Register";
-import Navbar from "./Components/Navbar"; // ✅ new
-import Quotation from "./Components/Quotation";
-import JobCard from "./Components/JobCard";
-import ProtectedRoute from "./compo/ProtectedRoute"
-import GuestRoute from "./compo/GuestRoute"
-import Admin from "./Components/Admin";
-import Mechanic from "./Components/Mechanic";
-import Executive from "./Components/Executive";
-import Staff from "./Components/Staff";
-import Owner from "./Components/Owner";
-import StockUpdate from "./Components/StockUpdate";
-import RoleRedirect from "./Components/RoleRedirect";
+import Navbar from "./Components/Navbar"; // keep eager for layout
+import ProtectedRoute from "./compo/ProtectedRoute";
+import GuestRoute from "./compo/GuestRoute";
 
-import Employees from "./Components/Employees";
-import Products from "./Components/Products";
-import Service from "./Components/Service";
-import Gallery from "./Components/Gallery";
+// Route-level code splitting (lazy loaded pages)
+const About = lazy(() => import("./Components/About"));
+const Contact = lazy(() => import("./Components/Contact"));
+const BookingForm = lazy(() => import("./Components/BookingForm"));
+const EmiCalculator = lazy(() => import("./Components/EmiCalculator"));
+const Home = lazy(() => import("./Components/Home"));
+const Login = lazy(() => import("./Components/Login"));
+const Register = lazy(() => import("./Components/Register"));
+const Quotation = lazy(() => import("./Components/Quotation"));
+const JobCard = lazy(() => import("./Components/JobCard"));
+const Admin = lazy(() => import("./Components/Admin"));
+const Mechanic = lazy(() => import("./Components/Mechanic"));
+const Staff = lazy(() => import("./Components/Staff"));
+const Owner = lazy(() => import("./Components/Owner"));
+const StockUpdate = lazy(() => import("./Components/StockUpdate"));
+const RoleRedirect = lazy(() => import("./Components/RoleRedirect"));
+const Backend = lazy(() => import("./Components/Backend"));
+const Employees = lazy(() => import("./Components/Employees"));
+const Products = lazy(() => import("./Components/Products"));
+const Service = lazy(() => import("./Components/Service"));
+const Gallery = lazy(() => import("./Components/Gallery"));
 
 
 function App() {
   return (
     <>
-      <Navbar /> {/* ✅ shown on every page */}
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/home" element={<Home />} />
+      <Navbar />
+      <Suspense fallback={<div style={{ padding: 16 }}>Loading…</div>}>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/home" element={<Home />} />
 
-        <Route path="/login" element={<GuestRoute><Login /></GuestRoute>} />
-        <Route path="/quotation" element={<ProtectedRoute><Quotation /></ProtectedRoute>} />
-        <Route path="/register" element={<GuestRoute><Register /></GuestRoute>} />
-        <Route path="/jobcard" element={<ProtectedRoute><JobCard /></ProtectedRoute>} />
-        <Route path="/stock" element={<ProtectedRoute><StockUpdate /></ProtectedRoute>} />
+          <Route path="/login" element={<GuestRoute><Login /></GuestRoute>} />
+          <Route path="/quotation" element={<ProtectedRoute><Quotation /></ProtectedRoute>} />
+          <Route path="/register" element={<GuestRoute><Register /></GuestRoute>} />
+          <Route path="/jobcard" element={<ProtectedRoute><JobCard /></ProtectedRoute>} />
+          <Route path="/stock" element={<ProtectedRoute><StockUpdate /></ProtectedRoute>} />
 
-        {/* Dynamic redirect based on user role */}
-        <Route path="/dashboard" element={<ProtectedRoute><RoleRedirect /></ProtectedRoute>} />
-        <Route path="/admin" element={<ProtectedRoute roles={["admin","owner"]}><Admin /></ProtectedRoute>} />
-        <Route path="/owner" element={<ProtectedRoute ><Owner /></ProtectedRoute>} />
-        <Route path="/mechanic" element={<ProtectedRoute ><Mechanic /></ProtectedRoute>} />
-        <Route path="/executive" element={<ProtectedRoute ><Executive /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute ><Staff /></ProtectedRoute>} />
-        <Route path="/employees" element={<ProtectedRoute><Employees /></ProtectedRoute>} />
-       
-       
-   
-        <Route path="/bookingform" element={<ProtectedRoute><BookingForm /></ProtectedRoute>} />
-        <Route path="/about" element={<About />} />
-        <Route path="/about-us" element={<About />} />
-        <Route path="/emicalculator" element={<ProtectedRoute><EmiCalculator /></ProtectedRoute>} />
-        <Route path="/contact" element={<Contact />} />
-        <Route path="/products" element={<Products />} />
-        <Route path="/service" element={<Service />} />
-        <Route path="/gallery" element={<Gallery />} />
-      </Routes>
+          {/* Dynamic redirect based on user role */}
+          <Route path="/dashboard" element={<ProtectedRoute><RoleRedirect /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute roles={["admin","owner"]}><Admin /></ProtectedRoute>} />
+          <Route path="/owner" element={<ProtectedRoute><Owner /></ProtectedRoute>} />
+          <Route path="/mechanic" element={<ProtectedRoute><Mechanic /></ProtectedRoute>} />
+          
+          <Route path="/staff" element={<ProtectedRoute><Staff /></ProtectedRoute>} />
+          <Route path="/backend" element={<ProtectedRoute><Backend /></ProtectedRoute>} />
+          <Route path="/employees" element={<ProtectedRoute><Employees /></ProtectedRoute>} />
+
+          <Route path="/bookingform" element={<ProtectedRoute><BookingForm /></ProtectedRoute>} />
+          <Route path="/about" element={<About />} />
+          <Route path="/about-us" element={<About />} />
+          <Route path="/emicalculator" element={<ProtectedRoute><EmiCalculator /></ProtectedRoute>} />
+          <Route path="/contact" element={<Contact />} />
+          <Route path="/products" element={<Products />} />
+          <Route path="/service" element={<Service />} />
+          <Route path="/gallery" element={<Gallery />} />
+        </Routes>
+      </Suspense>
     </>
   );
 }

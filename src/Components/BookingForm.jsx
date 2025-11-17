@@ -1,3 +1,4 @@
+// BookingForm.jsx
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Form,
@@ -16,19 +17,24 @@ import {
   Tag,
   Checkbox,
   AutoComplete,
+  Modal,
+  Space,
 } from "antd";
 import { InboxOutlined, CreditCardOutlined, PrinterOutlined } from "@ant-design/icons";
 import { listCurrentStocksPublic } from "../apiCalls/stocks";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
-// Using direct upload to Google Apps Script; no server-side upload import
 import BookingPrintSheet from "./BookingPrintSheet";
 import FetchBooking from "./FetchBooking";
 import { handleSmartPrint } from "../utils/printUtils";
+import dayjs from "dayjs";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
 const { useBreakpoint } = Grid;
 const { Option } = Select;
+
+// Whether to keep a draft between refreshes
+const ENABLE_DRAFT = false;
 
 // Finance options (for HP)
 const FINANCIERS = [
@@ -47,43 +53,64 @@ const phoneRule = [
   { pattern: /^[6-9]\d{9}$/, message: "Enter a valid 10-digit Indian mobile number" },
 ];
 
-// ---- Vehicle data via Google Sheet (shared with Quotation) ----
 // CSV published from Google Sheets (same as in Quotation.jsx)
 const SHEET_CSV_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
 
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
-// Prefer env var VITE_BOOKING_GAS_URL; fallback to provided URL
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbxykgDUyhsZpsXD5YK2J98LWzjphg-EEVwQs3SxqRD1F8PhTNnD5hvnkw8bWiQzGCFn/exec";
-const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
-// Control whether to send base64 file in payload. Default: 'none' (do not send)
-// Attachments are uploaded via GAS; no base64 in payload
-// Minimal CSV parser (copied from Quotation logic)
+  "https://script.google.com/macros/s/AKfycbxKP6gLUobik6z3N2rJcUMCrmsA5NOaVSEHVn9t6h5zNoVNWpYHaiJDi2UMiMJUpIprmA/exec";
+
+const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
+
+// Minimal CSV parser
 const parseCsv = (text) => {
   const rows = [];
-  let row = [], col = "", inQuotes = false;
+  let row = [],
+    col = "",
+    inQuotes = false;
   for (let i = 0; i < text.length; i++) {
-    const c = text[i], n = text[i + 1];
-    if (c === '"' && !inQuotes) { inQuotes = true; continue; }
-    if (c === '"' && inQuotes) {
-      if (n === '"') { col += '"'; i++; continue; }
-      inQuotes = false; continue;
+    const c = text[i],
+      n = text[i + 1];
+    if (c === '"' && !inQuotes) {
+      inQuotes = true;
+      continue;
     }
-    if (c === "," && !inQuotes) { row.push(col); col = ""; continue; }
+    if (c === '"' && inQuotes) {
+      if (n === '"') {
+        col += '"';
+        i++;
+        continue;
+      }
+      inQuotes = false;
+      continue;
+    }
+    if (c === "," && !inQuotes) {
+      row.push(col);
+      col = "";
+      continue;
+    }
     if ((c === "\n" || c === "\r") && !inQuotes) {
-      if (col !== "" || row.length) { row.push(col); rows.push(row); row = []; col = ""; }
+      if (col !== "" || row.length) {
+        row.push(col);
+        rows.push(row);
+        row = [];
+        col = "";
+      }
       if (c === "\r" && n === "\n") i++;
       continue;
     }
     col += c;
   }
-  if (col !== "" || row.length) { row.push(col); rows.push(row); }
+  if (col !== "" || row.length) {
+    row.push(col);
+    rows.push(row);
+  }
   return rows;
 };
 
-// Header aliases (copied from Quotation)
+// Header aliases
 const HEADERS = {
   company: ["Company", "Company Name"],
   model: ["Model", "Model Name"],
@@ -92,7 +119,11 @@ const HEADERS = {
 };
 
 const pick = (row, keys) =>
-  String(keys.map((k) => row[k] ?? "").find((v) => v !== "") || "").trim();
+  String(
+    keys
+      .map((k) => row[k] ?? "")
+      .find((v) => v !== "") || ""
+  ).trim();
 
 const normalizeSheetRow = (row = {}) => ({
   company: pick(row, HEADERS.company),
@@ -107,10 +138,22 @@ const normalizeFallbackRow = (row = {}) => ({
   company: String(row["Company Name"] || row.company || "").trim(),
   model: String(row["Model Name"] || row.model || "").trim(),
   variant: String(row["Variant"] || row.variant || "").trim(),
-  onRoadPrice: Number(String(row["On-Road Price"] || row.onRoadPrice || "0").replace(/[,₹\s]/g, "")) || 0,
+  onRoadPrice:
+    Number(
+      String(row["On-Road Price"] || row.onRoadPrice || "0").replace(
+        /[,₹\s]/g,
+        ""
+      )
+    ) || 0,
 });
 
-export default function BookingForm({ asModal = false, initialValues = null, onSuccess } = {}) {
+export default function BookingForm({
+  asModal = false,
+  initialValues = null,
+  onSuccess,
+  startPaymentsOnly = false,
+  editRefDefault = null,
+} = {}) {
   const printRef = useRef(null);
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -118,23 +161,36 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
 
   const [form] = Form.useForm();
   const [addressProofFiles, setAddressProofFiles] = useState([]);
-  // Removed server-side upload state; uploads will be done directly to GAS on submit
   const [bikeData, setBikeData] = useState([]);
+  // Payments-only update mode (after Fetch Details)
+  const [paymentsOnlyMode, setPaymentsOnlyMode] = useState(Boolean(startPaymentsOnly));
+  const [editRef, setEditRef] = useState(() => editRefDefault || ({ bookingId: null, mobile: null }));
 
   // User context for auto-filling Executive and Branch
   const currentUser = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; }
+    try {
+      return JSON.parse(localStorage.getItem("user") || "null");
+    } catch {
+      return null;
+    }
   }, []);
-  const executiveDefault = useMemo(() => (
-    currentUser?.name || currentUser?.displayName || currentUser?.email || ''
-  ), [currentUser]);
+  const executiveDefault = useMemo(
+    () =>
+      currentUser?.name ||
+      currentUser?.displayName ||
+      currentUser?.email ||
+      "",
+    [currentUser]
+  );
   const branchDefault = useMemo(() => {
-    const firstBranch = Array.isArray(currentUser?.branches) ? (currentUser.branches[0]?.name || currentUser.branches[0]) : undefined;
+    const firstBranch = Array.isArray(currentUser?.branches)
+      ? currentUser.branches[0]?.name || currentUser.branches[0]
+      : undefined;
     return (
       currentUser?.formDefaults?.branchName ||
       currentUser?.primaryBranch?.name ||
       firstBranch ||
-      ''
+      ""
     );
   }, [currentUser]);
 
@@ -144,9 +200,16 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   const selectedColor = Form.useWatch("color", form);
   const purchaseType = Form.useWatch("purchaseType", form);
   const addressProofMode = Form.useWatch("addressProofMode", form);
-  const paymentMode = Form.useWatch("paymentMode", form);
+  const paymentMode = Form.useWatch("paymentMode", form); // legacy, unused
+  const bookingAmount1 = Form.useWatch("bookingAmount1", form);
+  const bookingAmount2 = Form.useWatch("bookingAmount2", form);
+  const bookingAmount3 = Form.useWatch("bookingAmount3", form);
+  const paymentMode1 = Form.useWatch("paymentMode1", form);
+  const paymentMode2 = Form.useWatch("paymentMode2", form);
+  const paymentMode3 = Form.useWatch("paymentMode3", form);
   const chassisNo = Form.useWatch("chassisNo", form);
-  // Additional watchers so print values stay in sync live
+
+  // Live-print watchers
   const wCustomerName = Form.useWatch("customerName", form);
   const wMobileNumber = Form.useWatch("mobileNumber", form);
   const wAddress = Form.useWatch("address", form);
@@ -155,18 +218,25 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   const wRtoOffice = Form.useWatch("rtoOffice", form);
   const wFinancier = Form.useWatch("financier", form);
   const wNohpFinancier = Form.useWatch("nohpFinancier", form);
-  const bookingAmountWatch = Form.useWatch("bookingAmount", form);
+
+  // Total booking amount
+  const bookingTotal = useMemo(() => {
+    const n = (v) => Number(v || 0) || 0;
+    return n(bookingAmount1) + n(bookingAmount2) + n(bookingAmount3);
+  }, [bookingAmount1, bookingAmount2, bookingAmount3]);
+
   const downPaymentWatch = Form.useWatch("downPayment", form);
   const extraFittingAmountWatch = Form.useWatch("extraFittingAmount", form);
   const affidavitChargesWatch = Form.useWatch("affidavitCharges", form);
 
   // On-road price for selected vehicle (from sheet)
   const selectedOnRoadPrice = useMemo(() => {
-    const norm = (s) => String(s || '').trim().toLowerCase();
+    const norm = (s) => String(s || "").trim().toLowerCase();
     const found = bikeData.find(
-      (r) => norm(r.company) === norm(selectedCompany) &&
-             norm(r.model) === norm(selectedModel) &&
-             norm(r.variant) === norm(selectedVariant)
+      (r) =>
+        norm(r.company) === norm(selectedCompany) &&
+        norm(r.model) === norm(selectedModel) &&
+        norm(r.variant) === norm(selectedVariant)
     );
     return Number(found?.onRoadPrice || 0) || 0;
   }, [bikeData, selectedCompany, selectedModel, selectedVariant]);
@@ -174,26 +244,42 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   const totalDp = useMemo(() => {
     const dp = Number(downPaymentWatch || 0) || 0;
     const extra = Number(extraFittingAmountWatch || 0) || 0;
-    const aff = addressProofMode === 'additional' ? (Number(affidavitChargesWatch || 0) || 0) : 0;
+    const aff =
+      addressProofMode === "additional"
+        ? Number(affidavitChargesWatch || 0) || 0
+        : 0;
     return dp + extra + aff;
-  }, [downPaymentWatch, extraFittingAmountWatch, affidavitChargesWatch, addressProofMode]);
+  }, [
+    downPaymentWatch,
+    extraFittingAmountWatch,
+    affidavitChargesWatch,
+    addressProofMode,
+  ]);
 
   const balancedDp = useMemo(() => {
-    const booking = Number(bookingAmountWatch || 0) || 0;
+    const booking = Number(bookingTotal || 0) || 0;
     return totalDp - booking;
-  }, [totalDp, bookingAmountWatch]);
+  }, [totalDp, bookingTotal]);
 
   // Cash flow totals
   const totalVehicleCost = useMemo(() => {
     const extra = Number(extraFittingAmountWatch || 0) || 0;
-    const aff = addressProofMode === 'additional' ? (Number(affidavitChargesWatch || 0) || 0) : 0;
+    const aff =
+      addressProofMode === "additional"
+        ? Number(affidavitChargesWatch || 0) || 0
+        : 0;
     return (Number(selectedOnRoadPrice) || 0) + extra + aff;
-  }, [selectedOnRoadPrice, extraFittingAmountWatch, affidavitChargesWatch, addressProofMode]);
+  }, [
+    selectedOnRoadPrice,
+    extraFittingAmountWatch,
+    affidavitChargesWatch,
+    addressProofMode,
+  ]);
 
   const balancedAmount = useMemo(() => {
-    const booking = Number(bookingAmountWatch || 0) || 0;
+    const booking = Number(bookingTotal || 0) || 0;
     return totalVehicleCost - booking;
-  }, [totalVehicleCost, bookingAmountWatch]);
+  }, [totalVehicleCost, bookingTotal]);
 
   const [submitting, setSubmitting] = useState(false);
   const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
@@ -206,23 +292,50 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   const handlePrint = () => {
     if (Date.now() < actionCooldownUntil) return;
     startActionCooldown(6000);
-    try { handleSmartPrint(printRef.current); } catch { /* ignore */ }
+    try {
+      handleSmartPrint(printRef.current);
+    } catch {
+      // ignore
+    }
   };
 
-  // --- Draft persistence to prevent data loss (excluding files) ---
-  const DRAFT_KEY = 'Booking:draft:v1';
-  const readJson = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
-  const writeJson = (k, obj) => { try { localStorage.setItem(k, JSON.stringify(obj)); } catch { /* ignore quota */ } };
+  // --- Draft persistence (excluding files) ---
+  const DRAFT_KEY = "Booking:draft:v1";
+  const readJson = (k, def) => {
+    try {
+      const v = localStorage.getItem(k);
+      return v ? JSON.parse(v) : def;
+    } catch {
+      return def;
+    }
+  };
+  const writeJson = (k, obj) => {
+    try {
+      localStorage.setItem(k, JSON.stringify(obj));
+    } catch {
+      // ignore
+    }
+  };
 
-  // Restore draft once on mount
   useEffect(() => {
+    if (!ENABLE_DRAFT) {
+      try {
+        localStorage.removeItem(DRAFT_KEY);
+      } catch {
+        //hgs
+      }
+      form.resetFields();
+      return;
+    }
     const draft = readJson(DRAFT_KEY, null);
-    if (draft && typeof draft === 'object') {
+    if (draft && typeof draft === "object") {
       try {
         form.setFieldsValue(draft);
         if (draft.company) setSelectedCompany(draft.company);
         if (draft.bikeModel) setSelectedModel(draft.bikeModel);
-      } catch { /* ignore */ }
+      } catch {
+        //asv
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -230,41 +343,64 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   // Submit helper with secret and error handling
   const submitToWebhook = async (payload) => {
     if (!BOOKING_GAS_URL) return { success: true, offline: true };
-    const merged = BOOKING_GAS_SECRET ? { ...payload, secret: BOOKING_GAS_SECRET } : payload;
-    const resp = await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: 'POST', payload: merged });
+    const merged = BOOKING_GAS_SECRET
+      ? { ...payload, secret: BOOKING_GAS_SECRET }
+      : payload;
+    const resp = await saveBookingViaWebhook({
+      webhookUrl: BOOKING_GAS_URL,
+      method: "POST",
+      payload: merged,
+    });
     return resp;
   };
 
   // Chassis availability state
-  const [chassisStatus, setChassisStatus] = useState("idle"); // idle|checking|found|not_found
+  const [chassisStatus, setChassisStatus] = useState("idle"); // idle|checking|found|not_found|allot
   const [chassisInfo, setChassisInfo] = useState(null);
 
-  // Prepare booking values for the printable sheet (sample)
+  // Prepare booking values for the printable sheet
   const valsForPrint = useMemo(() => {
     const fv = form.getFieldsValue(true);
     const v = {
       customerName: fv.customerName,
       mobileNumber: fv.mobileNumber,
       address: fv.address,
-      branch: fv.branch || branchDefault || '',
-      executive: fv.executive || executiveDefault || '',
+      branch: fv.branch || branchDefault || "",
+      executive: fv.executive || executiveDefault || "",
       rtoOffice: fv.rtoOffice,
       purchaseMode: fv.purchaseType,
-      paymentMode: fv.paymentMode,
-      paymentReference: fv.paymentMode === 'online' ? fv.paymentReference : undefined,
-      bookingAmount: fv.bookingAmount,
-      // Address proof details for print
+      bookingAmount: bookingTotal,
+      payments: [
+        {
+          amount: fv.bookingAmount1,
+          mode: fv.paymentMode1,
+          reference:
+            fv.paymentMode1 === "online" ? fv.paymentReference1 : undefined,
+        },
+        {
+          amount: fv.bookingAmount2,
+          mode: fv.paymentMode2,
+          reference:
+            fv.paymentMode2 === "online" ? fv.paymentReference2 : undefined,
+        },
+        {
+          amount: fv.bookingAmount3,
+          mode: fv.paymentMode3,
+          reference:
+            fv.paymentMode3 === "online" ? fv.paymentReference3 : undefined,
+        },
+      ].filter((p) => Number(p.amount || 0) > 0 && p.mode),
       addressProofMode: fv.addressProofMode,
       addressProofTypes: fv.addressProofTypes || [],
-      // Single uploaded file name (PDF)
-      fileName: (addressProofFiles && addressProofFiles[0]?.name) || undefined,
+      fileName:
+        (addressProofFiles && addressProofFiles[0]?.name) || undefined,
       vehicle: {
         company: fv.company,
         model: fv.bikeModel,
         variant: fv.variant,
         color: fv.color,
         chassisNo: fv.chassisNo === "__ALLOT__" ? undefined : fv.chassisNo,
-        availability: fv.chassisNo === "__ALLOT__" ? 'allot' : chassisStatus,
+        availability: fv.chassisNo === "__ALLOT__" ? "allot" : chassisStatus,
       },
       financier: fv.financier || fv.nohpFinancier,
       createdAt: new Date(),
@@ -275,7 +411,6 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
     branchDefault,
     executiveDefault,
     chassisStatus,
-    // live-print important dependencies
     purchaseType,
     paymentMode,
     addressProofMode,
@@ -293,25 +428,34 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
     wFinancier,
     wNohpFinancier,
     addressProofFiles,
+    bookingTotal,
   ]);
 
   // In-stock derived options
   const [stockItems, setStockItems] = useState([]);
   const [loadingStocks, setLoadingStocks] = useState(false);
 
-  // Helpers
-  // (date helper removed; not used in this version)
-
   const checkChassis = async (v) => {
     const q = String(v || "").trim().toUpperCase();
-    if (q === "__ALLOT__") { setChassisStatus("allot"); setChassisInfo(null); return; }
-    if (!q || q.length < 6) { setChassisStatus("idle"); setChassisInfo(null); return; }
+    if (q === "__ALLOT__") {
+      setChassisStatus("allot");
+      setChassisInfo(null);
+      return;
+    }
+    if (!q || q.length < 6) {
+      setChassisStatus("idle");
+      setChassisInfo(null);
+      return;
+    }
     setChassisStatus("checking");
     setChassisInfo(null);
     try {
       const resp = await listCurrentStocksPublic({ limit: 1500 });
       const list = Array.isArray(resp?.data) ? resp.data : [];
-      const found = list.find((r) => String(r.chassisNo || r.chassis || "").toUpperCase() === q);
+      const found = list.find(
+        (r) =>
+          String(r.chassisNo || r.chassis || "").toUpperCase() === q
+      );
       if (found) {
         setChassisStatus("found");
         setChassisInfo({
@@ -326,7 +470,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         setChassisStatus("not_found");
         setChassisInfo(null);
       }
-    } catch  {
+    } catch {
       setChassisStatus("idle");
       setChassisInfo(null);
       message.error("Could not verify chassis availability.");
@@ -334,52 +478,56 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   };
 
   useEffect(() => {
-    const t = setTimeout(() => { checkChassis(chassisNo); }, 600);
+    const t = setTimeout(() => {
+      checkChassis(chassisNo);
+    }, 600);
     return () => clearTimeout(t);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chassisNo]);
 
   // Keep affidavit charges zero when not in 'additional' mode
   useEffect(() => {
-    if (addressProofMode !== 'additional') {
-      const cur = form.getFieldValue('affidavitCharges');
-      if ((Number(cur) || 0) !== 0) form.setFieldsValue({ affidavitCharges: 0 });
+    if (addressProofMode !== "additional") {
+      const cur = form.getFieldValue("affidavitCharges");
+      if ((Number(cur) || 0) !== 0)
+        form.setFieldsValue({ affidavitCharges: 0 });
     }
   }, [addressProofMode, form]);
 
   // Auto-fill Affidavit Charges by company
-  // Default: 250; For Bajaj: 350
   useEffect(() => {
     try {
-      if (addressProofMode !== 'additional') return;
-      const comp = String(selectedCompany || form.getFieldValue('company') || '').trim();
+      if (addressProofMode !== "additional") return;
+      const comp = String(
+        selectedCompany || form.getFieldValue("company") || ""
+      ).trim();
       if (!comp) return;
       const isBajaj = /bajaj/i.test(comp);
       const defAmt = isBajaj ? 350 : 250;
-      const current = Number(form.getFieldValue('affidavitCharges')) || 0;
-      // Set when empty/zero or when switching company; do not fight user edits
+      const current = Number(form.getFieldValue("affidavitCharges")) || 0;
       if (current === 0 || current === 250 || current === 350) {
-        if (current !== defAmt) form.setFieldsValue({ affidavitCharges: defAmt });
+        if (current !== defAmt)
+          form.setFieldsValue({ affidavitCharges: defAmt });
       }
     } catch {
       // ignore
     }
   }, [addressProofMode, selectedCompany, form]);
 
-  // Clear payment reference when not online
+  // Clear payment references when the corresponding mode is not online
   useEffect(() => {
-    if (paymentMode !== 'online') {
-      const cur = form.getFieldValue('paymentReference');
-      if (cur) form.setFieldsValue({ paymentReference: undefined });
-    }
-  }, [paymentMode, form]);
+    const patch = {};
+    if (paymentMode1 !== "online") patch.paymentReference1 = undefined;
+    if (paymentMode2 !== "online") patch.paymentReference2 = undefined;
+    if (paymentMode3 !== "online") patch.paymentReference3 = undefined;
+    if (Object.keys(patch).length) form.setFieldsValue(patch);
+  }, [paymentMode1, paymentMode2, paymentMode3, form]);
 
-  // Apply external initial values (e.g., when used inside a modal from Stocks)
+  // Apply external initial values (e.g., from Stocks)
   useEffect(() => {
-    if (initialValues && typeof initialValues === 'object') {
+    if (initialValues && typeof initialValues === "object") {
       try {
         const patch = { ...initialValues };
-        // Normalize field names if alternative keys are provided
         if (patch.model && !patch.bikeModel) patch.bikeModel = patch.model;
         if (patch.chassis && !patch.chassisNo) patch.chassisNo = patch.chassis;
         form.setFieldsValue(patch);
@@ -389,19 +537,20 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         // ignore
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialValues]);
 
   // Ensure Executive and Branch are prefilled
   useEffect(() => {
     const cur = form.getFieldsValue(["executive", "branch"]);
     const patch = {};
-    if (!cur.executive && executiveDefault) patch.executive = executiveDefault;
+    if (!cur.executive && executiveDefault)
+      patch.executive = executiveDefault;
     if (!cur.branch && branchDefault) patch.branch = branchDefault;
     if (Object.keys(patch).length) form.setFieldsValue(patch);
   }, [form, executiveDefault, branchDefault]);
 
-  // Load vehicle data from Google Sheet (same dataset as Quotation). Fallback to /bikeData.json
+  // Load vehicle data from Google Sheet
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -418,10 +567,11 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
           headers.forEach((h, i) => (obj[h] = r[i] ?? ""));
           return obj;
         });
-        const cleaned = data.map(normalizeSheetRow).filter((r) => r.company && r.model && r.variant);
+        const cleaned = data
+          .map(normalizeSheetRow)
+          .filter((r) => r.company && r.model && r.variant);
         if (!cancelled) setBikeData(cleaned);
-      } catch  {
-        // Fallback 1: a static aggregated file if present
+      } catch {
         try {
           const res2 = await fetch("/bikeData.json", { cache: "no-store" });
           if (!res2.ok) throw new Error("fallback missing");
@@ -430,35 +580,50 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             .map(normalizeFallbackRow)
             .filter((r) => r.company && r.model && r.variant);
           if (!cancelled) setBikeData(cleaned);
-          if (!Array.isArray(data)) message.warning("Loaded fallback bikeData.json");
+          if (!Array.isArray(data))
+            message.warning("Loaded fallback bikeData.json");
         } catch {
-          // Fallback 2: merge brand JSONs already present in /public
           try {
             const brands = [
-              'bajaj', 'honda', 'tvs', 'suzuki', 'yamaha', 'royalEnfield'
+              "bajaj",
+              "honda",
+              "tvs",
+              "suzuki",
+              "yamaha",
+              "royalEnfield",
             ];
             const lists = await Promise.all(
               brands.map(async (b) => {
                 try {
-                  const r = await fetch(`/${b}.json`, { cache: 'no-store' });
+                  const r = await fetch(`/${b}.json`, {
+                    cache: "no-store",
+                  });
                   if (!r.ok) return [];
                   const js = await r.json();
                   return Array.isArray(js) ? js : [];
-                } catch { return []; }
+                } catch {
+                  return [];
+                }
               })
             );
             const merged = lists.flat();
-            const cleaned = merged.map(normalizeFallbackRow).filter((r) => r.company && r.model && r.variant);
+            const cleaned = merged
+              .map(normalizeFallbackRow)
+              .filter((r) => r.company && r.model && r.variant);
             if (!cancelled) setBikeData(cleaned);
-            if (!cleaned.length) throw new Error('no data');
+            if (!cleaned.length) throw new Error("no data");
           } catch {
-            message.error("Could not load vehicle data. Please try again later.");
+            message.error(
+              "Could not load vehicle data. Please try again later."
+            );
           }
         }
       }
     };
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Dropdown lists
@@ -469,7 +634,13 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
 
   const models = useMemo(
     () =>
-      [...new Set(bikeData.filter((r) => r.company === selectedCompany).map((r) => r.model))],
+      [
+        ...new Set(
+          bikeData
+            .filter((r) => r.company === selectedCompany)
+            .map((r) => r.model)
+        ),
+      ],
     [bikeData, selectedCompany]
   );
 
@@ -478,7 +649,9 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       [
         ...new Set(
           bikeData
-            .filter((r) => r.company === selectedCompany && r.model === selectedModel)
+            .filter(
+              (r) => r.company === selectedCompany && r.model === selectedModel
+            )
             .map((r) => r.variant)
         ),
       ],
@@ -489,7 +662,10 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      if (!selectedCompany || !selectedModel || !selectedVariant) { setStockItems([]); return; }
+      if (!selectedCompany || !selectedModel || !selectedVariant) {
+        setStockItems([]);
+        return;
+      }
       setLoadingStocks(true);
       try {
         const resp = await listCurrentStocksPublic({ limit: 2000 });
@@ -502,16 +678,22 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       }
     };
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [selectedCompany, selectedModel, selectedVariant]);
 
   // Derive colors and chassis from stockItems based on selection
   const availableColors = useMemo(() => {
-    const norm = (s) => String(s || '').trim().toLowerCase();
+    const norm = (s) => String(s || "").trim().toLowerCase();
     const uniq = new Set();
     stockItems.forEach((s) => {
-      if (norm(s.company) === norm(selectedCompany) && norm(s.model) === norm(selectedModel) && norm(s.variant) === norm(selectedVariant)) {
-        const c = String(s.color || '').trim();
+      if (
+        norm(s.company) === norm(selectedCompany) &&
+        norm(s.model) === norm(selectedModel) &&
+        norm(s.variant) === norm(selectedVariant)
+      ) {
+        const c = String(s.color || "").trim();
         if (c) uniq.add(c);
       }
     });
@@ -519,12 +701,18 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   }, [stockItems, selectedCompany, selectedModel, selectedVariant]);
 
   const availableChassis = useMemo(() => {
-    const norm = (s) => String(s || '').trim().toLowerCase();
+    const norm = (s) => String(s || "").trim().toLowerCase();
     const out = [];
     stockItems.forEach((s) => {
-      if (norm(s.company) === norm(selectedCompany) && norm(s.model) === norm(selectedModel) && norm(s.variant) === norm(selectedVariant)) {
+      if (
+        norm(s.company) === norm(selectedCompany) &&
+        norm(s.model) === norm(selectedModel) &&
+        norm(s.variant) === norm(selectedVariant)
+      ) {
         if (!selectedColor || norm(s.color) === norm(selectedColor)) {
-          const ch = String(s.chassisNo || s.chassis || '').trim().toUpperCase();
+          const ch = String(s.chassisNo || s.chassis || "")
+            .trim()
+            .toUpperCase();
           if (ch && !out.includes(ch)) out.push(ch);
         }
       }
@@ -534,7 +722,9 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
 
   // Upload rules (PDF only, up to 5MB)
   const beforeUpload = (file) => {
-    const isPdf = file.type === "application/pdf" || (file.name || "").toLowerCase().endsWith('.pdf');
+    const isPdf =
+      file.type === "application/pdf" ||
+      (file.name || "").toLowerCase().endsWith(".pdf");
     if (!isPdf) {
       message.error("Only PDF files are allowed.");
       return Upload.LIST_IGNORE;
@@ -547,67 +737,110 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
     return false; // prevent auto-upload, keep in fileList
   };
 
-  // Removed auto-upload; we'll upload to GAS on submit
-
-  const fileToBase64 = (file) => new Promise((resolve, reject) => {
-    try {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const res = String(reader.result || "");
-        const idx = res.indexOf(',');
-        resolve(idx >= 0 ? res.slice(idx + 1) : res);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file.originFileObj || file);
-    } catch (e) { reject(e); }
-  });
-
   // Upload file directly to GAS to obtain Drive link
   const uploadFileToGAS = async (file) => {
     const fd = new FormData();
-    fd.append('action', 'upload');
-    if (BOOKING_GAS_SECRET) fd.append('secret', BOOKING_GAS_SECRET);
+    fd.append("action", "upload");
+    if (BOOKING_GAS_SECRET) fd.append("secret", BOOKING_GAS_SECRET);
     const origin = file?.originFileObj || file;
-    fd.append('file', origin, file?.name || origin?.name || 'document.pdf');
-    const resp = await fetch(BOOKING_GAS_URL, { method: 'POST', body: fd, credentials: 'omit' });
+    fd.append(
+      "file",
+      origin,
+      file?.name || origin?.name || "document.pdf"
+    );
+    const resp = await fetch(BOOKING_GAS_URL, {
+      method: "POST",
+      body: fd,
+      credentials: "omit",
+    });
     let js = null;
-    try { js = await resp.json(); } catch { js = null; }
+    try {
+      js = await resp.json();
+    } catch {
+      js = null;
+    }
     if (js && (js.ok || js.success)) return js;
-    throw new Error('Upload failed');
+    throw new Error("Upload failed");
   };
+
+  // Fallback: read small file as base64 for server-side upload
+  const fileToBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      try {
+        const reader = new FileReader();
+        const origin = file?.originFileObj || file;
+        reader.onload = () => {
+          const s = String(reader.result || '');
+          const idx = s.indexOf(',');
+          resolve(idx >= 0 ? s.slice(idx + 1) : s);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(origin);
+      } catch (e) {
+        reject(e);
+      }
+    });
 
   const onFinish = async (values) => {
     try {
       if (Date.now() < actionCooldownUntil) return;
       startActionCooldown(6000);
-      // Require at least one document uploaded (independent of address proof)
-      if (!addressProofFiles || addressProofFiles.length === 0) {
-        message.error('Please upload a PDF document');
-        return;
+
+      // In normal mode require a document; in payments-only mode allow optional
+      if (!paymentsOnlyMode) {
+        if (!addressProofFiles || addressProofFiles.length === 0) {
+          message.error("Please upload a PDF document");
+          return;
+        }
       }
+
       setSubmitting(true);
-      // Upload the selected file to GAS to obtain Drive link (if possible)
+
+      // Upload selected file if present (optional in payments-only mode)
+      let file = undefined;
       const f = (addressProofFiles || [])[0];
-      let file = { name: f.name, mimeType: f.type || 'application/pdf', size: f.size };
-      try {
-        const up = await uploadFileToGAS(f);
-        if (up && (up.url || up.fileId)) file = { ...file, ...up };
-      } catch {
-        // Fallback: attach small files as base64 so GAS can upload
+      if (f) {
+        file = {
+          name: f.name,
+          mimeType: f.type || "application/pdf",
+          size: f.size,
+        };
         try {
-          if ((f.size || 0) <= 1024 * 1024) {
-            const base64 = await fileToBase64(f);
-            file.base64 = base64;
-          }
-        } catch { /* ignore */ }
+          const up = await uploadFileToGAS(f);
+          if (up && (up.url || up.fileId)) file = { ...file, ...up };
+        } catch {
+          try {
+            if ((f.size || 0) <= 3 * 1024 * 1024) {
+              const base64 = await fileToBase64(f);
+              file.base64 = base64;
+            }
+          } catch { /* ignore */ }
+        }
       }
 
       // Compute DP totals for submission
-      const effAff = values.addressProofMode === 'additional' ? (Number(values.affidavitCharges) || 0) : 0;
-      const totalDpCalc = (Number(values.downPayment) || 0) + (Number(values.extraFittingAmount) || 0) + effAff;
-      const balancedDpCalc = totalDpCalc - ((Number(values.bookingAmount) || 0));
+      const effAff =
+        values.addressProofMode === "additional"
+          ? Number(values.affidavitCharges) || 0
+          : 0;
+      const totalDpCalc =
+        (Number(values.downPayment) || 0) +
+        (Number(values.extraFittingAmount) || 0) +
+        effAff;
+      const bookingSum =
+        (Number(values.bookingAmount1) || 0) +
+        (Number(values.bookingAmount2) || 0) +
+        (Number(values.bookingAmount3) || 0);
 
-      // Prepare raw payload snapshot (compact JSON for single-sheet column)
+      if (bookingSum <= 0) {
+        message.error("Please enter at least one partial booking payment");
+        setSubmitting(false);
+        return;
+      }
+
+      const balancedDpCalc = totalDpCalc - bookingSum;
+
+      // Prepare raw payload snapshot
       const rawPayloadObj = {
         customerName: values.customerName,
         mobileNumber: values.mobileNumber,
@@ -616,37 +849,80 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
           model: values.bikeModel,
           variant: values.variant,
           color: values.color || undefined,
-          chassisNo: values.chassisNo === "__ALLOT__" ? undefined : values.chassisNo,
+          chassisNo:
+            values.chassisNo === "__ALLOT__" ? undefined : values.chassisNo,
         },
         rtoOffice: values.rtoOffice,
         purchaseMode: values.purchaseType,
-        paymentMode: values.paymentMode,
-        paymentReference: values.paymentMode === 'online' ? (values.paymentReference || undefined) : undefined,
+        payments: [
+          {
+            amount: values.bookingAmount1,
+            mode: values.paymentMode1,
+            reference:
+              values.paymentMode1 === "online"
+                ? values.paymentReference1 || undefined
+                : undefined,
+          },
+          {
+            amount: values.bookingAmount2,
+            mode: values.paymentMode2,
+            reference:
+              values.paymentMode2 === "online"
+                ? values.paymentReference2 || undefined
+                : undefined,
+          },
+          {
+            amount: values.bookingAmount3,
+            mode: values.paymentMode3,
+            reference: values.paymentReference3 || undefined,
+          },
+        ].filter((p) => Number(p.amount || 0) > 0 && p.mode),
         addressProofMode: values.addressProofMode,
         addressProofTypes: values.addressProofTypes || [],
         address: values.address || undefined,
-        bookingAmount: values.bookingAmount ?? undefined,
+        bookingAmount: bookingSum || undefined,
         // Loan / No HP
-        disbursementAmount: (values.purchaseType === 'loan' || values.purchaseType === 'nohp') ? (values.disbursementAmount ?? undefined) : undefined,
+        disbursementAmount:
+          values.purchaseType === "loan" ||
+          values.purchaseType === "nohp"
+            ? values.disbursementAmount ?? undefined
+            : undefined,
         // DP breakdown
         dp: {
           downPayment: values.downPayment ?? undefined,
           extraFittingAmount: values.extraFittingAmount ?? 0,
-          affidavitCharges: values.addressProofMode === 'additional' ? (values.affidavitCharges ?? 0) : 0,
+          affidavitCharges:
+            values.addressProofMode === "additional"
+              ? values.affidavitCharges ?? 0
+              : 0,
           totalDp: totalDpCalc,
           balancedDp: balancedDpCalc,
         },
         // Cash totals
         cash: {
           onRoadPrice: selectedOnRoadPrice,
-          totalVehicleCost: purchaseType === 'cash' ? (Number(selectedOnRoadPrice) || 0) + (Number(values.extraFittingAmount) || 0) + (values.addressProofMode === 'additional' ? (Number(values.affidavitCharges) || 0) : 0) : undefined,
-          balancedAmount: purchaseType === 'cash' ? (((Number(selectedOnRoadPrice) || 0) + (Number(values.extraFittingAmount) || 0) + (values.addressProofMode === 'additional' ? (Number(values.affidavitCharges) || 0) : 0)) - (Number(values.bookingAmount) || 0)) : undefined,
+          totalVehicleCost:
+            purchaseType === "cash"
+              ? (Number(selectedOnRoadPrice) || 0) +
+                (Number(values.extraFittingAmount) || 0) +
+                (values.addressProofMode === "additional"
+                  ? Number(values.affidavitCharges) || 0
+                  : 0)
+              : undefined,
+          balancedAmount:
+            purchaseType === "cash"
+              ? (Number(selectedOnRoadPrice) || 0) +
+                (Number(values.extraFittingAmount) || 0) +
+                (values.addressProofMode === "additional"
+                  ? Number(values.affidavitCharges) || 0
+                  : 0) -
+                bookingSum
+              : undefined,
         },
         executive: values.executive || executiveDefault || undefined,
         branch: values.branch || branchDefault || undefined,
-        // Store only file metadata in raw payload to avoid bloating cells
-        file: { name: f.name, mimeType: f.type || 'application/pdf', size: f.size },
-        // Additional computed context
+        // Only file metadata in raw payload
+        file: file ? { name: file.name, mimeType: file.mimeType, size: file.size } : undefined,
         chassis: { status: chassisStatus, info: chassisInfo },
         ts: new Date().toISOString(),
         v: 1,
@@ -660,68 +936,118 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
           model: values.bikeModel,
           variant: values.variant,
           color: values.color || undefined,
-          chassisNo: values.chassisNo === "__ALLOT__" ? undefined : values.chassisNo,
+          chassisNo:
+            values.chassisNo === "__ALLOT__" ? undefined : values.chassisNo,
           availability: values.chassisNo === "__ALLOT__" ? "allot" : chassisStatus,
           availabilityInfo: chassisInfo || undefined,
         },
         onRoadPrice: selectedOnRoadPrice,
         rtoOffice: values.rtoOffice,
-        paymentMode: values.paymentMode || undefined,
         purchaseMode: values.purchaseType,
-        disbursementAmount: (values.purchaseType === 'loan' || values.purchaseType === 'nohp') ? (values.disbursementAmount ?? undefined) : undefined,
+        disbursementAmount:
+          values.purchaseType === "loan" ||
+          values.purchaseType === "nohp"
+            ? values.disbursementAmount ?? undefined
+            : undefined,
         financier: values.financier || values.nohpFinancier || undefined,
         addressProofMode: values.addressProofMode,
         addressProofTypes: values.addressProofTypes || [],
         address: values.address || undefined,
-        bookingAmount: values.bookingAmount ?? undefined,
-        paymentReference: values.paymentMode === 'online' ? (values.paymentReference || undefined) : undefined,
-        // DP breakdown
+        payments: [
+          {
+            amount: values.bookingAmount1,
+            mode: values.paymentMode1,
+            reference:
+              values.paymentMode1 === "online"
+                ? values.paymentReference1 || undefined
+                : undefined,
+          },
+          {
+            amount: values.bookingAmount2,
+            mode: values.paymentMode2,
+            reference:
+              values.paymentMode2 === "online"
+                ? values.paymentReference2 || undefined
+                : undefined,
+          },
+          {
+            amount: values.bookingAmount3,
+            mode: values.paymentMode3,
+            reference: values.paymentReference3 || undefined,
+          },
+        ].filter((p) => Number(p.amount || 0) > 0 && p.mode),
+        bookingAmount: bookingSum || undefined,
         downPayment: values.downPayment ?? undefined,
         extraFittingAmount: values.extraFittingAmount ?? 0,
-        affidavitCharges: values.addressProofMode === 'additional' ? (values.affidavitCharges ?? 0) : 0,
+        affidavitCharges:
+          values.addressProofMode === "additional"
+            ? values.affidavitCharges ?? 0
+            : 0,
         totalDp: totalDpCalc,
         balancedDp: balancedDpCalc,
-        // Cash totals
-        totalVehicleCost: values.purchaseType === 'cash' ? totalVehicleCost : undefined,
-        balancedAmount: values.purchaseType === 'cash' ? balancedAmount : undefined,
-        // Raw payload (stringified JSON) for storing in a single sheet column
+        totalVehicleCost:
+          values.purchaseType === "cash" ? totalVehicleCost : undefined,
+        balancedAmount:
+          values.purchaseType === "cash" ? balancedAmount : undefined,
         rawPayload: JSON.stringify(rawPayloadObj),
         executive: values.executive || executiveDefault || undefined,
         branch: values.branch || branchDefault || undefined,
-        file,
+        // Include file so GAS saves it (create) or appends it (update)
+        // Include file if provided
+        ...(file ? { file } : {}),
+        // When editing an existing booking, include identifiers to update same record
+        ...(editRef?.bookingId ? { bookingId: editRef.bookingId } : {}),
+        ...(editRef?.mobile ? { editMobile: editRef.mobile } : {}),
+        ...(paymentsOnlyMode ? { action: 'update' } : {}),
       };
-      // Submit and wait for completion (no data loss; user said delay is fine)
-      let ok = false
-      let resp
+
+      let ok = false;
+      let resp;
       try {
-        resp = await submitToWebhook(payload)
-        ok = (resp?.data || resp)?.success !== false
-      } catch  {
+        resp = await submitToWebhook(payload);
+        ok = (resp?.data || resp)?.success !== false;
+      } catch {
         ok = false;
       }
 
       if (!ok) {
-        throw new Error(String((resp?.data || resp)?.message || 'Submission failed'))
+        throw new Error(
+          String((resp?.data || resp)?.message || "Submission failed")
+        );
       }
 
-      message.success('Booking saved successfully')
-      if (typeof onSuccess === 'function') {
-        try { onSuccess({ response: (resp?.data || resp), payload }); } catch { /* noop */ }
+      message.success("Booking saved successfully");
+      if (typeof onSuccess === "function") {
+        try {
+          onSuccess({ response: resp?.data || resp, payload });
+        } catch {
+          // ignore
+        }
       }
 
-      // Clear form and draft only after confirmed success
-      form.resetFields()
-      writeJson(DRAFT_KEY, null)
-      // clear file lists
-      form.setFieldsValue({ executive: executiveDefault || '', branch: branchDefault || '' })
-      setAddressProofFiles([])
-      setSelectedCompany("")
-      setSelectedModel("")
-      setChassisStatus("idle")
-      setChassisInfo(null)
-      setStockItems([])
-      // notify other views to reload
-      try { window.dispatchEvent(new Event('reload-bookings')); } catch { /* ignore */ }
+      // File already sent in main payload; GAS appends appropriately on update
+
+      // Reset form after confirmed success
+      form.resetFields();
+      writeJson(DRAFT_KEY, null);
+      form.setFieldsValue({
+        executive: executiveDefault || "",
+        branch: branchDefault || "",
+      });
+      // Exit payments-only mode after save
+      setPaymentsOnlyMode(false);
+      setEditRef({ bookingId: null, mobile: null });
+      setAddressProofFiles([]);
+      setSelectedCompany("");
+      setSelectedModel("");
+      setChassisStatus("idle");
+      setChassisInfo(null);
+      setStockItems([]);
+      try {
+        window.dispatchEvent(new Event("reload-bookings"));
+      } catch {
+        // ignore
+      }
     } catch (e) {
       message.error(String(e?.message || e || "Submission failed"));
     } finally {
@@ -731,13 +1057,13 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
 
   const onFinishFailed = ({ errorFields }) => {
     if (errorFields?.length) {
-      form.scrollToField(errorFields[0].name, { behavior: "smooth", block: "center" });
+      form.scrollToField(errorFields[0].name, {
+        behavior: "smooth",
+        block: "center",
+      });
     }
   };
 
-  // EMI calculator removed
-
-  // Header badge
   const headerBadge = (
     <div
       style={{
@@ -764,16 +1090,20 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       onFinishFailed={onFinishFailed}
       onValuesChange={(_, all) => {
         try {
-          const copy = { ...all }
-          // never persist payment reference or large internals implicitly
-          if (!copy.paymentMode || copy.paymentMode !== 'online') delete copy.paymentReference
-          writeJson(DRAFT_KEY, copy)
-        } catch { /* ignore */ }
+          if (!ENABLE_DRAFT) return;
+          const copy = { ...all };
+          if (copy.paymentMode1 !== "online") delete copy.paymentReference1;
+          if (copy.paymentMode2 !== "online") delete copy.paymentReference2;
+          if (copy.paymentMode3 !== "online") delete copy.paymentReference3;
+          writeJson(DRAFT_KEY, copy);
+        } catch {
+          // ignore
+        }
       }}
       requiredMark="optional"
       encType="multipart/form-data"
     >
-      {/* Executive and Branch (auto-fetched) */}
+      {/* Executive and Branch */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={12}>
           <Form.Item
@@ -781,7 +1111,12 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             name="executive"
             rules={[{ required: true, message: "Executive is required" }]}
           >
-            <Input size="large" placeholder="Executive name" readOnly={!!executiveDefault} />
+            <Input
+              size="large"
+              placeholder="Executive name"
+              readOnly={!!executiveDefault}
+              disabled={paymentsOnlyMode}
+            />
           </Form.Item>
         </Col>
         <Col xs={24} md={12}>
@@ -790,12 +1125,17 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             name="branch"
             rules={[{ required: true, message: "Branch is required" }]}
           >
-            <Input size="large" placeholder="Branch name" readOnly={!!branchDefault} />
+            <Input
+              size="large"
+              placeholder="Branch name"
+              readOnly={!!branchDefault}
+              disabled={paymentsOnlyMode}
+            />
           </Form.Item>
         </Col>
       </Row>
 
-      {/* 1) Customer Name */}
+      {/* Customer Name + Mobile */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={12}>
           <Form.Item
@@ -804,10 +1144,16 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             rules={[{ required: true, message: "Please enter customer name" }]}
             getValueFromEvent={(e) => {
               const v = e?.target?.value ?? e;
-              return typeof v === 'string' ? v.toUpperCase() : v;
+              return typeof v === "string" ? v.toUpperCase() : v;
             }}
           >
-            <Input size="large" placeholder="e.g., RAHUL SHARMA" allowClear style={{ textTransform: 'uppercase' }} />
+            <Input
+              size="large"
+              placeholder="e.g., RAHUL SHARMA"
+              allowClear
+              style={{ textTransform: "uppercase" }}
+              disabled={paymentsOnlyMode}
+            />
           </Form.Item>
         </Col>
         <Col xs={24} md={12}>
@@ -815,16 +1161,23 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             label="Mobile Number"
             name="mobileNumber"
             rules={phoneRule}
-            normalize={(v) => (v ? v.replace(/\D/g, "").slice(0, 10) : v)}
+            normalize={(v) =>
+              v ? v.replace(/\D/g, "").slice(0, 10) : v
+            }
           >
-            <Input size="large" placeholder="10-digit number" maxLength={10} inputMode="numeric" allowClear />
+            <Input
+              size="large"
+              placeholder="10-digit number"
+              maxLength={10}
+              inputMode="numeric"
+              allowClear
+              disabled={paymentsOnlyMode}
+            />
           </Form.Item>
         </Col>
       </Row>
 
-      {/* 3) Vehicle details: Company → Model → Variant */}
-
-      {/* 4) Company → Model → Variant → Color */}
+      {/* Vehicle: Company → Model → Variant */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={8}>
           <Form.Item
@@ -835,6 +1188,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             <Select
               size="large"
               placeholder="Select Company"
+              disabled={paymentsOnlyMode}
               onChange={(value) => {
                 setSelectedCompany(value);
                 setSelectedModel("");
@@ -847,7 +1201,9 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
               }}
             >
               {companies.map((c, i) => (
-                <Option key={i} value={c}>{c}</Option>
+                <Option key={i} value={c}>
+                  {c}
+                </Option>
               ))}
             </Select>
           </Form.Item>
@@ -862,14 +1218,20 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             <Select
               size="large"
               placeholder="Select Model"
-              disabled={!selectedCompany}
+              disabled={paymentsOnlyMode || !selectedCompany}
               onChange={(value) => {
                 setSelectedModel(value);
-                form.setFieldsValue({ variant: undefined, color: undefined, chassisNo: undefined });
+                form.setFieldsValue({
+                  variant: undefined,
+                  color: undefined,
+                  chassisNo: undefined,
+                });
               }}
             >
               {models.map((m, i) => (
-                <Option key={i} value={m}>{m}</Option>
+                <Option key={i} value={m}>
+                  {m}
+                </Option>
               ))}
             </Select>
           </Form.Item>
@@ -884,30 +1246,40 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             <Select
               size="large"
               placeholder="Select Variant"
-              disabled={!selectedModel}
+              disabled={paymentsOnlyMode || !selectedModel}
               onChange={() => {
                 form.setFieldsValue({ color: undefined, chassisNo: undefined });
               }}
             >
               {variants.map((v, i) => (
-                <Option key={i} value={v}>{v}</Option>
+                <Option key={i} value={v}>
+                  {v}
+                </Option>
               ))}
             </Select>
           </Form.Item>
         </Col>
       </Row>
 
-      {/* Color (from in-stock where possible) + On-road price */}
+      {/* Color + On-road price */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={12}>
-          <Form.Item label="Color" name="color" rules={[{ required: true, message: "Select color" }]}>
+          <Form.Item
+            label="Color"
+            name="color"
+            rules={[{ required: true, message: "Select color" }]}
+          >
             <AutoComplete
               size="large"
-              disabled={!selectedVariant}
-              placeholder={loadingStocks ? "Loading colors..." : "Select or type color"}
+              disabled={paymentsOnlyMode || !selectedVariant}
+              placeholder={
+                loadingStocks ? "Loading colors..." : "Select or type color"
+              }
               options={availableColors.map((c) => ({ value: c }))}
               filterOption={(inputValue, option) =>
-                String(option?.value || "").toLowerCase().includes(String(inputValue || "").toLowerCase())
+                String(option?.value || "")
+                  .toLowerCase()
+                  .includes(String(inputValue || "").toLowerCase())
               }
               onChange={() => form.setFieldsValue({ chassisNo: undefined })}
             />
@@ -915,7 +1287,12 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         </Col>
         <Col xs={24} md={12}>
           <Form.Item label="On-Road Price (₹)">
-            <InputNumber size="large" style={{ width: '100%' }} value={selectedOnRoadPrice} disabled />
+            <InputNumber
+              size="large"
+              style={{ width: "100%" }}
+              value={selectedOnRoadPrice}
+              disabled
+            />
           </Form.Item>
         </Col>
       </Row>
@@ -926,43 +1303,61 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
           <Form.Item
             label="Chassis Number"
             name="chassisNo"
-            rules={[{ required: true, message: "Select chassis or choose Allot Vehicle" }]}
+            rules={[
+              {
+                required: true,
+                message: "Select chassis or choose Allot Vehicle",
+              },
+            ]}
           >
             <Select
               size="large"
               placeholder={selectedColor ? "Select Chassis" : "Select color first"}
-              disabled={!selectedColor}
+              disabled={paymentsOnlyMode || !selectedColor}
               loading={loadingStocks}
               showSearch
               optionFilterProp="children"
-              onChange={(v)=>{
+              onChange={(v) => {
                 form.setFieldsValue({ chassisNo: v });
                 checkChassis(v);
               }}
               allowClear
             >
               {availableChassis.map((ch) => (
-                <Option key={ch} value={ch}>{ch}</Option>
+                <Option key={ch} value={ch}>
+                  {ch}
+                </Option>
               ))}
               <Option value="__ALLOT__">Allot Vehicle (assign later)</Option>
             </Select>
           </Form.Item>
         </Col>
-        <Col xs={24} md={12} style={{ display: 'flex', alignItems: 'center' }}>
+        <Col
+          xs={24}
+          md={12}
+          style={{ display: "flex", alignItems: "center" }}
+        >
           <div>
             <div style={{ marginBottom: 6 }}>Availability</div>
-            {chassisStatus === 'found' && (
-              <Tag color="green">In Stock{chassisInfo?.branch ? ` @ ${chassisInfo.branch}` : ''}</Tag>
+            {chassisStatus === "found" && (
+              <Tag color="green">
+                In Stock
+                {chassisInfo?.branch ? ` @ ${chassisInfo.branch}` : ""}
+              </Tag>
             )}
-            {chassisStatus === 'allot' && <Tag color="blue">To be allotted</Tag>}
-            {chassisStatus === 'not_found' && <Tag color="red">Not Found</Tag>}
-            {chassisStatus === 'checking' && <Tag>Checking…</Tag>}
-            {chassisStatus === 'idle' && <Tag>Select chassis to check</Tag>}
+            {chassisStatus === "allot" && (
+              <Tag color="blue">To be allotted</Tag>
+            )}
+            {chassisStatus === "not_found" && (
+              <Tag color="red">Not Found</Tag>
+            )}
+            {chassisStatus === "checking" && <Tag>Checking…</Tag>}
+            {chassisStatus === "idle" && <Tag>Select chassis to check</Tag>}
           </div>
         </Col>
       </Row>
 
-      {/* RTO (after vehicle + chassis) */}
+      {/* RTO (Office) */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={12}>
           <Form.Item
@@ -970,24 +1365,37 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             name="rtoOffice"
             initialValue="KA"
             rules={[
-              { required: true, message: "Enter RTO code (KA + 2 digits)" },
-              { pattern: /^KA\d{2}$/, message: 'Use format KA01, KA13, KA05' },
+              {
+                required: true,
+                message: "Enter RTO code (KA + 2 digits)",
+              },
+              { pattern: /^KA\d{2}$/, message: "Use format KA01, KA13, KA05" },
             ]}
             normalize={(v) => {
-              const s = String(v || '').toUpperCase().replace(/\s+/g, '');
-              if (!s) return 'KA'; // keep KA always
-              // Ensure KA prefix and only 2 digits afterwards while typing
-              const restDigits = s.startsWith('KA') ? s.slice(2) : s.replace(/[^0-9]/g, '');
-              const digits = String(restDigits || '').replace(/\D/g, '').slice(0, 2);
-              return digits ? `KA${digits}` : 'KA';
+              const s = String(v || "")
+                .toUpperCase()
+                .replace(/\s+/g, "");
+              if (!s) return "KA";
+              const restDigits = s.startsWith("KA")
+                ? s.slice(2)
+                : s.replace(/[^0-9]/g, "");
+              const digits = String(restDigits || "")
+                .replace(/\D/g, "")
+                .slice(0, 2);
+              return digits ? `KA${digits}` : "KA";
             }}
           >
-            <Input size="large" placeholder="e.g., KA02" maxLength={4} />
+            <Input
+              size="large"
+              placeholder="e.g., KA02"
+              maxLength={4}
+              disabled={paymentsOnlyMode}
+            />
           </Form.Item>
         </Col>
       </Row>
 
-      {/* 5) Purchase Mode */}
+      {/* Purchase Mode */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={18}>
           <Form.Item
@@ -996,7 +1404,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             initialValue="cash"
             rules={[{ required: true, message: "Choose purchase mode" }]}
           >
-            <Radio.Group>
+            <Radio.Group disabled={paymentsOnlyMode}>
               <Radio.Button value="cash">Cash</Radio.Button>
               <Radio.Button value="loan">Loan</Radio.Button>
               <Radio.Button value="nohp">No HP</Radio.Button>
@@ -1008,10 +1416,22 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       {purchaseType === "loan" && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={12}>
-            <Form.Item label="Financier" name="financier" rules={[{ required: true, message: "Select financier" }]}>
-              <Select size="large" placeholder="Select Financier" showSearch optionFilterProp="children">
+            <Form.Item
+              label="Financier"
+              name="financier"
+              rules={[{ required: true, message: "Select financier" }]}
+            >
+              <Select
+                size="large"
+                placeholder="Select Financier"
+                showSearch
+                optionFilterProp="children"
+                disabled={paymentsOnlyMode}
+              >
                 {FINANCIERS.map((f) => (
-                  <Option key={f} value={f}>{f}</Option>
+                  <Option key={f} value={f}>
+                    {f}
+                  </Option>
                 ))}
               </Select>
             </Form.Item>
@@ -1022,8 +1442,12 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       {purchaseType === "nohp" && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={12}>
-            <Form.Item label="No HP Options" name="nohpFinancier" rules={[{ required: true, message: "Select option" }]}>
-              <Select size="large" placeholder="Select">
+            <Form.Item
+              label="No HP Options"
+              name="nohpFinancier"
+              rules={[{ required: true, message: "Select option" }]}
+            >
+              <Select size="large" placeholder="Select" disabled={paymentsOnlyMode}>
                 <Option value="IDFC">IDFC</Option>
                 <Option value="L&T">L&T FINANCE LIMITED</Option>
               </Select>
@@ -1032,151 +1456,238 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         </Row>
       )}
 
-      {(purchaseType === 'loan' || purchaseType === 'nohp') && (
+      {(purchaseType === "loan" || purchaseType === "nohp") && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={12}>
             <Form.Item
               label="Disbursement Amount (₹)"
               name="disbursementAmount"
-              rules={[{ required: true, message: 'Enter disbursement amount' }]}
+              rules={[
+                { required: true, message: "Enter disbursement amount" },
+              ]}
             >
               <InputNumber
                 size="large"
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 min={1}
                 step={500}
                 prefix={<CreditCardOutlined />}
                 placeholder="Enter amount"
+                disabled={paymentsOnlyMode}
               />
             </Form.Item>
           </Col>
         </Row>
       )}
 
-      {/* Address Proof */}
       {/* Address Proof Mode */}
       <Row gutter={[16, 0]}>
         <Col xs={24} md={12}>
-          <Form.Item label="Address Proof" name="addressProofMode" initialValue="aadhaar" rules={[{ required: true }]}>
+          <Form.Item
+            label="Address Proof"
+            name="addressProofMode"
+            initialValue="aadhaar"
+            rules={[{ required: true }]}
+          >
             <Radio.Group>
-              <Radio.Button value="aadhaar">As per Aadhaar / Voter ID</Radio.Button>
+              <Radio.Button value="aadhaar">
+                As per Aadhaar / Voter ID
+              </Radio.Button>
               <Radio.Button value="additional">Additional</Radio.Button>
             </Radio.Group>
           </Form.Item>
         </Col>
       </Row>
 
-      {/* For Aadhaar mode, upload is provided separately below */}
-      {addressProofMode === 'additional' && (
-        <Card size="small" title={<Text strong>Additional Address Proof</Text>} style={{ marginTop: 8, marginBottom: 12, borderRadius: 12 }} headStyle={{ background: "#f8fafc", borderRadius: 12 }}>
+      {/* Additional Address Proof block */}
+      {addressProofMode === "additional" && (
+        <Card
+          size="small"
+          title={<Text strong>Additional Address Proof</Text>}
+          style={{ marginTop: 8, marginBottom: 12, borderRadius: 12 }}
+          headStyle={{ background: "#f8fafc", borderRadius: 12 }}
+        >
           <Row gutter={[16, 16]}>
             <Col xs={24}>
-              <Form.Item label="Select proof types" name="addressProofTypes" rules={[{ required: true, message: 'Select at least one type' }]}>
+              <Form.Item
+                label="Select proof types"
+                name="addressProofTypes"
+                rules={[
+                  {
+                    required: true,
+                    message: "Select at least one type",
+                  },
+                ]}
+              >
                 <Checkbox.Group
                   options={[
-                    { label: 'Driving License', value: 'DL' },
-                    { label: 'Gas Bill', value: 'GasBill' },
-                    { label: 'Rental Agreement', value: 'RentalAgreement' },
-                    { label: 'Others', value: 'Others' },
+                    { label: "Driving License", value: "DL" },
+                    { label: "Gas Bill", value: "GasBill" },
+                    { label: "Rental Agreement", value: "RentalAgreement" },
+                    { label: "Others", value: "Others" },
                   ]}
+                  
                 />
               </Form.Item>
             </Col>
-            {/* Upload moved to a separate field below */}
           </Row>
         </Card>
       )}
 
-      {/* Separate Upload Field (independent of Address Proof) */}
+      {/* Upload Document */}
       <Row gutter={[16, 16]}>
         <Col xs={24}>
           <Form.Item
             label="Upload Document (PDF only)"
-            required
-            rules={[{ required: true, message: 'Please upload a PDF document' }]}
+            required={!paymentsOnlyMode}
+            rules={paymentsOnlyMode ? [] : [
+              {
+                required: true,
+                message: "Please upload a PDF document",
+              },
+            ]}
           >
             <Dragger
               multiple={false}
               beforeUpload={beforeUpload}
               fileList={addressProofFiles}
-              onChange={({ fileList }) => setAddressProofFiles(fileList.slice(0, 1))}
+              onChange={({ fileList }) =>
+                setAddressProofFiles(fileList.slice(0, 1))
+              }
               maxCount={1}
               accept=".pdf"
               itemRender={(origin) => origin}
+              disabled={false}
             >
-              <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-              <p className="ant-upload-text">Upload the document in PDF format.</p>
-              <p className="ant-upload-hint">Maximum size 5MB. PDFs only.</p>
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p className="ant-upload-text">
+                Upload the document in PDF format.
+              </p>
+              <p className="ant-upload-hint">
+                Maximum size 5MB. PDFs only.
+              </p>
             </Dragger>
           </Form.Item>
         </Col>
       </Row>
 
-      {/* Address field (below Address Proof and upload) */}
+      {/* Address */}
       <Row gutter={[16, 0]}>
         <Col xs={24}>
-          <Form.Item label="Address" name="address" rules={[{ required: true, message: 'Please enter address' }]}>
-            <Input.TextArea rows={3} placeholder="House No, Street, Area, City, PIN" allowClear />
-          </Form.Item>
-        </Col>
-      </Row>
-
-      {/* Booking Amount + Payment Mode */}
-      <Row gutter={[16, 0]}>
-        <Col xs={24} md={8}>
           <Form.Item
-            label="Booking Amount (₹)"
-            name="bookingAmount"
-            rules={[{ required: true, message: 'Enter booking amount' }]}
+            label="Address"
+            name="address"
+            rules={[{ required: true, message: "Please enter address" }]}
           >
-            <InputNumber
-              size="large"
-              style={{ width: "100%" }}
-              min={1}
-              step={500}
-              prefix={<CreditCardOutlined />}
-              placeholder="Enter amount"
+            <Input.TextArea
+              rows={3}
+              placeholder="House No, Street, Area, City, PIN"
+              allowClear
+              disabled={paymentsOnlyMode}
             />
           </Form.Item>
         </Col>
+      </Row>
+
+      {/* Booking Amount (3 partial payments) */}
+      <Row gutter={[16, 0]}>
+        <Col xs={24}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Booking Payments
+          </div>
+        </Col>
+        {[1, 2, 3].map((idx) => (
+          <React.Fragment key={`p-${idx}`}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label={`Amount ${idx} (₹)`}
+                name={`bookingAmount${idx}`}
+              >
+                <InputNumber
+                  size="large"
+                  style={{ width: "100%" }}
+                  min={0}
+                  step={500}
+                  prefix={<CreditCardOutlined />}
+                  placeholder={`Amount ${idx}`}
+                  disabled={false}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label={`Mode ${idx}`}
+                name={`paymentMode${idx}`}
+                initialValue="cash"
+              >
+                <Select
+                  size="large"
+                  placeholder="Select mode"
+                  allowClear
+                  options={[
+                    { value: "cash", label: "Cash" },
+                    { value: "online", label: "Online" },
+                  ]}
+                  disabled={false}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item shouldUpdate noStyle>
+                {() => {
+                  const mode = form.getFieldValue(`paymentMode${idx}`);
+                  return mode === "online" ? (
+                    <Form.Item
+                      label={`UTR / Ref ${idx}`}
+                      name={`paymentReference${idx}`}
+                      rules={[
+                        {
+                          required: true,
+                          message: "Enter UTR / reference number",
+                        },
+                      ]}
+                    >
+                      <Input
+                        size="large"
+                        placeholder="e.g., 23XXXXUTR123"
+                        allowClear
+                        disabled={false}
+                      />
+                    </Form.Item>
+                  ) : (
+                    <div />
+                  );
+                }}
+              </Form.Item>
+            </Col>
+          </React.Fragment>
+        ))}
         <Col xs={24} md={8}>
-          <Form.Item
-            label="Payment Mode"
-            name="paymentMode"
-            initialValue="cash"
-            rules={[{ required: true, message: 'Select payment mode' }]}
-          >
-            <Radio.Group>
-              <Radio.Button value="cash">Cash</Radio.Button>
-              <Radio.Button value="online">Online</Radio.Button>
-            </Radio.Group>
+          <Form.Item label="Total Booking Amount (₹)">
+            <InputNumber
+              size="large"
+              style={{ width: "100%" }}
+              value={bookingTotal}
+              disabled
+            />
           </Form.Item>
         </Col>
-        {paymentMode === 'online' && (
-          <Col xs={24} md={8}>
-            <Form.Item
-              label="UTR / Reference No."
-              name="paymentReference"
-              rules={[{ required: true, message: 'Enter UTR / reference number' }]}
-            >
-              <Input size="large" placeholder="e.g., 23XXXXUTR123" allowClear />
-            </Form.Item>
-          </Col>
-        )}
       </Row>
 
       {/* Charges & DP */}
-      {(purchaseType === 'loan' || purchaseType === 'nohp') && (
+      {(purchaseType === "loan" || purchaseType === "nohp") && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={8}>
             <Form.Item
               label="Down Payment (₹)"
               name="downPayment"
-              rules={[{ required: true, message: 'Enter down payment' }]}
+              rules={[{ required: true, message: "Enter down payment" }]}
             >
               <InputNumber
                 size="large"
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 min={0}
                 step={500}
                 prefix={<CreditCardOutlined />}
@@ -1192,7 +1703,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             >
               <InputNumber
                 size="large"
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 min={0}
                 step={100}
                 prefix={<CreditCardOutlined />}
@@ -1200,16 +1711,18 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
               />
             </Form.Item>
           </Col>
-          {addressProofMode === 'additional' && (
+          {addressProofMode === "additional" && (
             <Col xs={24} md={8}>
               <Form.Item
                 label="Affidavit Charges (₹)"
                 name="affidavitCharges"
-                rules={[{ required: true, message: 'Enter affidavit charges' }]}
+                rules={[
+                  { required: true, message: "Enter affidavit charges" },
+                ]}
               >
                 <InputNumber
                   size="large"
-                  style={{ width: '100%' }}
+                  style={{ width: "100%" }}
                   min={0}
                   step={100}
                   prefix={<CreditCardOutlined />}
@@ -1221,7 +1734,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         </Row>
       )}
 
-      {purchaseType === 'cash' && (
+      {purchaseType === "cash" && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={8}>
             <Form.Item
@@ -1231,7 +1744,7 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
             >
               <InputNumber
                 size="large"
-                style={{ width: '100%' }}
+                style={{ width: "100%" }}
                 min={0}
                 step={100}
                 prefix={<CreditCardOutlined />}
@@ -1239,16 +1752,18 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
               />
             </Form.Item>
           </Col>
-          {addressProofMode === 'additional' && (
+          {addressProofMode === "additional" && (
             <Col xs={24} md={8}>
               <Form.Item
                 label="Affidavit Charges (₹)"
                 name="affidavitCharges"
-                rules={[{ required: true, message: 'Enter affidavit charges' }]}
+                rules={[
+                  { required: true, message: "Enter affidavit charges" },
+                ]}
               >
                 <InputNumber
                   size="large"
-                  style={{ width: '100%' }}
+                  style={{ width: "100%" }}
                   min={0}
                   step={100}
                   prefix={<CreditCardOutlined />}
@@ -1260,45 +1775,83 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
         </Row>
       )}
 
-      {/* Totals: DP (loan/nohp) */}
-      {(purchaseType === 'loan' || purchaseType === 'nohp') && (
+      {/* Totals: DP */}
+      {(purchaseType === "loan" || purchaseType === "nohp") && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={8}>
             <Form.Item label="Total DP (₹)">
-              <InputNumber size="large" style={{ width: '100%' }} value={totalDp} disabled />
+              <InputNumber
+                size="large"
+                style={{ width: "100%" }}
+                value={totalDp}
+                disabled
+              />
             </Form.Item>
           </Col>
           <Col xs={24} md={8}>
             <Form.Item label="Balanced DP (₹)">
-              <InputNumber size="large" style={{ width: '100%' }} value={balancedDp} disabled />
+              <InputNumber
+                size="large"
+                style={{ width: "100%" }}
+                value={balancedDp}
+                disabled
+              />
             </Form.Item>
           </Col>
         </Row>
       )}
 
-      {/* Totals: Cash mode */}
-      {purchaseType === 'cash' && (
+      {/* Totals: Cash */}
+      {purchaseType === "cash" && (
         <Row gutter={[16, 0]}>
           <Col xs={24} md={8}>
             <Form.Item label="Total Vehicle Cost (₹)">
-              <InputNumber size="large" style={{ width: '100%' }} value={totalVehicleCost} disabled />
+              <InputNumber
+                size="large"
+                style={{ width: "100%" }}
+                value={totalVehicleCost}
+                disabled
+              />
             </Form.Item>
           </Col>
           <Col xs={24} md={8}>
             <Form.Item label="Balanced Amount (₹)">
-              <InputNumber size="large" style={{ width: '100%' }} value={balancedAmount} disabled />
+              <InputNumber
+                size="large"
+                style={{ width: "100%" }}
+                value={balancedAmount}
+                disabled
+              />
             </Form.Item>
           </Col>
         </Row>
       )}
 
-      {/* Submit */}
+      {/* Submit + Print */}
       <Form.Item style={{ marginTop: 8, marginBottom: 0 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr auto', gap: 8 }}>
-          <Button type="primary" htmlType="submit" size={isMobile ? "middle" : "large"} loading={submitting} disabled={actionCooldownUntil > Date.now()}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isMobile ? "1fr" : "1fr auto",
+            gap: 8,
+          }}
+        >
+          <Button
+            type="primary"
+            htmlType="submit"
+            size={isMobile ? "middle" : "large"}
+            loading={submitting}
+            disabled={actionCooldownUntil > Date.now()}
+          >
             Save Booking
           </Button>
-          <Button className="no-print" icon={<PrinterOutlined />} size={isMobile ? "middle" : "large"} onClick={handlePrint} disabled={actionCooldownUntil > Date.now()}>
+          <Button
+            className="no-print"
+            icon={<PrinterOutlined />}
+            size={isMobile ? "middle" : "large"}
+            onClick={handlePrint}
+            disabled={actionCooldownUntil > Date.now()}
+          >
             Print Booking Slip
           </Button>
         </div>
@@ -1307,18 +1860,16 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
   );
 
   if (asModal) {
-    return (
-      <div style={{ paddingTop: 4 }}>
-        {formNode}
-      </div>
-    );
+    return <div style={{ paddingTop: 4 }}>{formNode}</div>;
   }
 
   return (
     <div
       style={{
         padding: isMobile ? 12 : isTabletOnly ? 18 : 24,
-        background: isMobile ? "transparent" : "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
+        background: isMobile
+          ? "transparent"
+          : "linear-gradient(180deg,#f8fbff 0%,#ffffff 100%)",
         minHeight: "100dvh",
         display: "grid",
         alignItems: "start",
@@ -1331,18 +1882,26 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
           maxWidth: 920,
           margin: isMobile ? "8px auto 24dvh" : "16px auto",
           borderRadius: 16,
-          boxShadow: "0 10px 30px rgba(37, 99, 235, 0.10), 0 2px 8px rgba(0,0,0,0.06)",
+          boxShadow:
+            "0 10px 30px rgba(37, 99, 235, 0.10), 0 2px 8px rgba(0,0,0,0.06)",
         }}
         bodyStyle={{ padding: isMobile ? 16 : 28 }}
-        headStyle={{ borderBottom: "none", padding: isMobile ? "12px 16px 0" : "16px 28px 0" }}
+        headStyle={{
+          borderBottom: "none",
+          padding: isMobile ? "12px 16px 0" : "16px 28px 0",
+        }}
         title={
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 12 }}
+          >
             {headerBadge}
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: "flex", flexDirection: "column" }}>
               <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>
                 Two Wheeler Booking
               </Title>
-              <Text type="secondary">Fill the details below to reserve your ride.</Text>
+              <Text type="secondary">
+                Fill the details below to reserve your ride.
+              </Text>
             </div>
             <div style={{ flex: 1 }} />
             <FetchBooking
@@ -1350,7 +1909,13 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
               webhookUrl={BOOKING_GAS_URL}
               setSelectedCompany={setSelectedCompany}
               setSelectedModel={setSelectedModel}
+              onApplied={({ bookingId, mobile }) => {
+                setPaymentsOnlyMode(true);
+                setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
+                message.info('Payments-only update mode enabled');
+              }}
             />
+            <AttachDocument webhookUrl={BOOKING_GAS_URL} />
           </div>
         }
       >
@@ -1359,5 +1924,264 @@ export default function BookingForm({ asModal = false, initialValues = null, onS
       {/* Hidden on screen; used for printing */}
       <BookingPrintSheet ref={printRef} active vals={valsForPrint} />
     </div>
+  );
+}
+
+// Lightweight modal to attach extra documents to an existing booking
+function AttachDocument({ webhookUrl }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [fileList, setFileList] = useState([]);
+  const [bookingId, setBookingId] = useState("");
+  const [mobile, setMobile] = useState("");
+  const [docType, setDocType] = useState("");
+  const [existing, setExisting] = useState([]);
+  const [append, setAppend] = useState(true);
+
+  const clear = () => {
+    setFileList([]);
+    setBookingId("");
+    setMobile("");
+    setDocType("");
+    setExisting([]);
+    setAppend(true);
+  };
+
+  const uploadOnly = async (file) => {
+    const fd = new FormData();
+    fd.append("action", "upload");
+    if (BOOKING_GAS_SECRET) fd.append("secret", BOOKING_GAS_SECRET);
+    fd.append(
+      "file",
+      file?.originFileObj || file,
+      file?.name || "document.pdf"
+    );
+    try {
+      const resp = await fetch(webhookUrl, {
+        method: "POST",
+        body: fd,
+        credentials: "omit",
+      });
+      let js = null;
+      try { js = await resp.json(); } catch { js = null; }
+      if (js && (js.ok || js.success)) return js;
+      throw new Error("Upload failed");
+    } catch (e) {
+      // Fallback: base64 through webhook proxy
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          const origin = file?.originFileObj || file;
+          reader.onload = () => {
+            const s = String(reader.result || "");
+            const idx = s.indexOf(",");
+            resolve(idx >= 0 ? s.slice(idx + 1) : s);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(origin);
+        });
+        const payload = BOOKING_GAS_SECRET
+          ? { action: "upload_base64", name: file?.name || "document.pdf", base64, secret: BOOKING_GAS_SECRET }
+          : { action: "upload_base64", name: file?.name || "document.pdf", base64 };
+        const resp2 = await saveBookingViaWebhook({ webhookUrl, method: "POST", payload });
+        const js2 = resp2?.data || resp2;
+        if (js2 && (js2.ok || js2.success)) return js2;
+      } catch {
+        //FJF
+      }
+      throw e;
+    }
+  };
+
+  const fetchExisting = async () => {
+    try {
+      if (!webhookUrl) return;
+      const mode = bookingId ? "booking" : mobile ? "mobile" : null;
+      const query = bookingId || mobile;
+      if (!mode || !query) return;
+      const resp = await saveBookingViaWebhook({
+        webhookUrl,
+        method: "GET",
+        payload: { action: "search", mode, query },
+      });
+      const j = resp?.data || resp;
+      const rows = Array.isArray(j?.rows) ? j.rows : [];
+      const p = rows[0]?.payload || rows[0] || {};
+      const filesArr = Array.isArray(p.attachments)
+        ? p.attachments
+        : Array.isArray(p.files)
+        ? p.files
+        : [];
+      const single =
+        p.file && (p.file.url || p.fileId) ? [p.file] : [];
+      const links = [...filesArr, ...single]
+        .map((x) => ({
+          name: x.name || "Document",
+          url: x.url,
+          fileId: x.fileId,
+        }))
+        .filter((x) => x.url || x.fileId);
+      setExisting(links);
+    } catch {
+      setExisting([]);
+    }
+  };
+
+  const onAttach = async () => {
+    try {
+      if (!webhookUrl) throw new Error("Webhook not configured");
+      const f = (fileList || [])[0];
+      if (!f) throw new Error("Please choose a PDF");
+      if (!bookingId && !mobile)
+        throw new Error("Enter Booking ID or Mobile");
+      if (!docType) throw new Error("Pick document type");
+
+      setLoading(true);
+      const up = await uploadOnly(f);
+      const payload = {
+        action: "attach",
+        bookingId: bookingId || undefined,
+        mobile: mobile || undefined,
+        type: docType,
+        name: f.name,
+        url: up.url,
+        fileId: up.fileId,
+        append: append ? true : false,
+        ts: dayjs().toISOString(),
+      };
+      const resp = await saveBookingViaWebhook({
+        webhookUrl,
+        method: "POST",
+        payload,
+      });
+      const ok = (resp?.data || resp)?.success !== false;
+      if (!ok)
+        throw new Error(
+          String((resp?.data || resp)?.message || "Attach failed")
+        );
+      message.success("Attachment saved to booking.");
+      setOpen(false);
+      clear();
+    } catch (e) {
+      message.error(String(e?.message || e || "Attach failed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        onClick={() => {
+          setOpen(true);
+          setTimeout(fetchExisting, 50);
+        }}
+      >
+        Attach Document
+      </Button>
+      <Modal
+        title="Attach Document to Booking"
+        open={open}
+        onCancel={() => {
+          setOpen(false);
+          clear();
+        }}
+        onOk={onAttach}
+        okText={loading ? "Saving..." : "Save"}
+        confirmLoading={loading}
+      >
+        <Space direction="vertical" style={{ width: "100%" }}>
+          <Input
+            placeholder="Booking ID (optional)"
+            value={bookingId}
+            onChange={(e) => setBookingId(e.target.value)}
+          />
+          <Input
+            placeholder="Mobile (10 digits, optional)"
+            value={mobile}
+            onChange={(e) => setMobile(e.target.value)}
+          />
+          <Button onClick={fetchExisting} size="small">
+            Fetch existing attachments
+          </Button>
+          {existing.length > 0 && (
+            <div style={{ fontSize: 12, color: "#555" }}>
+              <div
+                style={{
+                  fontWeight: 600,
+                  margin: "4px 0",
+                }}
+              >
+                Existing attachments:
+              </div>
+              <ul>
+                {existing.map((x, i) => (
+                  <li key={`${x.fileId || x.url || i}`}>
+                    <a
+                      href={
+                        x.url ||
+                        `https://drive.google.com/file/d/${x.fileId}/view`
+                      }
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {x.name || `Document ${i + 1}`}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <Select
+            placeholder="Document Type"
+            value={docType}
+            onChange={setDocType}
+            style={{ width: "100%" }}
+            options={[
+              { value: "RentalAgreement", label: "Rental Agreement" },
+              { value: "GasBill", label: "Gas Bill" },
+              { value: "DL", label: "Driving License" },
+              { value: "Others", label: "Others" },
+            ]}
+          />
+          <Dragger
+            multiple={false}
+            beforeUpload={() => false}
+            fileList={fileList}
+            onChange={({ fileList }) =>
+              setFileList(fileList.slice(0, 1))
+            }
+            maxCount={1}
+            accept=".pdf"
+            itemRender={(origin) => origin}
+          >
+            <p className="ant-upload-drag-icon">
+              <InboxOutlined />
+            </p>
+            <p className="ant-upload-text">
+              Upload the document in PDF format.
+            </p>
+            <p className="ant-upload-hint">
+              Maximum size 5MB. PDFs only.
+            </p>
+          </Dragger>
+          <label
+            style={{
+              display: "inline-flex",
+              gap: 8,
+              alignItems: "center",
+              fontSize: 12,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={append}
+              onChange={(e) => setAppend(e.target.checked)}
+            />
+            Append to existing links (don’t overwrite)
+          </label>
+        </Space>
+      </Modal>
+    </>
   );
 }

@@ -13,7 +13,7 @@ import { saveBookingViaWebhook, reserveQuotationSerial } from "../apiCalls/forms
 // GAS webhook for Quotation save/search/nextSerial
 // Default set in code so it works even without env var
 const DEFAULT_QUOT_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec";
+  "https://script.google.com/macros/s/AKfycby0YV2E2Ryb4YehYRzBistMW4sWN3XDcqaEfgkfRvEjmaKNVKq2Ubi3ul50AbxO6TVPJA/exec";
 const QUOT_GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_GAS_URL;
 
 
@@ -1030,15 +1030,11 @@ export default function Quotation() {
         })),
       ];
 
-      // Resolve executive phone for WhatsApp footer
-      // Staff: always use logged-in user's phone
-      // Owner/Admin: try DB staff list by selected executive; fallback to predefined mapping; then own phone
+      // Resolve executive name & phone for WhatsApp footer
+      // Always use the logged-in staff's own name and phone; ignore legacy mappings
       const curUser = (() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } })();
-      const roleLc = String(curUser?.role || '').toLowerCase();
-      const ownPhoneRaw = String(curUser?.phone || '').replace(/\D/g,'');
-      const fromDb = (execOptions || []).find(e => e.name === executiveName)?.phone || '';
-      const mapped = (EXECUTIVES.find(e => e.name === executiveName) || {}).phone || '';
-      const execPhone = (!["owner","admin"].includes(roleLc) ? ownPhoneRaw : (fromDb || mapped || ownPhoneRaw || "-"));
+      const execPhone = String(curUser?.phone || '').replace(/\D/g,'');
+      const execNameDisplay = (v.executive || curUser?.formDefaults?.staffName || curUser?.name || executiveName || '-');
       const qDate = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
       // Header
@@ -1080,7 +1076,7 @@ export default function Quotation() {
 
       const footer = [
         ``,
-        `• *Sales Executive:* ${executiveName || "-"} (${execPhone || '-'})`,
+        `• *Sales Executive:* ${execNameDisplay} (${execPhone || '-'})`,
         `*Our Locations* 📍`,
         `Muddinapalya • Hegganahalli • Nelagadrahalli • Andrahalli`,
         `Kadabagere • Channenahalli • Tavarekere • D-Group Layout`,

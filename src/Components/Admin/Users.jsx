@@ -10,6 +10,7 @@ const ROLE_OPTIONS = [
   { label: "Mechanic", value: "mechanic" },
   { label: "Employees", value: "employees" },
   { label: "User", value: "user" },
+  { label: "Backend", value: "backend" },
 ];
 
 const STATUS_OPTIONS = [
@@ -195,7 +196,7 @@ export default function Users({ readOnly = false }) {
     { title: "Name", dataIndex: "name", key: "name", sorter: (a, b) => a.name.localeCompare(b.name) },
     { title: "Email", dataIndex: "email", key: "email", width: 220 },
     { title: "Phone", dataIndex: "phone", key: "phone", width: 140 },
-    { title: "Role", dataIndex: "role", key: "role", width: 130, render: (v) => <Tag color={v === 'admin' ? 'red' : v === 'owner' ? 'gold' : v === 'mechanic' ? 'cyan' : v === 'staff' ? 'blue' : 'default'}>{v}</Tag> },
+    { title: "Role", dataIndex: "role", key: "role", width: 130, render: (v) => <Tag color={v === 'admin' ? 'red' : v === 'owner' ? 'gold' : v === 'backend' ? 'purple' : v === 'mechanic' ? 'cyan' : v === 'staff' ? 'blue' : 'default'}>{v}</Tag> },
     { title: "Primary Branch", key: "primaryBranch", width: 180, render: (_, r) => r.primaryBranch?.name || "—" },
     { title: "Status", dataIndex: "status", key: "status", width: 130, render: (v) => (
       v === "active" ? <Tag color="green">Active</Tag> : v === "inactive" ? <Tag>Inactive</Tag> : <Tag color="orange">Suspended</Tag>

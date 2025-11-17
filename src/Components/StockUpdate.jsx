@@ -58,6 +58,8 @@ const normalizeCatalogRow = (row = {}) => ({
   color: pick(row, HEADERS.color),
 });
 
+// (no fallback loader)
+
 // Branch names come from MongoDB Branch collection via API
 // We keep a local state array of names
 

@@ -24,7 +24,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbx7Q36rQ4tzFCDZKJbR5SUabuunYL2NKd0jNJxdUgaqIQ8BUX2kfINq5WppF5NJLxA6YQ/exec";
+  "https://script.google.com/macros/s/AKfycbzZMHPqNcqY6HuKK6Y8vI02UXIC5IyHhbIo0Wu1iCtQgCmwigQJ8DPUPy_9vYIZLI6uNQ/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
@@ -42,21 +42,8 @@ const BRANCHES = [
   "Nelagadrahalli",
 ];
 
-const EXECUTIVES = [
-  { name: "Rukmini",  phone: "9901678562" },
-  { name: "Meghana",  phone: "7019974219" },
-  { name: "Shubha",   phone: "8971585057" },
-  { name: "Rani",     phone: "9108970455" },
-  { name: "Likhitha",  phone: "9535190015" },
-  { name: "Prakash",  phone: "9740176476" },
-  { name: "Swathi",   phone: "6363116317" },
-  { name: "Kumar",    phone: "7975807667" },
-  { name: "Sujay",    phone: "7022878048" },
-  { name: "Kavi",     phone: "9108970455" },
-  { name: "Narasimha",phone: "9900887666" },
-  { name: "Kavya",    phone: "8073165374" },
-  { name: "Vanitha",  phone: "9380729861" },
-];
+// Deprecated static mapping removed — WhatsApp now uses logged-in staff's name and phone
+const EXECUTIVES = [];
 
 const SERVICE_TYPES = ["Free", "Paid"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
@@ -148,9 +135,16 @@ async function submitJobcardWebhook(payload) {
    WHATSAPP / SMS HELPERS
    ========================= */
 
-function getExecPhone(executives, execName) {
-  const found = executives.find((e) => e.name === execName);
-  return found?.phone || "";
+// Resolve current logged-in staff phone (fallback empty string)
+function getLoggedInPhone() {
+  try {
+    const raw = localStorage.getItem('user');
+    const u = raw ? JSON.parse(raw) : null;
+    const ph = String(u?.phone || '').replace(/\D/g,'');
+    if (ph.length === 10) return `+91${ph}`.replace('+','');
+    if (ph.length === 12 && ph.startsWith('91')) return ph;
+    return '';
+  } catch { return ''; }
 }
 
 function normalizeINPhone(raw) {
@@ -163,7 +157,8 @@ function normalizeINPhone(raw) {
 function buildWelcomeMsg(vals, totals) {
   const fmtDate =
     vals?.expectedDelivery ? dayjs(vals.expectedDelivery).format("DD/MM/YYYY") : "—";
-  const execPhone = getExecPhone(EXECUTIVES, vals?.executive);
+  // Always use logged-in user's phone; ignore any legacy mappings
+  const execPhone = getLoggedInPhone();
   const branch = vals?.branch || "—";
   const name = vals?.custName || "Customer";
   const jc = vals?.jcNo || "—";
@@ -708,6 +703,8 @@ export default function JobCard({ initialValues = null } = {}) {
     try {
       if (Date.now() < actionCooldownUntil) return;
       startActionCooldown(6000);
+      // Do not auto pre-save here to avoid duplicate rows in sheet.
+      // Server-side 'postService' should upsert/update the existing record.
       const valsNow = form.getFieldsValue(true);
       const mobile10 = String(valsNow.custMobile || '').replace(/\D/g, '').slice(-10);
       if (mobile10.length !== 10) {
@@ -717,7 +714,8 @@ export default function JobCard({ initialValues = null } = {}) {
 
       // Ensure JC number exists (reserve by mobile if missing)
       let jcNo = valsNow.jcNo;
-      if (!/^\d+$/.test(String(jcNo || '').trim())) {
+      const jcPattern = /^JC-[A-Z]+-[A-Z0-9]{6}$/;
+      if (!jcPattern.test(String(jcNo || '').trim())) {
         try {
           jcNo = await reserveNextJobCardSerial(
             valsNow.custMobile,
@@ -733,7 +731,7 @@ export default function JobCard({ initialValues = null } = {}) {
       const floorMatStr = typeof valsNow.floorMat === 'string'
         ? valsNow.floorMat
         : valsNow.floorMat === true ? 'Yes' : valsNow.floorMat === false ? 'No' : 'No';
-      const obsOneLine = String(valsNow.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
+      const _rawobsOneLine = String(valsNow.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
 
       // Basic validation: if online, require a UTR (len >= 4)
       if (postPayment === 'online') {
@@ -744,30 +742,18 @@ export default function JobCard({ initialValues = null } = {}) {
         }
       }
 
+      // Minimal post-service payload per requirement (exact shape expected by Follow-Ups)
       const payload = {
         postServiceAt: new Date().toISOString(),
-        paymentMode: postPayment,
-        utr: postPayment === 'online' ? String(postUtr || '').trim() : undefined,
-        utrNo: postPayment === 'online' ? String(postUtr || '').trim() : undefined,
         formValues: {
-          jcNo: jcNo || '',
-          branch: valsNow.branch || '',
           mechanic: valsNow.mechanic || '',
           executive: valsNow.executive || '',
-          expectedDelivery: fmtDDMMYYYY(valsNow.expectedDelivery),
-          regNo: valsNow.regNo || '',
           model: valsNow.model || '',
           colour: valsNow.colour || '',
           km: kmOnlyDigits || '',
           fuelLevel: valsNow.fuelLevel || '',
-          
-          custName: valsNow.custName || '',
-          custMobile: String(valsNow.custMobile || ''),
-          obs: obsOneLine,
           vehicleType: valsNow.vehicleType || '',
-          serviceType: valsNow.serviceType || '',
           floorMat: floorMatStr,
-          amount: String(amount),
         },
         labourRows: labourRows || [],
         totals,

@@ -13,7 +13,7 @@ import Users from '../Admin/Users'
 // Announcements tab/banner removed as requested
 
 // Owner dashboard: Analytics & Reports in tabs
-export default function OwnerIndex() {
+export default function Backend() {
   const screens = Grid.useBreakpoint()
   const isMobile = !screens.md
   const styles = {
@@ -25,33 +25,8 @@ export default function OwnerIndex() {
     p: { color: '#4b5563', margin: 0 },
   }
 
-  const AnalyticsReports = () => (
-    <div style={styles.panel}>
-      <div style={styles.h2}>Analytics & Reports</div>
-      <p style={styles.p}>KPIs, trends, and printable/exportable reports.</p>
-    </div>
-  )
+  
 
-  const BranchSales = () => (
-    <div style={styles.panel}>
-      <div style={styles.h2}>Branch-level Sales</div>
-      <p style={styles.p}>Track sales and revenue by each branch. Add filters for branch, date range, and product lines.</p>
-    </div>
-  )
-
-  const MultiBranchCompare = () => (
-    <div style={styles.panel}>
-      <div style={styles.h2}>Multi-branch Compare</div>
-      <p style={styles.p}>Compare KPIs across branches over time. Useful for ranking and benchmarking.</p>
-    </div>
-  )
-
-  const SalesPerformance = () => (
-    <div style={styles.panel}>
-      <div style={styles.h2}>Sales Performance</div>
-      <p style={styles.p}>See top performers and conversion trends. Start with total bookings → quotations → job cards.</p>
-    </div>
-  )
 
   const { hasNew, latestItem } = useAnnouncementBadge()
   const pillColor = (t) => (t === 'alert' ? '#fa541c' : t === 'warning' ? '#faad14' : '#2f54eb')
@@ -71,11 +46,7 @@ export default function OwnerIndex() {
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
-    // 9) Analytics & Reports, 10) Branch-level Sales, 11) Multi-branch Compare, 12) Sales Performance
-    { key: 'analytics', label: 'Analytics & Reports', children: <AnalyticsReports /> },
-    { key: 'branch', label: 'Branch-level Sales', children: <BranchSales /> },
-    { key: 'compare', label: 'Multi-branch Compare', children: <MultiBranchCompare /> },
-    { key: 'performance', label: 'Sales Performance', children: <SalesPerformance /> },
+    
   ]
 
   return (

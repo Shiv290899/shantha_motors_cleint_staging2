@@ -505,7 +505,7 @@ export default function Navbar() {
                   {/* Small role badge for admin/owner (visual only) */}
                   {(() => {
                     const r = String(user?.role || "").toLowerCase();
-                    const txt = r === "admin" ? "Admin" : r === "owner" ? "Owner" : null;
+                    const txt = r === "admin" ? "Admin" : r === "owner" ? "Owner" : r === "backend" ? "Backend" : null;
                     return txt ? <span style={styles.accBadge}>{txt}</span> : null;
                   })()}
                   {/* Chevron */}
@@ -527,6 +527,7 @@ export default function Navbar() {
                               role === "admin" ? "/admin" :
                               role === "owner" ? "/owner" :
                               role === "mechanic" ? "/mechanic" :
+                              role === "backend" ? "/backend" :
                               role === "employees" ? "/employees" :
                               role === "staff" ? "/staff" :
                               "/staff";
@@ -540,6 +541,7 @@ export default function Navbar() {
                                 role === "admin" ? "/admin" :
                                 role === "owner" ? "/owner" :
                                 role === "mechanic" ? "/mechanic" :
+                                role === "backend" ? "/backend" :
                                 role === "employees" ? "/employees" :
                                 role === "staff" ? "/staff" :
                                 "/staff";
@@ -677,6 +679,7 @@ export default function Navbar() {
                     role === "admin" ? "/admin" :
                     role === "owner" ? "/owner" :
                     role === "mechanic" ? "/mechanic" :
+                    role === "backend" ? "/backend" :
                     role === "employees" ? "/employees" :
                     role === "staff" ? "/staff" :
                     "/staff";

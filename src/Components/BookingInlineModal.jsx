@@ -72,7 +72,7 @@ export default function BookingInlineModal({ open, onClose, row, webhookUrl }) {
             vehicle: { company: row?.company, model: row?.model, variant: row?.variant, chassisNo: row?.chassis }
           }));
         }
-      } catch (e) {
+      } catch  {
         if (active) {
           message.warning('Could not fetch full booking. Opening with available fields.');
           setInitialValues(normalizeFromPayload({
@@ -94,10 +94,14 @@ export default function BookingInlineModal({ open, onClose, row, webhookUrl }) {
         <div style={{ display: 'grid', placeItems: 'center', height: 160 }}><Spin /></div>
       ) : (
         <div style={{ paddingTop: 8 }}>
-          <BookingForm asModal initialValues={initialValues || {}} />
+          <BookingForm
+            asModal
+            initialValues={initialValues || {}}
+            startPaymentsOnly={Boolean(row?.bookingId)}
+            editRefDefault={row?.bookingId ? { bookingId: row.bookingId, mobile: row.mobile } : null}
+          />
         </div>
       )}
     </Modal>
   );
 }
-

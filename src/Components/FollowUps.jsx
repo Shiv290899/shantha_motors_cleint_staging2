@@ -95,6 +95,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   // pagination (controlled to allow changing page size)
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  // For Jobcard: option to show completed (post-serviced)
+  const [showCompleted, setShowCompleted] = useState(false);
 
   const [me, setMe] = useState({ name: '', branch: '' });
   const [userRole, setUserRole] = useState('');
@@ -267,19 +269,61 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       let resp = await callWebhook({ method: 'GET', payload }).catch(() => null);
       let j = resp?.data || resp || {};
       let list = Array.isArray(j?.rows) ? j.rows : (Array.isArray(j?.data) ? j.data : []);
-      // Robust fallback: if jobcard follow-ups not available, try `action=list`
-      if (isJobcard && (!Array.isArray(list) || list.length === 0)) {
-        const listResp = await callWebhook({ method: 'GET', payload: JOB_SECRET ? { action: 'list', secret: JOB_SECRET } : { action: 'list' } }).catch(() => null);
-        const lj = listResp?.data || listResp || {};
-        list = Array.isArray(lj?.rows) ? lj.rows : (Array.isArray(lj?.data) ? lj.data : []);
+      // Robust fallback: for jobcard, also fetch `action=list` and merge to ensure completed rows appear
+      if (isJobcard) {
+        try {
+          const listResp = await callWebhook({ method: 'GET', payload: JOB_SECRET ? { action: 'list', secret: JOB_SECRET } : { action: 'list' } }).catch(() => null);
+          const lj = listResp?.data || listResp || {};
+          const list2 = Array.isArray(lj?.rows) ? lj.rows : (Array.isArray(lj?.data) ? lj.data : []);
+          if (Array.isArray(list2) && list2.length) {
+            // Merge arrays (prefer objects with payload if duplicates)
+            const merged = [];
+            const seen = new Set();
+            [...list, ...list2].forEach((row) => {
+              try {
+                const payloadRaw = (row && row.payload) ? row.payload : (row && row.values ? (row.values.Payload || row.values['payload'] || row.values['PAYLOAD']) : null);
+                let jc = '';
+                if (payloadRaw) {
+                  let p = typeof payloadRaw === 'object' ? payloadRaw : (JSON.parse(String(payloadRaw||'{}')));
+                  const fv = p.formValues || {};
+                  jc = fv.jcNo || p.jcNo || '';
+                }
+                const key = jc || (row && row.serialNo) || (row && row['JC No']) || JSON.stringify(row).slice(0,128);
+                if (!seen.has(key)) { seen.add(key); merged.push(row); }
+              } catch { merged.push(row); }
+            });
+            list = merged;
+          }
+        } catch { /* ignore */ }
       }
       // Normalize various row shapes from webhook
       const asPayload = (r) => {
         if (!r) return null;
-        if (r.payload && typeof r.payload === 'object') return r.payload; // { payload, values? }
-        if (r.formValues && r.followUp) return r; // payload returned directly
+        // Direct object payload
+        if (r.payload && typeof r.payload === 'object') return r.payload;
+        // Stringified JSON payload at r.payload
+        if (typeof r.payload === 'string') {
+          try { return JSON.parse(r.payload); } catch { /* ignore */ }
+        }
+        // Payload stored under values.Payload (common pattern in GAS list)
+        const payloadStr = (r.values && (r.values.Payload || r.values['payload'] || r.values['PAYLOAD'])) || r.Payload || r['PAYLOAD'];
+        if (typeof payloadStr === 'string') {
+          try { return JSON.parse(payloadStr); } catch { /* ignore */ }
+        }
+        // Some handlers return the payload shape directly
+        if (r.formValues && (r.followUp || r.savedAt || r.postServiceAt)) return r;
         return null;
       };
+      const parseTime = (v) => {
+        if (!v && v !== 0) return null;
+        try {
+          const d = dayjs(v);
+          return d.isValid() ? d : null;
+        } catch { return null; }
+      };
+
+      const pickFirst = (...vals) => vals.find((x) => typeof x === 'string' ? x.trim() : x) || null;
+
       const items = list.map((r, i) => {
         const p = asPayload(r) || {};
         const fv = p.formValues || {};
@@ -320,15 +364,34 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           return false;
         })();
 
+        // Compute a unified sort time: prefer latest save/post-service timestamps
+        const savedIso = pickFirst(
+          p.postServiceAt,
+          p.savedAt,
+          values['Post Service At'],
+          values['PostServiceAt'],
+          values['Post_Service_At'],
+          values['Saved At'],
+          values['savedAt'],
+          values['Timestamp'],
+          values['Time'],
+          values['Date'],
+        );
+        const savedAt = parseTime(savedIso);
+        const fallbackFuAt = fu.at ? dayjs(fu.at) : null;
+        const sortAt = savedAt || fallbackFuAt;
+        const sortAtMs = sortAt && typeof sortAt.valueOf === 'function' ? sortAt.valueOf() : 0;
+
         return {
           key: serial || i,
           serialNo: serial || '-',
-          name: fv.name || values.Customer_Name || values['Customer Name'] || values.Customer || values.Name || '-',
-          mobile: fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
+          name: fv.custName || fv.name || values.Customer_Name || values['Customer Name'] || values.Customer || values.Name || '-',
+          mobile: fv.custMobile || fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
           vehicle,
           branch: String(branchDisp || '-').trim(),
           executive: fv.executive || fu.assignedTo || values.Executive || '-',
           followUpAt: fu.at ? dayjs(fu.at) : null,
+          sortAtMs,
           // Make notes resilient to varying key names from webhook/sheet
           followUpNotes: fu.notes || p.notes || p.closeNotes || fv.remarks || p.remarks || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Notes'] || '',
           closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
@@ -355,8 +418,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const startToday = dayjs().startOf('day');
       const endToday = dayjs().endOf('day');
       const filtered = items.filter((it) => {
-        // For jobcard follow-ups, hide items that are already post-serviced
-        if (isJobcard && it.postServiced) return false;
+        // For jobcard follow-ups, hide items that are already post-serviced unless toggled
+        if (isJobcard && it.postServiced && !showCompleted) return false;
+        // For quotation follow-ups, hide rows that are marked done/closed (non-pending)
+        if (!isJobcard && !isBooking) {
+          const st = String(it.status || '').toLowerCase();
+          if (st && st !== 'pending') return false;
+        }
         const itB = norm(it.branch);
         const meB = norm(me.branch || allowedBranches[0] || '');
 
@@ -379,8 +447,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       });
       // Always show most recent follow-ups first by scheduled time
       filtered.sort((a, b) => {
-        const ta = a?.followUpAt && typeof a.followUpAt.valueOf === 'function' ? a.followUpAt.valueOf() : 0;
-        const tb = b?.followUpAt && typeof b.followUpAt.valueOf === 'function' ? b.followUpAt.valueOf() : 0;
+        const tb = Number(b.sortAtMs || 0);
+        const ta = Number(a.sortAtMs || 0);
         return tb - ta;
       });
       setRows(filtered);
@@ -469,6 +537,49 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 50, ellipsis: true },
     { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 40, render: (v)=> <LinkCell url={v} /> },
     { title: 'Availability', dataIndex: 'availability', key: 'availability', width: 50 },
+    // Extended booking progress
+    { title: 'Invoice', key: 'invoice', width: 50, render: (_, r) => {
+      const v = (() => {
+        const vals = r.values || {};
+        return vals['Invoice Status'] || vals['Invoice_Status'] || vals['invoiceStatus'] || (r.payload?.invoiceStatus) || '';
+      })();
+      const url = (() => {
+        const vals = r.values || {};
+        return vals['Invoice File URL'] || vals['Invoice_File_URL'] || vals['invoiceFileUrl'] || (r.payload?.invoiceFileUrl) || '';
+      })();
+      return (
+        <Space size={4}>
+          <Tag>{String(v || '-').replace(/_/g,' ')}</Tag>
+          {url ? <a href={url} target="_blank" rel="noopener noreferrer">📎</a> : null}
+        </Space>
+      );
+    } },
+    { title: 'Insurance', key: 'insurance', width: 60, render: (_, r) => {
+      const v = (() => {
+        const vals = r.values || {};
+        return vals['Insurance Status'] || vals['Insurance_Status'] || vals['insuranceStatus'] || (r.payload?.insuranceStatus) || '';
+      })();
+      const url = (() => {
+        const vals = r.values || {};
+        return vals['Insurance File URL'] || vals['Insurance_File_URL'] || vals['insuranceFileUrl'] || (r.payload?.insuranceFileUrl) || '';
+      })();
+      return (
+        <Space size={4}>
+          <Tag>{String(v || '-').replace(/_/g,' ')}</Tag>
+          {url ? <a href={url} target="_blank" rel="noopener noreferrer">📎</a> : null}
+        </Space>
+      );
+    } },
+    { title: 'RTO', key: 'rto', width: 50, render: (_, r) => {
+      const vals = r.values || {};
+      const v = vals['RTO Status'] || vals['RTO_Status'] || vals['rtoStatus'] || (r.payload?.rtoStatus) || '';
+      return <Tag>{String(v || '-').replace(/_/g,' ')}</Tag>;
+    } },
+    { title: 'Vehicle No', key: 'vehno', dataIndex: 'regNo', width: 50, render: (v, r) => {
+      const vals = r.values || {};
+      const reg = v || vals['Vehicle No'] || vals['Vehicle_No'] || vals['vehicleNo'] || (r.payload?.vehicleNo) || '';
+      return reg || '-';
+    } },
     { title: 'Status', dataIndex: 'status',width: 50, key: 'status', render: (_, r) => (
       <Tooltip title={r.followUpNotes || ''}>
         <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
@@ -533,6 +644,12 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
             onChange={(v)=>setBranchOnly(v==='mybranch')}
             options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
           />
+        )}
+        {isJobcard && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={showCompleted} onChange={(e)=> setShowCompleted(e.target.checked)} />
+            Show completed (post-service)
+          </label>
         )}
         <Button onClick={fetchFollowUps} loading={loading}>Refresh</Button>
       </Space>

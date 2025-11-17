@@ -14,11 +14,11 @@ export default function FollowUpsTabs() {
   const DEFAULT_QUOT_URL =
     'https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec';
   const DEFAULT_JC_URL =
-    'https://script.google.com/macros/s/AKfycbx7Q36rQ4tzFCDZKJbR5SUabuunYL2NKd0jNJxdUgaqIQ8BUX2kfINq5WppF5NJLxA6YQ/exec';
+    'https://script.google.com/macros/s/AKfycbzZMHPqNcqY6HuKK6Y8vI02UXIC5IyHhbIo0Wu1iCtQgCmwigQJ8DPUPy_9vYIZLI6uNQ/exec';
   const QUOT_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
   const JC_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const DEFAULT_BOOKING_URL =
-    import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbxykgDUyhsZpsXD5YK2J98LWzjphg-EEVwQs3SxqRD1F8PhTNnD5hvnkw8bWiQzGCFn/exec';
+    import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbxKP6gLUobik6z3N2rJcUMCrmsA5NOaVSEHVn9t6h5zNoVNWpYHaiJDi2UMiMJUpIprmA/exec';
 
   const items = [
     {

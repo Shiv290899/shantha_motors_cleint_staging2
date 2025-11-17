@@ -15,7 +15,9 @@ export default function ProtectedRoute({ children, roles }) {
     // If no token and no cached user, we can immediately gate to login
     if (!token && !user) { setLoading(false); return; }
 
-    // If we have a token or cached user, allow the page to render and refresh user in background
+    // If we have a token or cached user, do NOT block UI.
+    // Let the page render immediately and refresh user in the background.
+    setLoading(false);
     (async () => {
       try {
         const result = await GetCurrentUser();
@@ -26,7 +28,7 @@ export default function ProtectedRoute({ children, roles }) {
       } catch {
         // Do NOT clear token/user on transient failures; keep session.
       } finally {
-        setLoading(false);
+        // nothing
       }
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
