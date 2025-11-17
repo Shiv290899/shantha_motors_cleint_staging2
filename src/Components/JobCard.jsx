@@ -24,7 +24,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbzZMHPqNcqY6HuKK6Y8vI02UXIC5IyHhbIo0Wu1iCtQgCmwigQJ8DPUPy_9vYIZLI6uNQ/exec";
+  "https://script.google.com/macros/s/AKfycbz8RbqoPJ4EfkrDVRBg5qthQHRWIkz8v_fjvt41TNq-b26urfqWQy3K3KRndtrlBLf9ug/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
@@ -242,8 +242,13 @@ export default function JobCard({ initialValues = null } = {}) {
   const preRef = useRef(null);
   const postRef = useRef(null);
   const [postOpen, setPostOpen] = useState(false);
-  const [postPayment, setPostPayment] = useState('cash'); // 'cash' | 'online'
-  const [postUtr, setPostUtr] = useState('');
+  // Split payments: two slots
+  const [postPay1Mode, setPostPay1Mode] = useState('cash'); // default Cash
+  const [postPay1Amt, setPostPay1Amt] = useState('');
+  const [postPay1Utr, setPostPay1Utr] = useState('');
+  const [postPay2Mode, setPostPay2Mode] = useState('online'); // default Online
+  const [postPay2Amt, setPostPay2Amt] = useState('');
+  const [postPay2Utr, setPostPay2Utr] = useState('');
   const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
   const startActionCooldown = (ms = 6000) => {
     const until = Date.now() + ms;
@@ -676,7 +681,7 @@ export default function JobCard({ initialValues = null } = {}) {
       };
 
       // Optimistic background save
-      message.success({ content: "Saved. Syncing in background…", key: "autosave", duration: 1.5 });
+      message.success({ content: "Saved successfully", key: "autosave", duration: 1.5 });
       const data = { jcNo: jc, formValues: payload.formValues, payload };
       const outboxId = enqueueOutbox({ type: 'save', data });
       setTimeout(async () => {
@@ -733,16 +738,34 @@ export default function JobCard({ initialValues = null } = {}) {
         : valsNow.floorMat === true ? 'Yes' : valsNow.floorMat === false ? 'No' : 'No';
       const _rawobsOneLine = String(valsNow.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
 
-      // Basic validation: if online, require a UTR (len >= 4)
-      if (postPayment === 'online') {
-        const u = String(postUtr || '').trim();
-        if (u.length < 4) {
-          message.error('Enter a valid UTR No. for online payments.');
-          return;
-        }
+      // Build split payments
+      const a1 = Number(postPay1Amt || 0) || 0;
+      const a2 = Number(postPay2Amt || 0) || 0;
+      const anyAmt = a1 > 0 || a2 > 0;
+      if (!anyAmt) {
+        message.error('Enter amount for Cash or Online (at least one).');
+        return;
+      }
+      // If any online slot has positive amount, UTR is required
+      if (postPay1Mode === 'online' && a1 > 0) {
+        const u = String(postPay1Utr || '').trim();
+        if (u.length < 4) { message.error('Enter UTR for Online (Slot 1).'); return; }
+      }
+      if (postPay2Mode === 'online' && a2 > 0) {
+        const u = String(postPay2Utr || '').trim();
+        if (u.length < 4) { message.error('Enter UTR for Online (Slot 2).'); return; }
       }
 
-      // Minimal post-service payload per requirement (exact shape expected by Follow-Ups)
+      const payments = [];
+      if (a1 > 0) payments.push({ amount: Math.round(a1), mode: postPay1Mode, ...(postPay1Mode === 'online' ? { utr: String(postPay1Utr || '').trim() } : {}) });
+      if (a2 > 0) payments.push({ amount: Math.round(a2), mode: postPay2Mode, ...(postPay2Mode === 'online' ? { utr: String(postPay2Utr || '').trim() } : {}) });
+      const collectedAmount = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const modes = Array.from(new Set(payments.map(p => p.mode)));
+      const paymentMode = modes.length > 1 ? 'mixed' : (modes[0] || '');
+      const onlineUtrs = payments.filter(p => p.mode === 'online' && p.utr).map(p => p.utr);
+      const joinedUtr = onlineUtrs.join(' / ');
+
+      // Minimal post-service payload per requirement (plus payments)
       const payload = {
         postServiceAt: new Date().toISOString(),
         formValues: {
@@ -760,8 +783,18 @@ export default function JobCard({ initialValues = null } = {}) {
       };
 
       // Optimistic: queue background post-service save
-      message.success({ key: 'postsave', content: 'Saved. Syncing in background…' });
-      const data = { mobile: mobile10, jcNo, collectedAmount: amount, paymentMode: postPayment, utr: postPayment === 'online' ? String(postUtr || '').trim() : undefined, utrNo: postPayment === 'online' ? String(postUtr || '').trim() : undefined, payload };
+      message.success({ key: 'postsave', content: 'Saved successfully' });
+      const data = {
+        mobile: mobile10,
+        jcNo,
+        serviceAmount: amount,
+        collectedAmount,
+        paymentMode,
+        payments,
+        utr: joinedUtr || undefined,
+        utrNo: joinedUtr || undefined,
+        payload: { ...payload, payments },
+      };
       const outboxId = enqueueOutbox({ type: 'post', data });
       setTimeout(async () => {
         try {
@@ -781,7 +814,10 @@ export default function JobCard({ initialValues = null } = {}) {
         await handlePrint('post');
       }
       setPostOpen(false);
-      setPostUtr('');
+      setPostPay1Amt('');
+      setPostPay1Utr('');
+      setPostPay2Amt('');
+      setPostPay2Utr('');
     } catch (e) {
       console.warn('post-service save error:', e);
       message.error((e && e.message) || 'Could not save post-service details.');
@@ -1251,30 +1287,64 @@ export default function JobCard({ initialValues = null } = {}) {
         </div>
       </div>
 
-      {/* Post-service modal: payment + actions */}
+      {/* Post-service modal: split payments (two slots) + actions */}
       <Modal
         title="Post-service"
         open={postOpen}
         onCancel={() => setPostOpen(false)}
         footer={null}
       >
-        <div style={{ marginBottom: 12 }}>Select payment mode:</div>
-        <Segmented
-          value={postPayment}
-          onChange={(v) => setPostPayment(v)}
-          options={[{ label: 'Cash', value: 'cash' }, { label: 'Online', value: 'online' }]}
-        />
-        {postPayment === 'online' && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No.</div>
-            <Input
-              placeholder="Enter UTR number"
-              value={postUtr}
-              onChange={(e) => setPostUtr(e.target.value)}
-              maxLength={32}
-            />
-          </div>
-        )}
+        <div style={{ display: 'grid', gap: 12 }}>
+          {/* Slot 1 */}
+          <Card size="small" bordered>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div>
+                <div style={{ marginBottom: 6 }}>Amount (₹)</div>
+                <Input
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={postPay1Amt}
+                  onChange={(e) => setPostPay1Amt(e.target.value.replace(/[^0-9.]/g,''))}
+                />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6 }}>Mode</div>
+                <Segmented value={postPay1Mode} onChange={setPostPay1Mode} options={[{ label: 'Cash', value: 'cash' }, { label: 'Online', value: 'online' }]} />
+              </div>
+            </div>
+            {postPay1Mode === 'online' && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No. (Slot 1)</div>
+                <Input placeholder="Enter UTR number" value={postPay1Utr} onChange={(e)=>setPostPay1Utr(e.target.value)} maxLength={32} />
+              </div>
+            )}
+          </Card>
+
+          {/* Slot 2 */}
+          <Card size="small" bordered>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div>
+                <div style={{ marginBottom: 6 }}>Amount (₹)</div>
+                <Input
+                  inputMode="numeric"
+                  placeholder="0"
+                  value={postPay2Amt}
+                  onChange={(e) => setPostPay2Amt(e.target.value.replace(/[^0-9.]/g,''))}
+                />
+              </div>
+              <div>
+                <div style={{ marginBottom: 6 }}>Mode</div>
+                <Segmented value={postPay2Mode} onChange={setPostPay2Mode} options={[{ label: 'Cash', value: 'cash' }, { label: 'Online', value: 'online' }]} />
+              </div>
+            </div>
+            {postPay2Mode === 'online' && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No. (Slot 2)</div>
+                <Input placeholder="Enter UTR number" value={postPay2Utr} onChange={(e)=>setPostPay2Utr(e.target.value)} maxLength={32} />
+              </div>
+            )}
+          </Card>
+        </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={() => setPostOpen(false)}>Cancel</Button>
           <Button onClick={() => handlePostServiceFlow(false)} disabled={actionCooldownUntil > Date.now()}>Save Only</Button>

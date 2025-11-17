@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbzZMHPqNcqY6HuKK6Y8vI02UXIC5IyHhbIo0Wu1iCtQgCmwigQJ8DPUPy_9vYIZLI6uNQ/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbz8RbqoPJ4EfkrDVRBg5qthQHRWIkz8v_fjvt41TNq-b26urfqWQy3K3KRndtrlBLf9ug/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 

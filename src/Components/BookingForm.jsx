@@ -1473,7 +1473,7 @@ export default function BookingForm({
                 step={500}
                 prefix={<CreditCardOutlined />}
                 placeholder="Enter amount"
-                disabled={paymentsOnlyMode}
+                disabled={false}
               />
             </Form.Item>
           </Col>
@@ -1936,7 +1936,6 @@ function AttachDocument({ webhookUrl }) {
   const [mobile, setMobile] = useState("");
   const [docType, setDocType] = useState("");
   const [existing, setExisting] = useState([]);
-  const [append, setAppend] = useState(true);
 
   const clear = () => {
     setFileList([]);
@@ -1944,7 +1943,6 @@ function AttachDocument({ webhookUrl }) {
     setMobile("");
     setDocType("");
     setExisting([]);
-    setAppend(true);
   };
 
   const uploadOnly = async (file) => {
@@ -2046,7 +2044,7 @@ function AttachDocument({ webhookUrl }) {
         name: f.name,
         url: up.url,
         fileId: up.fileId,
-        append: append ? true : false,
+        append: true,
         ts: dayjs().toISOString(),
       };
       const resp = await saveBookingViaWebhook({
@@ -2165,21 +2163,9 @@ function AttachDocument({ webhookUrl }) {
               Maximum size 5MB. PDFs only.
             </p>
           </Dragger>
-          <label
-            style={{
-              display: "inline-flex",
-              gap: 8,
-              alignItems: "center",
-              fontSize: 12,
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={append}
-              onChange={(e) => setAppend(e.target.checked)}
-            />
-            Append to existing links (don’t overwrite)
-          </label>
+          <div style={{ fontSize: 12, color: '#64748b' }}>
+            New document will be added; previous links are retained.
+          </div>
         </Space>
       </Modal>
     </>

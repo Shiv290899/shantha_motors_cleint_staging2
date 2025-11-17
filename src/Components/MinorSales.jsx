@@ -9,7 +9,7 @@ import { SALES_DISPLAY } from "../data/contactInfo";
 // Optional: Configure your Minor Sales Google Apps Script Web App URL via Vite env
 // Add to client/.env (vite-project/.env):
 //   VITE_MINOR_SALES_GAS_URL=https://script.google.com/macros/s/YOUR_ID/exec
-const MINOR_SALES_GAS_URL = import.meta.env.VITE_MINOR_SALES_GAS_URL || "https://script.google.com/macros/s/AKfycbzsa6fCEhFZXZ2ot2DriCudvHKF6gxXJ3yNYFUisXeAVMEM3QP17wyIuUBXdrEu2pbS/exec"; // empty -> offline mode
+const MINOR_SALES_GAS_URL = import.meta.env.VITE_MINOR_SALES_GAS_URL || "https://script.google.com/macros/s/AKfycbz0GH3Hr9uuUHhfjwWTcLMK3PmhI7yeecstGfXVjimIw5RDT0hYWR_pUf-aUX2Jfi9N/exec"; // empty -> offline mode
 
 const phoneRule = [
   { required: true, message: "Mobile number is required" },
@@ -200,6 +200,9 @@ export default function MinorSales() {
       if (MINOR_SALES_GAS_URL) {
         const resp = await saveBookingViaWebhook({ webhookUrl: MINOR_SALES_GAS_URL, method: "POST", payload });
         if (!resp?.success) { message.error("Failed to save before printing"); return; }
+        message.success("Saved successfully");
+      } else {
+        message.success("Saved successfully (offline)");
       }
       // Prepare print values from validated form values
       setPrintVals({
