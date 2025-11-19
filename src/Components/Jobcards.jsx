@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbz8RbqoPJ4EfkrDVRBg5qthQHRWIkz8v_fjvt41TNq-b26urfqWQy3K3KRndtrlBLf9ug/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycby3BdE8ZLIvh6nrnPsZcmUyjn9VA2AwlTRsdfF2pfB9i60-NSBqEAaDi0ZhpnqA9zEF6g/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -51,7 +51,8 @@ export default function Jobcards() {
   const [renderMode, setRenderMode] = useState('pagination');
   const [loadedCount, setLoadedCount] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
-  const USE_SERVER_PAG = String(import.meta.env.VITE_USE_SERVER_PAGINATION || '').toLowerCase() === 'true';
+  // Default to server pagination enabled unless explicitly disabled by env
+  const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });

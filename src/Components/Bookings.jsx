@@ -48,10 +48,11 @@ export default function Bookings() {
   const [renderMode, setRenderMode] = useState('pagination'); // 'pagination' | 'loadMore'
   const [loadedCount, setLoadedCount] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
-  const USE_SERVER_PAG = String(import.meta.env.VITE_USE_SERVER_PAGINATION || '').toLowerCase() === 'true';
+  // Default to server pagination without requiring env var
+  const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
-  const [actionModal, setActionModal] = useState({ open: false, type: '', row: null, fileList: [] });
+  const [actionModal, setActionModal] = useState({ open: false, type: '', row: null, fileList: [], loading: false });
 
   // User + branch scoping
   const [userRole, setUserRole] = useState("");
@@ -304,14 +305,14 @@ export default function Bookings() {
 
   const handleInvoiceChange = async (row, value) => {
     if (value === 'received') {
-      setActionModal({ open: true, type: 'invoice', row, fileList: [] });
+      setActionModal({ open: true, type: 'invoice', row, fileList: [], loading: false });
     } else {
       await updateBooking(row.bookingId, { invoiceStatus: value }, row.mobile);
     }
   };
   const handleInsuranceChange = async (row, value) => {
     if (value === 'received') {
-      setActionModal({ open: true, type: 'insurance', row, fileList: [] });
+      setActionModal({ open: true, type: 'insurance', row, fileList: [], loading: false });
     } else {
       await updateBooking(row.bookingId, { insuranceStatus: value }, row.mobile);
     }
@@ -321,8 +322,11 @@ export default function Bookings() {
   };
   const [vehNoDraft, setVehNoDraft] = useState({}); // bookingId -> reg no draft
   const handleSaveVehNo = async (row) => {
-    const v = String(vehNoDraft[row.bookingId] || '').trim();
+    const raw = String(vehNoDraft[row.bookingId] || '').trim();
+    const v = normalizeVehNo(raw);
     if (!v) { message.error('Enter vehicle number'); return; }
+    const RTO_REGEX = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/; // e.g., KA55HY5666
+    if (!RTO_REGEX.test(v)) { message.error('Use format KA55HY5666 (2 letters, 2 digits, 2 letters, 4 digits)'); return; }
     await updateBooking(row.bookingId, { vehicleNo: v, regNo: v }, row.mobile);
   };
 
@@ -439,10 +443,10 @@ export default function Bookings() {
         />
         <Input
           size='small'
-          placeholder='Vehicle No.'
+          placeholder='KA55HY5666'
           style={{ width: 140 }}
           value={vehNoDraft[r.bookingId] ?? (r.vehicleNo || '')}
-          onChange={(e)=> setVehNoDraft((m)=> ({ ...m, [r.bookingId]: e.target.value }))}
+          onChange={(e)=> setVehNoDraft((m)=> ({ ...m, [r.bookingId]: normalizeVehNo(e.target.value) }))}
           onPressEnter={()=> handleSaveVehNo(r)}
         />
         <Button size='small' onClick={()=> handleSaveVehNo(r)}>Save</Button>
@@ -596,24 +600,38 @@ export default function Bookings() {
       <Modal
         open={actionModal.open}
         title={`${actionModal.type === 'invoice' ? 'Invoice' : 'Insurance'} – Upload file`}
-        onCancel={()=> setActionModal({ open: false, type: '', row: null, fileList: [] })}
+        onCancel={()=> setActionModal({ open: false, type: '', row: null, fileList: [], loading: false })}
+        confirmLoading={actionModal.loading}
+        okText={actionModal.loading ? 'Saving…' : 'Save'}
+        cancelButtonProps={{ disabled: actionModal.loading }}
+        maskClosable={!actionModal.loading}
         onOk={async ()=>{
-          try {
-            if (!actionModal.row) { setActionModal({ open:false, type:'', row:null, fileList:[] }); return; }
-            const f = (actionModal.fileList || [])[0];
-            if (!f) { message.error('Please select a PDF file'); return; }
-            const up = await uploadFileToGAS(f);
-            const url = up?.url || up?.downloadUrl || '';
-            if (!url) { message.error('Upload failed'); return; }
-            if (actionModal.type === 'invoice') {
-              await updateBooking(actionModal.row.bookingId, { invoiceStatus: 'received', invoiceFileUrl: url }, actionModal.row.mobile);
-            } else if (actionModal.type === 'insurance') {
-              await updateBooking(actionModal.row.bookingId, { insuranceStatus: 'received', insuranceFileUrl: url }, actionModal.row.mobile);
+          // Guard double clicks
+          if (actionModal.loading) return;
+          if (!actionModal.row) { setActionModal({ open:false, type:'', row:null, fileList:[], loading:false }); return; }
+          const f = (actionModal.fileList || [])[0];
+          if (!f) { message.error('Please select a PDF file'); return; }
+          // Flip loading first so the spinner renders before heavy work
+          setActionModal((s)=> ({ ...s, loading: true }));
+          const msgKey = 'upload-progress';
+          message.loading({ key: msgKey, content: 'Uploading and saving…', duration: 0 });
+          setTimeout(async () => {
+            try {
+              const up = await uploadFileToGAS(f);
+              const url = up?.url || up?.downloadUrl || '';
+              if (!url) { message.error({ key: msgKey, content: 'Upload failed' }); setActionModal((s)=> ({ ...s, loading: false })); return; }
+              if (actionModal.type === 'invoice') {
+                await updateBooking(actionModal.row.bookingId, { invoiceStatus: 'received', invoiceFileUrl: url }, actionModal.row.mobile);
+              } else if (actionModal.type === 'insurance') {
+                await updateBooking(actionModal.row.bookingId, { insuranceStatus: 'received', insuranceFileUrl: url }, actionModal.row.mobile);
+              }
+              message.success({ key: msgKey, content: 'Saved successfully' });
+              setActionModal({ open: false, type: '', row: null, fileList: [], loading: false });
+            } catch  {
+              message.error({ key: msgKey, content: 'Could not upload file' });
+              setActionModal((s)=> ({ ...s, loading: false }));
             }
-            setActionModal({ open: false, type: '', row: null, fileList: [] });
-          } catch {
-            message.error('Could not upload file');
-          }
+          }, 0);
         }}
       >
         <Upload.Dragger
@@ -622,6 +640,7 @@ export default function Bookings() {
           accept='.pdf'
           fileList={actionModal.fileList}
           maxCount={1}
+          disabled={actionModal.loading}
           onChange={({ fileList })=> setActionModal((s)=> ({ ...s, fileList: fileList.slice(0,1) }))}
           itemRender={(origin) => origin}
         >
@@ -686,6 +705,14 @@ function normalizeLink(u) {
     download: `https://drive.google.com/uc?export=download&id=${id}`,
     embed: `https://drive.google.com/file/d/${id}/preview`,
   };
+}
+
+// Normalize vehicle number to KA55HY5666 style: uppercase, strip non-alphanum, limit to 10
+function normalizeVehNo(s) {
+  return String(s || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 10);
 }
 
 function LinkCell({ url }) {

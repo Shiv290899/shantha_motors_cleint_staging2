@@ -94,9 +94,10 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const [branchOnly, setBranchOnly] = useState(true);
   // pagination (controlled to allow changing page size)
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(25);
-  // For Jobcard: option to show completed (post-serviced)
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [pageSize, setPageSize] = useState(10); // target: 10 rows per page for snappy loads
+  // Jobcard-only status filter: all | pending | completed
+  const [jobStatus, setJobStatus] = useState('all');
+  // Jobcard: always show every row for the branch (no completed toggle)
 
   const [me, setMe] = useState({ name: '', branch: '' });
   const [userRole, setUserRole] = useState('');
@@ -139,6 +140,12 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const modeKey = String(mode || '').toLowerCase();
   const isJobcard = modeKey === 'jobcard';
   const isBooking = modeKey === 'booking';
+
+  // Jobcard: force filter to 'all' so nothing gets hidden by date
+  React.useEffect(() => {
+    if (isJobcard && filter !== 'all') setFilter('all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isJobcard]);
 
   const callWebhook = async ({ method = 'GET', payload }) => {
     if (isJobcard) {
@@ -254,48 +261,22 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
       const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
       const payload = isBooking ? (
-        BOOKING_SECRET ? { action: 'list', secret: BOOKING_SECRET } : { action: 'list' }
+        BOOKING_SECRET ? { action: 'list', page, pageSize, secret: BOOKING_SECRET } : { action: 'list', page, pageSize }
       ) : (() => {
-        // Always pass branch to the webhook for strict server-side scoping
+        // Jobcard: fetch full list for the branch, not just followups
         const meBranch = (me.branch || allowedBranches[0] || '');
         const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
         return {
-          action: 'followups',
-          filter, // today|overdue|upcoming|all
+          action: 'list',
           branch: shouldRestrict ? meBranch : '',
-          executive: '', // never restrict by executive
+          page,
+          pageSize,
         };
       })();
       let resp = await callWebhook({ method: 'GET', payload }).catch(() => null);
       let j = resp?.data || resp || {};
       let list = Array.isArray(j?.rows) ? j.rows : (Array.isArray(j?.data) ? j.data : []);
-      // Robust fallback: for jobcard, also fetch `action=list` and merge to ensure completed rows appear
-      if (isJobcard) {
-        try {
-          const listResp = await callWebhook({ method: 'GET', payload: JOB_SECRET ? { action: 'list', secret: JOB_SECRET } : { action: 'list' } }).catch(() => null);
-          const lj = listResp?.data || listResp || {};
-          const list2 = Array.isArray(lj?.rows) ? lj.rows : (Array.isArray(lj?.data) ? lj.data : []);
-          if (Array.isArray(list2) && list2.length) {
-            // Merge arrays (prefer objects with payload if duplicates)
-            const merged = [];
-            const seen = new Set();
-            [...list, ...list2].forEach((row) => {
-              try {
-                const payloadRaw = (row && row.payload) ? row.payload : (row && row.values ? (row.values.Payload || row.values['payload'] || row.values['PAYLOAD']) : null);
-                let jc = '';
-                if (payloadRaw) {
-                  let p = typeof payloadRaw === 'object' ? payloadRaw : (JSON.parse(String(payloadRaw||'{}')));
-                  const fv = p.formValues || {};
-                  jc = fv.jcNo || p.jcNo || '';
-                }
-                const key = jc || (row && row.serialNo) || (row && row['JC No']) || JSON.stringify(row).slice(0,128);
-                if (!seen.has(key)) { seen.add(key); merged.push(row); }
-              } catch { merged.push(row); }
-            });
-            list = merged;
-          }
-        } catch { /* ignore */ }
-      }
+      // For jobcard we already call action=list above
       // Normalize various row shapes from webhook
       const asPayload = (r) => {
         if (!r) return null;
@@ -354,13 +335,15 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         const branchDisp = (fv.branch || p.branch || values.Branch || values['Branch Name'] || '-');
         // Determine post-service completion for jobcard
         const postServiced = (() => {
-          // Prefer explicit payload flags from our app
+          // Stricter completion detection to avoid hiding rows prematurely
           if (p.postServiceAt) return true;
-          if (p.paymentMode || p.utr || p.utrNo) return true;
-          // Fallback to sheet columns
+          // Consider completed if payments[] has any positive amount
+          if (Array.isArray(p.payments) && p.payments.some(x => Number(x?.amount || 0) > 0)) return true;
+          // Fallback to sheet columns only if explicit timestamp/flag present
+          const postAt = values['Post Service At'] || values['PostServiceAt'] || values['Post_Service_At'];
+          if (postAt) return true;
           const vs = (k) => String(values[k] || '').trim().toLowerCase();
           if (['yes','done','completed','true'].includes(vs('Post Service'))) return true;
-          if (values['Post Service At'] || values['PostServiceAt'] || values['Post_Service_At']) return true;
           return false;
         })();
 
@@ -417,9 +400,14 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       // Client-side filtering as a fallback (in case webhook returns unfiltered rows)
       const startToday = dayjs().startOf('day');
       const endToday = dayjs().endOf('day');
-      const filtered = items.filter((it) => {
-        // For jobcard follow-ups, hide items that are already post-serviced unless toggled
-        if (isJobcard && it.postServiced && !showCompleted) return false;
+      const filtered = isJobcard ? (() => {
+        let arr = items;
+        if (jobStatus !== 'all') {
+          const want = String(jobStatus).toLowerCase();
+          arr = arr.filter((it) => String(it.status || '').toLowerCase() === want);
+        }
+        return arr;
+      })() : items.filter((it) => {
         // For quotation follow-ups, hide rows that are marked done/closed (non-pending)
         if (!isJobcard && !isBooking) {
           const st = String(it.status || '').toLowerCase();
@@ -472,7 +460,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
     fetchFollowUps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, mode, userRole, allowedBranches.length]);
+  }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, mode, userRole, allowedBranches.length, jobStatus]);
 
   const updateFollowUp = async (serialNo, patch) => {
     try {
@@ -625,18 +613,31 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     <ErrorBoundary>
       <div>
       <Space style={{ marginBottom: 24 }} wrap>
-        <Select
-          value={filter}
-          onChange={setFilter}
-          style={{ minWidth: 130 }}
-          options={[
-            { value: 'all', label: 'All' },
-            { value: 'today', label: 'Due Today' },
-            { value: 'overdue', label: 'Overdue' },
-            { value: 'upcoming', label: 'Upcoming' },
-            
-          ]}
-        />
+        {!isJobcard && (
+          <Select
+            value={filter}
+            onChange={setFilter}
+            style={{ minWidth: 130 }}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'today', label: 'Due Today' },
+              { value: 'overdue', label: 'Overdue' },
+              { value: 'upcoming', label: 'Upcoming' },
+            ]}
+          />
+        )}
+        {isJobcard && (
+          <Select
+            value={jobStatus}
+            onChange={setJobStatus}
+            style={{ minWidth: 140 }}
+            options={[
+              { value: 'all', label: 'All statuses' },
+              { value: 'pending', label: 'Pending' },
+              { value: 'completed', label: 'Completed' },
+            ]}
+          />
+        )}
         {/* Only admins/owners can switch branch scope; staff locked to own branch */}
         {['owner','admin'].includes(userRole) && (
           <Select
@@ -645,12 +646,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
             options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
           />
         )}
-        {isJobcard && (
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={showCompleted} onChange={(e)=> setShowCompleted(e.target.checked)} />
-            Show completed (post-service)
-          </label>
-        )}
+        {/* Jobcard: we always show every row for the branch; no completed toggle */}
         <Button onClick={fetchFollowUps} loading={loading}>Refresh</Button>
       </Space>
 

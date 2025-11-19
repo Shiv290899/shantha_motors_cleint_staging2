@@ -45,7 +45,8 @@ export default function Quotations() {
   const [renderMode, setRenderMode] = useState('pagination');
   const [loadedCount, setLoadedCount] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
-  const USE_SERVER_PAG = String(import.meta.env.VITE_USE_SERVER_PAGINATION || '').toLowerCase() === 'true';
+  // Default to server pagination so no env is required
+  const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({}); // key: serialNo -> { level, text }
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
 
