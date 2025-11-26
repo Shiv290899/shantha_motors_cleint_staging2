@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Card, Space, Typography, message, Button, Divider, Tag, Tooltip, Progress } from 'antd';
+import dayjs from 'dayjs';
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
 
 const { Text } = Typography;
@@ -26,6 +27,40 @@ export default function StaffAccountCard() {
       const js = resp?.data || resp || {};
       if (!js?.success) throw new Error('Failed');
       const payloadData = js?.data && typeof js.data === 'object' ? js.data : js;
+
+      // Also read today's branch rows from Daily Collections to separate cash vs online precisely (no GAS changes needed)
+      try {
+        const dateIso = dayjs().format('YYYY-MM-DD');
+        const p2 = SECRET
+          ? { action:'collections', branch, date: dateIso, page: 1, pageSize: 50, secret: SECRET }
+          : { action:'collections', branch, date: dateIso, page: 1, pageSize: 50 };
+        const resp2 = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload: p2 });
+        const j2 = resp2?.data || resp2 || {};
+        const list = Array.isArray(j2?.data) ? j2.data : (Array.isArray(j2?.rows) ? j2.rows : []);
+        const norm = (s) => String(s || '').trim().toLowerCase();
+        const staffKey = norm(staff);
+        const row = list.find(r => norm(r?.staff) === staffKey) || null;
+        if (row) {
+          setData({
+            ...payloadData,
+            cashAmountPending: row.cashAmount,
+            onlineAmountPending: row.onlineAmount,
+            cashAmount: row.cashAmount,
+            onlineAmount: row.onlineAmount,
+            total: row.total,
+            totalPending: row.total,
+            bookingAmountPending: row.bookingAmount,
+            jcAmountPending: row.jcAmount,
+            minorSalesAmountPending: row.minorSalesAmount,
+            bookingAmount: row.bookingAmount,
+            jcAmount: row.jcAmount,
+            minorSalesAmount: row.minorSalesAmount,
+          });
+          setLoading(false);
+          return;
+        }
+      } catch { /* ignore; fall back to summary */ }
+
       setData(payloadData);
     } catch { message.error('Could not load account summary'); }
     finally { setLoading(false); }
@@ -38,21 +73,15 @@ export default function StaffAccountCard() {
   // Derive cash vs online safely, with multiple possible field names supported
   const totals = useMemo(() => {
     const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
-    let total = num(data.totalPending ?? data.total ?? 0); // C (collected today)
+    // Prefer explicit cash/online if present; otherwise derive
     const cash = num(
-      data.cashPending ?? data.cashAmountPending ?? data.cash ?? data.cashAmount ?? 0
+      data.cashAmount ?? data.cashAmountPending ?? data.cash ?? data.cashPending ?? 0
     );
-    // If API didn't send online explicitly, derive it
-    const onlineRaw = data.onlinePending ?? data.onlineAmountPending ?? data.online ?? data.onlineAmount;
-    let online = num(onlineRaw);
-    if (!onlineRaw && total && cash >= 0) {
-      online = Math.max(0, total - cash);
-    }
-    // If webhook's total is missing or inconsistent, prefer cash+online
-    const sumCO = cash + online;
-    if (!total || Math.abs(total - sumCO) > 0) {
-      total = sumCO;
-    }
+    const online = num(
+      data.onlineAmount ?? data.onlineAmountPending ?? data.online ?? data.onlinePending ?? 0
+    );
+    let total = num(data.total ?? data.totalPending ?? (cash + online));
+    if (!total) total = cash + online;
     const booking = num(data.bookingAmountPending ?? data.bookingAmount ?? 0);
     const minor = num(data.minorSalesAmountPending ?? data.minorSalesAmount ?? 0);
     const jcSales = num(data.jcAmountPending ?? data.jcAmount ?? 0);
@@ -69,7 +98,7 @@ export default function StaffAccountCard() {
     // Compute pending if API didn't send it: S - C
     let pending = num(data.closingPending ?? data.outstandingPending ?? data.closing ?? 0);
     if (!pending) pending = Math.max(0, salesSum - total);
-    const cashToHandOver = pending; // show S - C in the card
+    const cashToHandOver = cash; // physical handover is only cash
     return {
       total, // C
       cash: cashToHandOver,
