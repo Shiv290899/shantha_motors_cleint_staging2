@@ -559,13 +559,13 @@ export default function Navbar() {
                           onClick={onSignOut}
                           style={{ ...styles.accItem, width: "100%", textAlign: "left", background: "white", border: "none", cursor: "pointer" }}
                         >
-                          Sign out
+                      Logout
                         </button>
                       </>
                     ) : (
                       <>
                         <Link to="/login" style={styles.accItem} onClick={() => setAccOpen(false)}>
-                          Sign in
+                          Login
                         </Link>
                         <Link to="/register" style={{ ...styles.accItem, borderBottom: "none" }} onClick={() => setAccOpen(false)}>
                           Create account
@@ -695,12 +695,12 @@ export default function Navbar() {
                 onClick={() => { onSignOut(); setMenuOpen(false); }}
                 style={{ ...styles.drawerLink(false), width: "100%", textAlign: "left", background: "white", border: `1px solid ${T.line}`, cursor: "pointer" }}
               >
-                Sign out
+                Logout
               </button>
             </>
           ) : (
             <>
-              <Link to="/login" style={styles.drawerLink(false)}>Sign in</Link>
+              <Link to="/login" style={styles.drawerLink(false)}>Login</Link>
               <Link to="/register" style={styles.drawerLink(false)}>Create account</Link>
             </>
           )}
