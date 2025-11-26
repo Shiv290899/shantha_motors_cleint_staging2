@@ -9,7 +9,7 @@ import { SALES_DISPLAY } from "../data/contactInfo";
 // Optional: Configure your Minor Sales Google Apps Script Web App URL via Vite env
 // Add to client/.env (vite-project/.env):
 //   VITE_MINOR_SALES_GAS_URL=https://script.google.com/macros/s/YOUR_ID/exec
-const MINOR_SALES_GAS_URL = import.meta.env.VITE_MINOR_SALES_GAS_URL || "https://script.google.com/macros/s/AKfycbz0GH3Hr9uuUHhfjwWTcLMK3PmhI7yeecstGfXVjimIw5RDT0hYWR_pUf-aUX2Jfi9N/exec"; // empty -> offline mode
+const MINOR_SALES_GAS_URL = import.meta.env.VITE_MINOR_SALES_GAS_URL || "https://script.google.com/macros/s/AKfycbzSZXgDyahzkeDYWLdLIdRdrNz-Jj4it1VGVwY06FlMZnjMrsFRtZQFO-Eu592_O-hy/exec"; // empty -> offline mode
 
 const phoneRule = [
   { required: true, message: "Mobile number is required" },
@@ -174,9 +174,18 @@ export default function MinorSales() {
 
   
   async function printAndSaveSlip() {
+    setPrinting(true); // show spinner instantly on tap
     try {
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
       if (!cart.length) { message.warning("Add at least one item to cart"); return; }
       const vals = await form.validateFields(["custName", "custMobile", "paymentMode"]);
+
+      // Pre-aggregate split for GAS (frontend-only approach)
+      const mode = String(vals.paymentMode || '').toLowerCase();
+      const cashCollected = mode === 'cash' ? Number(cartTotal || 0) : 0;
+      const onlineCollected = mode === 'online' ? Number(cartTotal || 0) : 0;
+      const totalCollected = Number(cartTotal || 0);
 
       const payload = {
         action: "minor_sales_save",
@@ -186,6 +195,10 @@ export default function MinorSales() {
           dateTimeIso: new Date().toISOString(),
           orderId,
           summaryTotal: cartTotal,
+          source: 'minorsales',
+          cashCollected,
+          onlineCollected,
+          totalCollected,
           items: cart,
           purchased: true,
           customer: {
@@ -211,6 +224,10 @@ export default function MinorSales() {
         dateTimeIso: new Date().toISOString(),
         orderId,
         summaryTotal: cartTotal,
+        source: 'minorsales',
+        cashCollected,
+        onlineCollected,
+        totalCollected,
         items: cart,
         customer: {
           name: String(vals.custName || '').trim().toUpperCase(),
@@ -219,10 +236,8 @@ export default function MinorSales() {
           utr: String(form.getFieldValue('utr') || '').trim() || undefined,
         },
       });
-      setPrinting(true);
-      await new Promise((r)=>setTimeout(r,10));
+      await new Promise((r)=>setTimeout(r,0));
       await handleSmartPrint(printRef.current);
-      setPrinting(false);
       // After successful save and print, reset the form for the next entry
       try { form.resetFields(); } catch { /* ignore */ }
       setCart([]);
@@ -232,7 +247,7 @@ export default function MinorSales() {
       if (e?.errorFields) return;
       console.error('Print slip failed', e);
       message.error('Unable to print slip');
-    }
+    } finally { setPrinting(false); }
   }
   
 
@@ -253,6 +268,12 @@ export default function MinorSales() {
 
       const items = cart;
 
+      // Pre-aggregate split for GAS (frontend-only approach)
+      const mode = String(vals.paymentMode || '').toLowerCase();
+      const cashCollected = mode === 'cash' ? Number(cartTotal || 0) : 0;
+      const onlineCollected = mode === 'online' ? Number(cartTotal || 0) : 0;
+      const totalCollected = Number(cartTotal || 0);
+
       const payload = {
         action: "minor_sales_save",
         data: {
@@ -261,6 +282,10 @@ export default function MinorSales() {
           dateTimeIso: new Date().toISOString(),
           orderId,
           summaryTotal: cartTotal,
+          source: 'minorsales',
+          cashCollected,
+          onlineCollected,
+          totalCollected,
           items,
           purchased: true,
           customer: {
@@ -419,8 +444,16 @@ export default function MinorSales() {
             <Col xs={24} md={8}>
               <Form.Item shouldUpdate noStyle>
                 {() => (String(form.getFieldValue('paymentMode')||'').toLowerCase()==='online' ? (
-                  <Form.Item name="utr" label="UTR / Reference" rules={[{ required: true, message: 'Enter UTR/Reference for online payments' }]}> 
-                    <Input placeholder="e.g., 23XXXXUTR123" />
+                  <Form.Item
+                    name="utr"
+                    label="UTR / Reference"
+                    rules={[{ required: true, message: 'Enter UTR/Reference for online payments' }]}
+                    getValueFromEvent={(e) => {
+                      const v = e && e.target ? e.target.value : e;
+                      return typeof v === 'string' ? v.toUpperCase() : v;
+                    }}
+                  > 
+                    <Input placeholder="e.g., 23XXXXUTR123" style={{ textTransform: 'uppercase' }} />
                   </Form.Item>
                 ) : null)}
               </Form.Item>
@@ -430,7 +463,7 @@ export default function MinorSales() {
 
         <Row justify="space-between" align="middle" style={{ marginTop: 8 }}>
           <Col>
-            <Button type="primary" onClick={printAndSaveSlip} disabled={!cart.length || printing}>Print</Button>
+            <Button type="primary" onClick={printAndSaveSlip} disabled={!cart.length || printing} loading={printing}>Print</Button>
           </Col>
           <Col />
         </Row>

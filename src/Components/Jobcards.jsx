@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycby3BdE8ZLIvh6nrnPsZcmUyjn9VA2AwlTRsdfF2pfB9i60-NSBqEAaDi0ZhpnqA9zEF6g/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbzhUcfXt2RA4sxKedNxpiJNwbzygmuDQxt-r5oYyZyJuMZDw3o4sRl-lO2pSPS_ijugGA/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -131,6 +131,16 @@ export default function Jobcards() {
             const fromSheet = pick(obj, HEAD.paymentMode);
             return String(fromSheet || payload?.paymentMode || '');
           })();
+          const postAt = (payload && payload.postServiceAt) || (obj && (obj.Post_Service_At || obj['Post Service At'])) || '';
+          const status = (() => {
+            const hasPost = String(postAt || '').trim().length > 0;
+            const hasPayments = Array.isArray(payload?.payments) && payload.payments.some(p => Number(p?.amount || 0) > 0);
+            if (hasPost || hasPayments) return 'completed';
+            const hasPaymentMode = String(payMode || '').trim().length > 0;
+            const hasAmount = String(serviceAmount || '').trim().length > 0;
+            if (hasPaymentMode && hasAmount) return 'completed';
+            return 'pending';
+          })();
 
           return {
             key: idx,
@@ -148,6 +158,7 @@ export default function Jobcards() {
             vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
             amount: serviceAmount.trim(),
             paymentMode: payMode.trim(),
+            status,
             // remarks (if present in sheet)
             RemarkLevel: (obj && (obj.RemarkLevel || obj['Remark Level'])) || '',
             RemarkText: (obj && (obj.RemarkText || obj['Remark Text'])) || '',
@@ -211,7 +222,7 @@ export default function Jobcards() {
       if (debouncedQ) {
         const s = debouncedQ.toLowerCase();
         if (![
-          r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode
+          r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode, r.status
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
@@ -235,12 +246,37 @@ export default function Jobcards() {
     { title: "Service Type", dataIndex: "serviceType", key: "serviceType", width: 20, align: 'center', render: (v)=> String(v||'') },
     { title: "Service Amount", dataIndex: "amount", key: "amount", width: 20, align: 'right' },
     { title: "Mode of Payment", dataIndex: "paymentMode", key: "paymentMode", width: 20, align: 'center', render: (v)=> String(v||'').toUpperCase() },
+    // Status is shown only for owner/admin/backend via conditional push below; keep slot reference here
     { title: "Executive", dataIndex: "executive", key: "executive", width: 50 },
     { title: "Job Card", dataIndex: "jcNo", key: "jcNo", width: 20, ellipsis: true },
     { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 20 },
     { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 20, align: 'center', render: (v)=> String(v||'') },
   ];
   if (["backend","admin","owner"].includes(userRole)) {
+    // Insert Status column right after Mode of Payment
+    const statusColor = (v) => {
+      const s = String(v||'').toLowerCase();
+      if (s === 'completed') return 'green';
+      if (s === 'pending') return 'orange';
+      return 'default';
+    };
+    const statusLabel = (v) => {
+      const s = String(v||'').toLowerCase();
+      if (s === 'completed') return 'Completed';
+      if (s === 'pending') return 'Pending';
+      return (String(v||'') || '—');
+    };
+    const idxPayment = columns.findIndex(c => c.key === 'paymentMode');
+    if (idxPayment >= 0) {
+      columns.splice(idxPayment + 1, 0, {
+        title: "Status",
+        dataIndex: "status",
+        key: "status",
+        width: 20,
+        align: 'center',
+        render: (v) => <Tag color={statusColor(v)}>{statusLabel(v)}</Tag>,
+      });
+    }
     columns.push({ title: "Remarks", key: "remarks", width: 60, render: (_, r) => {
         const rem = remarksMap[r.jcNo];
         const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';

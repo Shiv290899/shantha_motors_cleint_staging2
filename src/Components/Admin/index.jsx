@@ -9,6 +9,7 @@ import Quotations from "../Quotations";
 import Announcements from "../Announcements";
 import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 import Jobcards from "../Jobcards";
+import AdminDailyCollections from '../AdminDailyCollections'
 // Announcements tab/banner removed as requested
 
 const { Title, Paragraph } = Typography;
@@ -38,6 +39,7 @@ export default function Admin() {
     // 4) Stock Update, 5) In-Stock Update
     { key: "stock", label: "Stock Update", children: <StockUpdate /> },
     { key: "in-stock", label: "In-Stock Update", children: <InStockUpdate /> },
+    { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
     // 6) Branches, 7) Users, 8) Announcements
     { key: "branches", label: "Branches", children: <Branches /> },
     { key: "users", label: "Users", children: <Users /> },

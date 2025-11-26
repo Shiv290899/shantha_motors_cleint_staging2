@@ -12,6 +12,7 @@ import Announcements from "../Announcements";
 import MinorSales from "../MinorSales";
 import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 import { GetCurrentUser } from "../../apiCalls/users";
+import StaffAccountCard from "../StaffAccountCard";
 
 
 
@@ -130,8 +131,16 @@ export default function Staff() {
         </div>
       ),
     },
-   
-    
+    {
+      key: "account",
+      label: tabLabel('💼', 'Account'),
+      children: (
+        <div style={wrap}>
+          <StaffAccountCard />
+        </div>
+      ),
+    },
+
     {
       key: "announcements",
       label: (

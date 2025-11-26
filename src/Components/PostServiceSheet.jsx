@@ -8,7 +8,7 @@ import { inr, fmtDate, amountInWords } from "../utils/printUtils";
  * - Stronger print CSS: A4, zero body margins, resets transforms/sticky/fixed
  * - Scopes print to the active sheet to avoid blank/extra pages
  */
-const PostServiceSheet = forwardRef(function PostServiceSheet({ active, vals }, ref) {
+const PostServiceSheet = forwardRef(function PostServiceSheet({ active, vals, totals }, ref) {
   const rows = Array.isArray(vals?.labourRows) ? vals.labourRows : [];
   const items = rows.map((r, idx) => ({
     sn: idx + 1,
@@ -18,10 +18,13 @@ const PostServiceSheet = forwardRef(function PostServiceSheet({ active, vals }, 
     amount: Math.max(0, Number(r?.qty || 0) * Number(r?.rate || 0)),
   }));
 
-  const subTotal = useMemo(() => items.reduce((s, x) => s + x.amount, 0), [items]);
+  // Prefer computed totals passed from parent for consistency with billing
+  const computedSub = useMemo(() => items.reduce((s, x) => s + x.amount, 0), [items]);
   const gstPct = Number(vals?.gstLabour ?? 0);
-  const gstAmt = Math.round(subTotal * (gstPct / 100));
-  const grandTotal = Math.max(0, subTotal + gstAmt);
+  const subTotal = Math.round(Number(totals?.labourSub ?? computedSub));
+  const gstAmt = Math.round(Number(totals?.labourGST ?? (subTotal * (gstPct / 100))));
+  const discountAmt = Math.round(Number(totals?.labourDisc ?? 0));
+  const grandTotal = Math.max(0, Math.round(Number(totals?.grand ?? (subTotal + gstAmt - discountAmt))));
   const grandInWords = amountInWords(grandTotal);
 
   const parseKm = (v) => {
@@ -113,14 +116,15 @@ img { max-width: 100%; height: auto; background: transparent; }
 .center { text-align: center; }
 .tiny { font-size: 10px; }
 
-.totals { display: grid; grid-template-columns: 1fr 70mm; gap: 3mm; margin-top: 4mm; }
-.sum { display: grid; grid-auto-rows: minmax(14mm, auto); gap: 3mm; }
-.sum-pair { display: grid; grid-template-columns: 1fr 1fr; align-items: center; border: 1px solid #111; border-radius: 2mm; overflow: hidden; }
-.sum-pair .cell { padding: 0.5mm 1mm; font-size: 11pt; line-height: 1.2; }
-.sum-pair .label { font-weight: 600; border-right: 1px solid #111; }
-.sum-pair .value { text-align: right; }
-.sum-pair.emph { border-width: 1.5px; }
-.sum-pair.emph .label, .sum-pair.emph .value { font-weight: 700; }
+  .totals { display: grid; grid-template-columns: 1fr 70mm; gap: 3mm; margin-top: 4mm; }
+  /* Compact single box for all totals */
+  .sum-box { border: 1px solid #111; border-radius: 2mm; overflow: hidden; }
+  .sum-row { display: grid; grid-template-columns: 1fr 1fr; align-items: center; }
+  .sum-row > div { padding: 2mm 2.5mm; font-size: 11pt; line-height: 1.25; }
+  .sum-row .label { font-weight: 600; border-right: 1px solid #111; }
+  .sum-row + .sum-row { border-top: 1px solid #111; }
+  .sum-row .value { text-align: right; }
+  .sum-row.emph > div { font-weight: 700; }
 
 .tandc { margin-top: 4mm; }
 .tandc-title { font-weight: 700; margin-bottom: 2mm; }
@@ -208,10 +212,28 @@ img { max-width: 100%; height: auto; background: transparent; }
                 </div>
               </div>
 
-              <div className="sum">
-                <div className="sum-pair emph">
-                  <div className="cell label">Grand Total</div>
-                  <div className="cell value">{inr(grandTotal)}</div>
+              <div className="sum-box">
+                {(gstAmt > 0 || discountAmt > 0) && (
+                  <div className="sum-row">
+                    <div className="label">Labour Subtotal</div>
+                    <div className="value">{inr(subTotal)}</div>
+                  </div>
+                )}
+                {gstAmt > 0 && (
+                  <div className="sum-row">
+                    <div className="label">GST {gstPct ? `(${gstPct}% on Labour)` : "(on Labour)"}</div>
+                    <div className="value">{inr(gstAmt)}</div>
+                  </div>
+                )}
+                {discountAmt > 0 && (
+                  <div className="sum-row">
+                    <div className="label">Discount</div>
+                    <div className="value">{inr(discountAmt)}</div>
+                  </div>
+                )}
+                <div className="sum-row emph">
+                  <div className="label">Grand Total</div>
+                  <div className="value">{inr(grandTotal)}</div>
                 </div>
               </div>
             </div>

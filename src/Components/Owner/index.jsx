@@ -10,6 +10,7 @@ import Branches from '../Admin/Branches'
 import Announcements from '../Announcements'
 import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
 import Users from '../Admin/Users'
+import AdminDailyCollections from '../AdminDailyCollections'
 // Announcements tab/banner removed as requested
 
 // Owner dashboard: Analytics & Reports in tabs
@@ -67,6 +68,7 @@ export default function OwnerIndex() {
     // 4) Stock Update, 5) In-Stock Update
     { key: 'stock', label: 'Stock Update', children: <StockUpdate /> },
     { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
+    { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
     // 6) Branches, 7) Users, 8) Announcements
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },

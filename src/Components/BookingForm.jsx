@@ -60,7 +60,7 @@ const SHEET_CSV_URL =
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbxKP6gLUobik6z3N2rJcUMCrmsA5NOaVSEHVn9t6h5zNoVNWpYHaiJDi2UMiMJUpIprmA/exec";
+  "https://script.google.com/macros/s/AKfycbwEfpDBJbJEN3atxfvxLpHhptXFnYLqeIcT-uov148Mr-mqO9wSvzPD0eE5B4Fvnd2tmw/exec";
 
 const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 
@@ -282,6 +282,7 @@ export default function BookingForm({
   }, [totalVehicleCost, bookingTotal]);
 
   const [submitting, setSubmitting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
   const startActionCooldown = (ms = 6000) => {
     const until = Date.now() + ms;
@@ -289,13 +290,18 @@ export default function BookingForm({
     setTimeout(() => setActionCooldownUntil(0), ms + 50);
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (Date.now() < actionCooldownUntil) return;
     startActionCooldown(6000);
+    setPrinting(true);
     try {
-      handleSmartPrint(printRef.current);
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
+      await handleSmartPrint(printRef.current);
     } catch {
       // ignore
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -928,6 +934,20 @@ export default function BookingForm({
         v: 1,
       };
 
+      // Pre-aggregate payment split for GAS (frontend-only approach)
+      const payList = [
+        { amount: values.bookingAmount1, mode: values.paymentMode1 },
+        { amount: values.bookingAmount2, mode: values.paymentMode2 },
+        { amount: values.bookingAmount3, mode: values.paymentMode3 },
+      ].filter((p) => Number(p.amount || 0) > 0 && p.mode);
+      const cashCollected = payList
+        .filter((p) => String(p.mode).toLowerCase() === 'cash')
+        .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const onlineCollected = payList
+        .filter((p) => String(p.mode).toLowerCase() === 'online')
+        .reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      const totalCollected = cashCollected + onlineCollected;
+
       const payload = {
         customerName: values.customerName,
         mobileNumber: values.mobileNumber,
@@ -976,6 +996,11 @@ export default function BookingForm({
             reference: values.paymentReference3 || undefined,
           },
         ].filter((p) => Number(p.amount || 0) > 0 && p.mode),
+        // Convenience fields for GAS (no code changes on backend needed)
+        source: 'booking',
+        cashCollected,
+        onlineCollected,
+        totalCollected,
         bookingAmount: bookingSum || undefined,
         downPayment: values.downPayment ?? undefined,
         extraFittingAmount: values.extraFittingAmount ?? 0,
@@ -1648,12 +1673,17 @@ export default function BookingForm({
                           message: "Enter UTR / reference number",
                         },
                       ]}
+                      getValueFromEvent={(e) => {
+                        const v = e && e.target ? e.target.value : e;
+                        return typeof v === 'string' ? v.toUpperCase() : v;
+                      }}
                     >
                       <Input
                         size="large"
                         placeholder="e.g., 23XXXXUTR123"
                         allowClear
                         disabled={false}
+                        style={{ textTransform: 'uppercase' }}
                       />
                     </Form.Item>
                   ) : (
@@ -1850,7 +1880,8 @@ export default function BookingForm({
             icon={<PrinterOutlined />}
             size={isMobile ? "middle" : "large"}
             onClick={handlePrint}
-            disabled={actionCooldownUntil > Date.now()}
+            disabled={actionCooldownUntil > Date.now() || printing}
+            loading={printing}
           >
             Print Booking Slip
           </Button>

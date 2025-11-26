@@ -25,6 +25,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
     const a = Number(row?.amount || row?.totals?.grand || 0);
     return Number.isFinite(a) ? Math.max(0, Math.round(a)) : 0;
   }, [row]);
+  const [saving, setSaving] = useState(false);
 
   const valsForPrint = useMemo(() => {
     const fv = row?.formValues || row?.payload?.formValues || {};
@@ -47,11 +48,30 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
   const totalsForPrint = useMemo(() => {
     const t = row?.totals || row?.payload?.totals || {};
     const grand = amount || Number(t.grand || 0) || 0;
-    return { grand, parts: t.parts || 0, labour: t.labour || 0, labourGST: t.labourGST || 0 };
+    return {
+      grand,
+      labourSub: t.labourSub || t.labour || 0,
+      labourGST: t.labourGST || 0,
+      labourDisc: t.labourDisc || t.discount || 0,
+    };
   }, [row, amount]);
+
+  // Live payable/collection summary for gating buttons
+  const payablePreview = useMemo(() => Math.round(Number(amount || 0)), [amount]);
+  const collectedPreview = useMemo(
+    () => Math.round((Number(pay1Amt || 0) + Number(pay2Amt || 0)) || 0),
+    [pay1Amt, pay2Amt]
+  );
+  const duePreview = useMemo(
+    () => payablePreview - collectedPreview,
+    [payablePreview, collectedPreview]
+  );
 
   const savePostService = async (shouldPrint) => {
     try {
+      setSaving(true);
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
       const mobile10 = String(valsForPrint?.custMobile || "").replace(/\D/g, "").slice(-10);
       if (mobile10.length !== 10) {
         message.error("Missing/invalid 10-digit mobile.");
@@ -76,9 +96,18 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       if (a1 > 0) payments.push({ amount: Math.round(a1), mode: pay1Mode, ...(pay1Mode === 'online' ? { utr: String(pay1Utr || '').trim() } : {}) });
       if (a2 > 0) payments.push({ amount: Math.round(a2), mode: pay2Mode, ...(pay2Mode === 'online' ? { utr: String(pay2Utr || '').trim() } : {}) });
       const collectedAmount = payments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+      // Require full collection before billing/saving
+      const payable = Math.round(Number(amount || 0));
+      if (collectedAmount !== payable) {
+        const diff = payable - collectedAmount;
+        message.error(`Please collect full amount. Payable: ₹${payable}, Collected: ₹${collectedAmount}, ${diff > 0 ? 'Pending' : 'Excess'}: ₹${Math.abs(diff)}`);
+        return;
+      }
       const modes = Array.from(new Set(payments.map(p => p.mode)));
       const paymentMode = modes.length > 1 ? 'mixed' : (modes[0] || '');
       const joinedUtr = payments.filter(p => p.mode === 'online' && p.utr).map(p => p.utr).join(' / ');
+      const cashCollected = payments.filter(p=>String(p.mode).toLowerCase()==='cash').reduce((s,p)=>s+(Number(p.amount)||0),0);
+      const onlineCollected = payments.filter(p=>String(p.mode).toLowerCase()==='online').reduce((s,p)=>s+(Number(p.amount)||0),0);
       const payload = {
         postServiceAt: new Date().toISOString(),
         formValues: {
@@ -111,7 +140,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
         await saveJobcardViaWebhook({
           webhookUrl,
           method: 'POST',
-          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, serviceAmount: amount || 0, collectedAmount, paymentMode, payments, utr: joinedUtr || undefined, utrNo: joinedUtr || undefined, payload: { ...payload, payments } } },
+          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, serviceAmount: amount || 0, collectedAmount, paymentMode, payments, utr: joinedUtr || undefined, utrNo: joinedUtr || undefined, payload: { ...payload, payments }, source: 'jobcard', cashCollected, onlineCollected, totalCollected: collectedAmount } },
         });
       }
       message.success('Saved successfully');
@@ -125,6 +154,8 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       setPay1Amt(''); setPay1Utr(''); setPay2Amt(''); setPay2Utr('');
     } catch (e) {
       message.error(e?.message || 'Could not save post-service');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -146,7 +177,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
             {pay1Mode === 'online' && (
               <div style={{ marginTop: 10 }}>
                 <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No. (Slot 1)</div>
-                <Input placeholder="Enter UTR number" value={pay1Utr} onChange={(e)=>setPay1Utr(e.target.value)} maxLength={32} />
+                <Input placeholder="Enter UTR number" value={pay1Utr} onChange={(e)=>setPay1Utr(String(e.target.value || '').toUpperCase())} maxLength={32} style={{ textTransform: 'uppercase' }} />
               </div>
             )}
           </Card>
@@ -165,15 +196,22 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
             {pay2Mode === 'online' && (
               <div style={{ marginTop: 10 }}>
                 <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No. (Slot 2)</div>
-                <Input placeholder="Enter UTR number" value={pay2Utr} onChange={(e)=>setPay2Utr(e.target.value)} maxLength={32} />
+                <Input placeholder="Enter UTR number" value={pay2Utr} onChange={(e)=>setPay2Utr(String(e.target.value || '').toUpperCase())} maxLength={32} style={{ textTransform: 'uppercase' }} />
               </div>
             )}
           </Card>
         </div>
+        {/* Live payable/collection summary */}
+        <div style={{ marginTop: 8, fontSize: 13, color: duePreview === 0 ? '#166534' : '#b91c1c' }}>
+          <strong>Payable:</strong> ₹{payablePreview} &nbsp;|
+          &nbsp;<strong>Collected:</strong> ₹{collectedPreview} &nbsp;|
+          &nbsp;<strong>{duePreview >= 0 ? 'Due' : 'Excess'}:</strong> ₹{Math.abs(duePreview)}
+        </div>
+        
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button onClick={() => savePostService(false)}>Save Only</Button>
-          <Button type="primary" onClick={() => savePostService(true)}>Save & Print</Button>
+          <Button onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={() => savePostService(false)} disabled={saving || duePreview !== 0} loading={saving}>Save Only</Button>
+          <Button type="primary" onClick={() => savePostService(true)} disabled={saving || duePreview !== 0} loading={saving}>Save & Print</Button>
         </div>
       </Modal>
 

@@ -7,6 +7,7 @@ import { handleSmartPrint } from '../utils/printUtils';
 
 export default function BookingPrintQuickModal({ open, onClose, row, webhookUrl, secret }) {
   const [loading, setLoading] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [payload, setPayload] = useState(null);
   const printRef = useRef(null);
 
@@ -109,9 +110,16 @@ export default function BookingPrintQuickModal({ open, onClose, row, webhookUrl,
     return () => { active = false; cleanupHost(); };
   }, [open, row, webhookUrl]);
 
-  const handlePrint = () => {
-    try { handleSmartPrint(printRef.current); } catch {
+  const handlePrint = async () => {
+    setPrinting(true);
+    try {
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
+      await handleSmartPrint(printRef.current);
+    } catch {
       //ugyf
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -127,8 +135,8 @@ export default function BookingPrintQuickModal({ open, onClose, row, webhookUrl,
         <div style={{ display: 'grid', placeItems: 'center', height: 120 }}><Spin /></div>
       ) : (
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button onClick={onClose}>Close</Button>
-          <Button type="primary" onClick={handlePrint} disabled={!payload}>Print</Button>
+          <Button onClick={onClose} disabled={printing}>Close</Button>
+          <Button type="primary" onClick={handlePrint} disabled={!payload || printing} loading={printing}>Print</Button>
         </div>
       )}
       {body}

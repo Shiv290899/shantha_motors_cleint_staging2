@@ -9,6 +9,7 @@ import Jobcards from '../Jobcards'
 import Branches from '../Admin/Branches'
 import Announcements from '../Announcements'
 import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
+import AdminDailyCollections from '../AdminDailyCollections'
 import Users from '../Admin/Users'
 // Announcements tab/banner removed as requested
 
@@ -45,6 +46,7 @@ export default function Backend() {
     // 6) Branches, 7) Users, 8) Announcements
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
+    { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
     { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
     
   ]

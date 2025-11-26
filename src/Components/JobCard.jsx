@@ -24,7 +24,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycby3BdE8ZLIvh6nrnPsZcmUyjn9VA2AwlTRsdfF2pfB9i60-NSBqEAaDi0ZhpnqA9zEF6g/exec";
+  "https://script.google.com/macros/s/AKfycbzhUcfXt2RA4sxKedNxpiJNwbzygmuDQxt-r5oYyZyJuMZDw3o4sRl-lO2pSPS_ijugGA/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
@@ -242,6 +242,8 @@ export default function JobCard({ initialValues = null } = {}) {
   const preRef = useRef(null);
   const postRef = useRef(null);
   const [postOpen, setPostOpen] = useState(false);
+  const [prePrinting, setPrePrinting] = useState(false); // lock Pre-service print
+  const [postSaving, setPostSaving] = useState(false); // lock Post-service save/print
   // Split payments: two slots
   const [postPay1Mode, setPostPay1Mode] = useState('cash'); // default Cash
   const [postPay1Amt, setPostPay1Amt] = useState('');
@@ -555,6 +557,15 @@ export default function JobCard({ initialValues = null } = {}) {
     return { labourSub, labourGST, labourDisc, grand };
   }, [labourRows, gstLabour, discounts]);
 
+  // --- Post-service live summary (Payable / Collected / Due) ---
+  const postCollectedPreview = useMemo(() => {
+    const a1 = Number(postPay1Amt || 0) || 0;
+    const a2 = Number(postPay2Amt || 0) || 0;
+    return Math.round(a1 + a2);
+  }, [postPay1Amt, postPay2Amt]);
+  const postPayablePreview = useMemo(() => Math.round(Number(totals?.grand || 0)), [totals]);
+  const postDuePreview = useMemo(() => postPayablePreview - postCollectedPreview, [postCollectedPreview, postPayablePreview]);
+
   const handleKmKeyPress = (e) => { if (!/[0-9]/.test(e.key)) e.preventDefault(); };
   const handleMobileKeyPress = (e) => { if (!/[0-9]/.test(e.key)) e.preventDefault(); };
   const handleMobileChange = (e) => {
@@ -706,6 +717,9 @@ export default function JobCard({ initialValues = null } = {}) {
   // ---- Post-service: update existing row by mobile, with payment mode ----
   const handlePostServiceFlow = async (shouldPrint) => {
     try {
+      setPostSaving(true);
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
       if (Date.now() < actionCooldownUntil) return;
       startActionCooldown(6000);
       // Do not auto pre-save here to avoid duplicate rows in sheet.
@@ -764,6 +778,20 @@ export default function JobCard({ initialValues = null } = {}) {
       const paymentMode = modes.length > 1 ? 'mixed' : (modes[0] || '');
       const onlineUtrs = payments.filter(p => p.mode === 'online' && p.utr).map(p => p.utr);
       const joinedUtr = onlineUtrs.join(' / ');
+      const cashCollected = payments.filter(p=>String(p.mode).toLowerCase()==='cash').reduce((s,p)=>s+(Number(p.amount)||0),0);
+      const onlineCollected = payments.filter(p=>String(p.mode).toLowerCase()==='online').reduce((s,p)=>s+(Number(p.amount)||0),0);
+
+      // Enforce full collection: collected should equal amount payable (after discount)
+      const payable = Math.round(Number(amount || 0));
+      if (collectedAmount !== payable) {
+        const diff = payable - collectedAmount;
+        const txt = `Payable: ₹${payable}. Collected: ₹${collectedAmount}. ${diff > 0 ? 'Pending' : 'Excess'}: ₹${Math.abs(diff)}.`;
+        try {
+          Modal.warning({ title: 'Please collect full amount', content: txt });
+        } catch { /* ignore */ }
+        message.error(`Please collect full amount. ${txt}`);
+        return;
+      }
 
       // Minimal post-service payload per requirement (plus payments)
       const payload = {
@@ -794,6 +822,10 @@ export default function JobCard({ initialValues = null } = {}) {
         utr: joinedUtr || undefined,
         utrNo: joinedUtr || undefined,
         payload: { ...payload, payments },
+        source: 'jobcard',
+        cashCollected,
+        onlineCollected,
+        totalCollected: collectedAmount,
       };
       const outboxId = enqueueOutbox({ type: 'post', data });
       setTimeout(async () => {
@@ -821,6 +853,8 @@ export default function JobCard({ initialValues = null } = {}) {
     } catch (e) {
       console.warn('post-service save error:', e);
       message.error((e && e.message) || 'Could not save post-service details.');
+    } finally {
+      setPostSaving(false);
     }
   };
 
@@ -872,10 +906,15 @@ export default function JobCard({ initialValues = null } = {}) {
   // --- Auto-save then Pre-service print ---
   const handlePreService = async () => {
     try {
+      setPrePrinting(true);
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
       await handleAutoSave(); // will throw if invalid
       await handlePrint("pre");
     } catch {
       // validation error already shown
+    } finally {
+      setPrePrinting(false);
     }
   };
 
@@ -1270,7 +1309,7 @@ export default function JobCard({ initialValues = null } = {}) {
 
             <Col>
               <Tooltip title={isReady ? "" : (notReadyWhy || "Fill all required fields")} placement="top">
-                <Button type="primary" onClick={handlePreService} disabled={!isReady || actionCooldownUntil > Date.now()} /* ★ */>
+                <Button type="primary" onClick={handlePreService} disabled={!isReady || actionCooldownUntil > Date.now() || prePrinting} loading={prePrinting} /* ★ */>
                   Pre-service
                 </Button>
               </Tooltip>
@@ -1315,7 +1354,7 @@ export default function JobCard({ initialValues = null } = {}) {
             {postPay1Mode === 'online' && (
               <div style={{ marginTop: 10 }}>
                 <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No. (Slot 1)</div>
-                <Input placeholder="Enter UTR number" value={postPay1Utr} onChange={(e)=>setPostPay1Utr(e.target.value)} maxLength={32} />
+                <Input placeholder="Enter UTR number" value={postPay1Utr} onChange={(e)=>setPostPay1Utr(String(e.target.value || '').toUpperCase())} maxLength={32} style={{ textTransform: 'uppercase' }} />
               </div>
             )}
           </Card>
@@ -1340,15 +1379,21 @@ export default function JobCard({ initialValues = null } = {}) {
             {postPay2Mode === 'online' && (
               <div style={{ marginTop: 10 }}>
                 <div style={{ marginBottom: 6, fontSize: 12, color: '#374151' }}>UTR No. (Slot 2)</div>
-                <Input placeholder="Enter UTR number" value={postPay2Utr} onChange={(e)=>setPostPay2Utr(e.target.value)} maxLength={32} />
+                <Input placeholder="Enter UTR number" value={postPay2Utr} onChange={(e)=>setPostPay2Utr(String(e.target.value || '').toUpperCase())} maxLength={32} style={{ textTransform: 'uppercase' }} />
               </div>
             )}
           </Card>
         </div>
+        {/* Live payable/collection summary */}
+        <div style={{ marginTop: 8, fontSize: 13, color: postDuePreview === 0 ? '#166534' : '#b91c1c' }}>
+          <strong>Payable:</strong> {inr(postPayablePreview)} &nbsp;|
+          &nbsp;<strong>Collected:</strong> {inr(postCollectedPreview)} &nbsp;|
+          &nbsp;<strong>{postDuePreview >= 0 ? 'Due' : 'Excess'}:</strong> {inr(Math.abs(postDuePreview))}
+        </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-          <Button onClick={() => setPostOpen(false)}>Cancel</Button>
-          <Button onClick={() => handlePostServiceFlow(false)} disabled={actionCooldownUntil > Date.now()}>Save Only</Button>
-          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={actionCooldownUntil > Date.now()}>Save & Print</Button>
+          <Button onClick={() => setPostOpen(false)} disabled={postSaving}>Cancel</Button>
+          <Button onClick={() => handlePostServiceFlow(false)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save Only</Button>
+          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save & Print</Button>
         </div>
       </Modal>
 

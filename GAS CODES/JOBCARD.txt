@@ -1,0 +1,1413 @@
+function doGet(e){ return handle_(e) }
+function doPost(e){ return handle_(e) }
+
+// If bound to the sheet, keep blank. Otherwise set your spreadsheet ID.
+const SHEET_ID = '';
+const SHEET_NAME = 'Sheet1';
+
+// Default headers (used only when the sheet is empty).
+// Existing sheets are read dynamically and not overwritten.
+const DEFAULT_HEADERS = [
+  'Timestamp',
+  'Customer_Name',
+  'Mobile',
+  'Collected_Amount',
+  'Vehicle_No',
+  'Service_Type',
+  'Branch',
+  'Customer_Observation',
+  'Expected_Delivery_Date',
+  'Payload',
+  'Payment_Mode',
+  'JC No.'
+];
+
+/* ============== DAILY COLLECTIONS (MASTER) CONFIG ============== */
+const DC_MASTER_SPREADSHEET_ID = '1615xwv8Ns71sta8Tr0_w-kDSAyfIAzUEyU5Rzy2oqQE';
+const DC_SHEET = 'DailyCollections';
+
+const DC_HEADERS = [
+  'Date','Branch','Staff',
+  'Booking Amount','JC Amount','Minor Sales Amount',
+  'Total', // legacy total field (keep for compatibility)
+  'Cash Amount','Online Amount','Total Collected', // total collected = cash + online
+  'Opening Balance','Due Today','Collected Today','Closing Balance',
+  'Settlement Done','Settlement At','Updated At','Notes','Raw Payload'
+];
+
+function handle_(e){
+  try{
+    const body = (e && e.postData && e.postData.contents) ? JSON.parse(e.postData.contents) : {};
+    const action = String(
+      (e && e.parameter && e.parameter.action) ||
+      body.action ||
+      (body.data && body.data.action) ||
+      ''
+    ).toLowerCase();
+
+    if (action === 'nextserial') return json_({ success:true, nextSerial: nextSerial_() });
+
+    if (action === 'list') {
+      const p = e && e.parameter ? e.parameter : {};
+      const branch = String((p.branch != null ? p.branch : (body.branch || '')));
+      const executive = String((p.executive != null ? p.executive : (body.executive || '')));
+      const service = String((p.service != null ? p.service : (body.service || ''))).toLowerCase();
+      const sinceISO = String((p.since != null ? p.since : (body.since || '')));
+      const untilISO = String((p.until != null ? p.until : (body.until || '')));
+      const startMs = p.start ? +p.start : (body.start ? +body.start : null);
+      const endMs = p.end ? +p.end : (body.end ? +body.end : null);
+      const q = String((p.q != null ? p.q : (body.q || '')));
+      const page = Math.max(parseInt((p.page != null ? p.page : (body.page || '1')), 10) || 1, 1);
+      const pageSize = Math.min(100, Math.max(0, parseInt((p.pageSize != null ? p.pageSize : (body.pageSize || body.pagesize || '0')), 10) || 0));
+      const limit = Math.max(parseInt((p.limit != null ? p.limit : (body.limit || '0')), 10) || 0, 0);
+
+      const resp = list_({
+        branch, executive, service, sinceISO, untilISO, startMs, endMs,
+        q,
+        page, pageSize, limit
+      });
+      return json_(resp);
+    }
+
+    if (action === 'search') {
+      const mode = ((e && e.parameter && e.parameter.mode) || body.mode || 'jc').toLowerCase();
+      const query = String(((e && e.parameter && e.parameter.query) || body.query || ''));
+      return json_( { success:true, rows: search_(mode, query) } );
+    }
+
+    if (action === 'save') {
+      const data = body.data || body;
+      return json_(save_(data)); // upsert by mobile
+    }
+
+    if (action === 'postservice') {
+      const data = body.data || body;
+      return json_(postService_(data)); // upsert by mobile + DailyCollections
+    }
+
+    if (action === 'followups') {
+      const filter = (((e && e.parameter && e.parameter.filter) || body.filter || 'today')+'').toLowerCase(); // today|overdue|upcoming|all
+      const branch = String(((e && e.parameter && e.parameter.branch) || body.branch || ''));
+      const executive = String(((e && e.parameter && e.parameter.executive) || body.executive || ''));
+      return json_(followups_(filter, branch, executive));
+    }
+
+    if (action === 'updatefollowup') {
+      const serialNo = String(((e && e.parameter && e.parameter.serialNo) || body.serialNo || ''));
+      const patch = body.patch || {};
+      return json_(updateFollowup_(serialNo, patch));
+    }
+
+    if (action === 'remark') {
+      const jcNo = String(((e && e.parameter && e.parameter.jcNo) || body.jcNo || '')).trim();
+      const level = String(((e && e.parameter && e.parameter.level) || body.level || '')).toLowerCase(); // ok|warning|alert
+      const text = String(((e && e.parameter && e.parameter.text) || body.text || '')).trim();
+      const by = String(((e && e.parameter && e.parameter.by) || body.by || '')).trim(); // optional
+      return json_(updateRemark_(jcNo, level, text, by));
+    }
+
+    // Admin views for Daily Collections (uses master file)
+    if (action === 'collections') {
+      const p = e && e.parameter ? e.parameter : {};
+      return json_(collections_({
+        branch:   p.branch   || body.branch   || '',
+        date:     p.date     || body.date     || '',
+        page:     p.page     || body.page     || '1',
+        pageSize: p.pageSize || body.pageSize || '10'
+      }));
+    }
+
+    if (action === 'settle_collection') {
+      const p = e && e.parameter ? e.parameter : {};
+      const b = p.branch || body.branch || '';
+      const s = p.staff  || body.staff  || '';
+      const d = p.date   || body.date   || '';
+      return json_(settleCollection_(b, s, d));
+    }
+
+    if (action === 'update_collection') {
+      const p = e && e.parameter ? e.parameter : {};
+      const b = p.branch || body.branch || '';
+      const s = p.staff  || body.staff  || '';
+      const d = p.date   || body.date   || '';
+      const collectedToday = (p.collectedToday != null ? p.collectedToday : body.collectedToday);
+      return json_(updateCollectionDC_({ date:d, branch:b, staff:s, collectedToday }));
+    }
+
+    if (action === 'staff_collection_summary') {
+      const p = e && e.parameter ? e.parameter : {};
+      const b = p.branch || body.branch || '';
+      const s = p.staff  || body.staff  || '';
+      return json_(getStaffCollectionSummary_(b, s));
+    }
+
+    if (action === 'dc_test') {
+      return json_(updateDailyCollection_('Muddinapalya','Rukmini',123,'jc'));
+    }
+
+    return json_({
+      ok:true,
+      hint:'actions: list, nextSerial, search, save, postService, followups, updateFollowup, remark, collections, update_collection, settle_collection, staff_collection_summary, dc_test'
+    });
+  }catch(err){
+    return json_({ success:false, error:String(err) });
+  }
+}
+
+function json_(o){
+  return ContentService.createTextOutput(JSON.stringify(o))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function sh_(){
+  const ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+  const s = ss.getSheetByName(SHEET_NAME) || ss.getSheets()[0];
+
+  // Seed headers only if the first row is empty
+  const width = Math.max(s.getLastColumn(), DEFAULT_HEADERS.length);
+  const first = s.getRange(1,1,1,width).getValues()[0];
+  const hasAny = first.some(v => String(v||'').trim().length);
+  if (!hasAny) s.getRange(1,1,1,DEFAULT_HEADERS.length).setValues([DEFAULT_HEADERS]);
+
+  return s;
+}
+
+function norm_(s){ return String(s || '').trim().toLowerCase(); }
+
+function headerIx_(s){
+  const width = Math.max(s.getLastColumn(), DEFAULT_HEADERS.length);
+  const H = s.getRange(1,1,1,width).getValues()[0].map(x => String(x||'').trim());
+
+  const pos = (rx) => H.findIndex(h => rx.test(h));
+  const posAll = (rx) => H.map((h,i)=>rx.test(h)?i:-1).filter(i=>i>=0);
+
+  return {
+    headers: H, width,
+    idxTime: pos(/^(timestamp|created\s*at|submitted|submission)/i),
+    idxName: pos(/(customer[\s_]*name|^name$)/i),
+    idxMobile: pos(/(mobile|phone)/i),
+    idxAmount: pos(/collected[\s_]*amount/i),
+    idxReg: pos(/(vehicle[\s_]*no|registration|^reg(?:[\s_]*no)?$)/i),
+    idxSvc: pos(/service[\s_]*type/i),
+    idxBranch: pos(/^branch$/i),
+    idxObs: pos(/(customer[\s_]*ob(?:s|servation)|observation)/i),
+    idxExp: pos(/expected[\s_]*delivery/i),
+    idxPayloads: posAll(/^payload$/i),
+    idxPayment: pos(/^payment/i),
+    idxJC: pos(/^(jc\b|job[\s_]*card)/i),
+    // optional extra columns
+    idxRemarkLevel: pos(/remark.*level/i),
+    idxRemarkText: pos(/remark.*text/i),
+    idxExecutive2: pos(/^executive$/i),
+    idxMechanic: pos(/(allotted[\s_]mechanic|mechanic)$/i),
+    idxModel: pos(/^model$/i),
+    idxColour: pos(/^(colour|color)$/i),
+    idxKM: pos(/^(odometer.|km)$/i),
+    idxFuel: pos(/^fuel[\s_]*level$/i),
+    idxVehType: pos(/vehicle[\s_]*type/i),
+    idxPostAt: pos(/^(post[\s_]*service[\s_]*at|post[\s_]serviced[\s_]at)$/i),
+    idxUTR: pos(/^(utr(\sno|\snumber)?)/i),
+  };
+}
+
+function ensureCol_(s, name){
+  const info = headerIx_(s);
+  if (info.headers.indexOf(name) >= 0) return info;
+  s.getRange(1, info.headers.length + 1).setValue(name);
+  return headerIx_(s);
+}
+
+function ensureCoreOptionalCols_(s){
+  let ix = headerIx_(s);
+  ['Executive','Allotted Mechanic','Model','Colour','Odometer Reading','Fuel Level','Vehicle Type','Post Service At','UTR No']
+    .forEach((col) => { ix = ensureCol_(s, col); });
+  return ix;
+}
+
+function nextSerial_(){
+  const s = sh_(), ix = headerIx_(s);
+  if (ix.idxJC < 0) return '1';
+  const last = s.getLastRow();
+  if (last <= 1) return '1';
+  const vals = s.getRange(2, ix.idxJC+1, last-1, 1)
+    .getValues()
+    .map(r => parseInt(String(r[0]).trim(),10))
+    .filter(n => Number.isFinite(n));
+  return String((vals.length ? Math.max.apply(null, vals) : 0) + 1);
+}
+
+function ten_(x){ return String(x||'').replace(/\D/g,'').slice(-10); }
+function safeJson_(x){ try{return JSON.parse(String(x||'{}'))}catch(_){return null} }
+
+function cleanPayload_(rawPayload, fv){
+  if (!rawPayload || typeof rawPayload !== 'object') return {};
+  const std = new Set([
+    'custName','custMobile','amount','paymentMode',
+    'regNo','serviceType','branch','obs','expectedDelivery','jcNo'
+  ]);
+  const out = JSON.parse(JSON.stringify(rawPayload));
+  if (out.formValues && typeof out.formValues === 'object') {
+    Object.keys(out.formValues).forEach(k => { if (std.has(k)) delete out.formValues[k]; });
+  }
+  Object.keys(out).forEach(k => { if (std.has(k)) delete out[k]; });
+  return out;
+}
+
+/* ===== Robust amount + mode helpers ===== */
+function computeAmount_(d){
+  try{
+    if (Array.isArray(d.payments) && d.payments.length) {
+      const total = d.payments.reduce((acc, p) => acc + (Number(p.amount)||0), 0);
+      if (total > 0) return total;
+    }
+    const tgRoot = Number(d?.totals?.grand || 0);
+    if (tgRoot > 0) return tgRoot;
+    const tgPayload = Number(d?.payload?.totals?.grand || 0);
+    if (tgPayload > 0) return tgPayload;
+    const ca = Number(d?.collectedAmount || 0);
+    if (ca > 0) return ca;
+    const fvAmt = Number(d?.formValues?.amount || 0);
+    if (fvAmt > 0) return fvAmt;
+    return 0;
+  }catch(_){ return 0; }
+}
+
+function computeMode_(d){
+  try{
+    if (Array.isArray(d.payments) && d.payments.length) {
+      const modes = d.payments
+        .map(p => String(p.mode||'').trim().toLowerCase())
+        .filter(Boolean);
+      const uniq = Array.from(new Set(modes));
+      if (uniq.length === 1) return uniq[0];
+      if (uniq.length > 1) return 'mixed';
+    }
+    if (d.paymentMode) return String(d.paymentMode).toLowerCase();
+    if (d.formValues && d.formValues.paymentMode) return String(d.formValues.paymentMode).toLowerCase();
+    return '';
+  }catch(_){ return ''; }
+}
+
+/** Upsert by mobile (latest row). */
+function upsertByMobile_(d){
+  const s = sh_();
+  ensureCoreOptionalCols_(s);
+  let ix = headerIx_(s);
+
+  const fvIncoming = d.formValues || {};
+  const mobile10 = ten_(d.mobile || fvIncoming.custMobile);
+  if (!mobile10 || ix.idxMobile < 0) {
+    return insertNew_(d);
+  }
+  const last = s.getLastRow();
+  let hitRow = -1;
+  let existingRow = null;
+  if (last > 1) {
+    const rows = s.getRange(2,1,last-1,ix.width).getValues();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const m = ten_(rows[i][ix.idxMobile]);
+      if (m === mobile10) { hitRow = i + 2; existingRow = rows[i]; break; }
+    }
+  }
+
+  const existingPayload = (existingRow && ix.idxPayloads.length) ? safeJson_(existingRow[ix.idxPayloads[0]]) : null;
+  const existingFv = existingPayload && existingPayload.formValues ? existingPayload.formValues : {};
+  const fv = Object.assign({}, existingFv || {}, fvIncoming || {});
+
+  const put = (row, i, v) => { if (i >= 0 && v !== undefined && v !== null && String(v) !== '') row[i] = v; };
+  const digits = (s) => String(s||'').replace(/\D/g,'');
+
+  let mergedPayload = {};
+  if (existingPayload && typeof existingPayload === 'object') mergedPayload = JSON.parse(JSON.stringify(existingPayload));
+  if (d.payload && typeof d.payload === 'object') mergedPayload = mergeObj_(mergedPayload, d.payload);
+  mergedPayload.formValues = Object.assign({}, existingFv || {}, fvIncoming || {});
+
+  const postAt = (mergedPayload && mergedPayload.postServiceAt) ? mergedPayload.postServiceAt : (d?.payload?.postServiceAt || '');
+  const utr = String(d && (d.utr || d.utrNo || (d.payload && (d.payload.utr || d.payload.utrNo)) || '')).trim();
+
+  if (hitRow > 0) {
+    const row = s.getRange(hitRow,1,1,ix.width).getValues()[0];
+
+    put(row, ix.idxTime, new Date());
+    put(row, ix.idxName, fv.custName);
+    put(row, ix.idxMobile, mobile10);
+    put(row, ix.idxAmount, (d.collectedAmount != null ? d.collectedAmount : fv.amount));
+    put(row, ix.idxReg, fv.regNo);
+    put(row, ix.idxSvc, fv.serviceType);
+    put(row, ix.idxBranch, fv.branch);
+    put(row, ix.idxObs, fv.obs);
+    put(row, ix.idxExp, fv.expectedDelivery);
+    put(row, ix.idxPayment, (d.paymentMode != null ? d.paymentMode : fv.paymentMode));
+
+    put(row, ix.idxExecutive2, fv.executive);
+    put(row, ix.idxMechanic, fv.mechanic);
+    put(row, ix.idxModel, fv.model);
+    put(row, ix.idxColour, fv.colour);
+    put(row, ix.idxKM, digits(fv.km));
+    put(row, ix.idxFuel, fv.fuelLevel);
+    put(row, ix.idxVehType, fv.vehicleType);
+
+    put(row, ix.idxPostAt, postAt);
+    put(row, ix.idxUTR, utr);
+
+    if (ix.idxJC >= 0 && (d.jcNo || fv.jcNo)) row[ix.idxJC] = (d.jcNo || fv.jcNo);
+
+    if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(mergedPayload);
+
+    s.getRange(hitRow,1,1,ix.width).setValues([row]);
+    return { success:true, upsert:true, updated:true, row: hitRow };
+  }
+
+  return insertNew_(Object.assign({}, d, { formValues: fv, payload: mergedPayload }), mobile10);
+}
+
+function insertNew_(d, mobileCanonical){
+  const s = sh_();
+  ensureCoreOptionalCols_(s);
+  let ix = headerIx_(s);
+
+  const fv = d.formValues || {};
+  const serial = String(fv.jcNo || nextSerial_());
+  const mobile10 = mobileCanonical || ten_(fv.custMobile);
+
+  const put = (row, i, v) => { if (i >= 0) row[i] = (v === undefined || v === null) ? '' : v; };
+  const digits = (s) => String(s||'').replace(/\D/g,'');
+
+  const postAt = (d && d.payload && d.payload.postServiceAt) ? d.payload.postServiceAt : '';
+  const utr = String(d && (d.utr || d.utrNo || (d.payload && (d.payload.utr || d.payload.utrNo)) || '')).trim();
+
+  const row = new Array(ix.width).fill('');
+  put(row, ix.idxTime, new Date());
+  put(row, ix.idxName, fv.custName || '');
+  put(row, ix.idxMobile, mobile10 || '');
+  put(row, ix.idxAmount, (d.collectedAmount != null ? d.collectedAmount : fv.amount) || '');
+  put(row, ix.idxReg, fv.regNo || '');
+  put(row, ix.idxSvc, fv.serviceType || '');
+  put(row, ix.idxBranch, fv.branch || '');
+  put(row, ix.idxObs, fv.obs || '');
+  put(row, ix.idxExp, fv.expectedDelivery || '');
+  put(row, ix.idxPayment, (d.paymentMode != null ? d.paymentMode : fv.paymentMode) || '');
+
+  put(row, ix.idxExecutive2, fv.executive || '');
+  put(row, ix.idxMechanic, fv.mechanic || '');
+  put(row, ix.idxModel, fv.model || '');
+  put(row, ix.idxColour, fv.colour || '');
+  put(row, ix.idxKM, digits(fv.km || ''));
+  put(row, ix.idxFuel, fv.fuelLevel || '');
+  put(row, ix.idxVehType, fv.vehicleType || '');
+
+  put(row, ix.idxPostAt, postAt || '');
+  put(row, ix.idxUTR, utr || '');
+
+  const payloadToStore = (function(){
+    const base = (d && d.payload && typeof d.payload === 'object') ? d.payload : {};
+    const merged = mergeObj_({ formValues: {} }, base);
+    merged.formValues = Object.assign({}, fv || {});
+    return merged;
+  })();
+  if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(payloadToStore);
+
+  put(row, ix.idxJC, serial);
+
+  s.appendRow(row);
+  return { success:true, upsert:true, row: s.getLastRow(), jcNo: serial };
+}
+
+/* === NEW: fetch full existing row & payload for delta DC logic === */
+function findExistingRowFull_(mobile10, jcNo){
+  try{
+    const s = sh_();
+    const ix = headerIx_(s);
+    const last = s.getLastRow();
+    if (last <= 1) return null;
+
+    const rows = s.getRange(2,1,last-1,ix.width).getValues();
+    for (let i = rows.length - 1; i >= 0; i--){
+      const r = rows[i];
+      const m = ten_(r[ix.idxMobile]);
+      const jc = String(r[ix.idxJC] || '').trim();
+      if ((mobile10 && m === mobile10) || (jcNo && jc === jcNo)){
+        const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
+        return { rowIndex: i+2, rowValues: r, payload, ix };
+      }
+    }
+    return null;
+  }catch(_){ return null; }
+}
+
+/* === helper to fetch branch + executive from existing sheet row === */
+function findExistingBranchExec_(mobile10, jcNo) {
+  try {
+    const s = sh_();
+    const ix = headerIx_(s);
+    const last = s.getLastRow();
+    if (last <= 1) return { branch: '', executive: '' };
+
+    const rows = s.getRange(2,1,last-1,ix.width).getValues();
+    let hit = -1;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const m = String(r[ix.idxMobile] || '').replace(/\D/g,'').slice(-10);
+      const jc = String(r[ix.idxJC] || '').trim();
+      if ((mobile10 && m === mobile10) || (jcNo && jc === jcNo)) { 
+        hit = i; 
+        break; 
+      }
+    }
+    if (hit < 0) return { branch: '', executive: '' };
+
+    const r = rows[hit];
+    let branch = String(r[ix.idxBranch] || '').trim();
+    let executive = ix.idxExecutive2 >= 0 ? String(r[ix.idxExecutive2] || '').trim() : '';
+
+    if (!branch || !executive) {
+      const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
+      if (!branch)    branch    = String(payload?.formValues?.branch    || '').trim();
+      if (!executive) executive = String(payload?.formValues?.executive || '').trim();
+    }
+    return { branch, executive };
+  } catch (_) { 
+    return { branch: '', executive: '' }; 
+  }
+}
+
+// save (pre-service) → upsert by mobile
+function save_(d){
+  return upsertByMobile_({ ...d, payload: d.payload || d });
+}
+
+// postService → upsert by mobile with amount/payment overrides + DailyCollections update
+function postService_(d){
+  const amount = computeAmount_(d);
+  const mode = computeMode_(d);
+
+  const nowIso = new Date().toISOString();
+  const payload0 = (d.payload && typeof d.payload === 'object') ? d.payload : {};
+  if (!payload0.postServiceAt) payload0.postServiceAt = nowIso;
+
+  const mobile10 =
+    String(d.mobile || d?.formValues?.custMobile || d?.payload?.formValues?.custMobile || '')
+      .replace(/\D/g,'')
+      .slice(-10);
+  const jcNo = String(d.jcNo || d?.formValues?.jcNo || d?.payload?.formValues?.jcNo || '').trim();
+
+  // ✅ NEW: grab previous service amount & logged-state BEFORE update
+  const existingFull = findExistingRowFull_(mobile10, jcNo);
+  const prevPayload = existingFull?.payload || {};
+  const prevAmt = Number(prevPayload?.postServiceAmount || existingFull?.rowValues?.[existingFull.ix.idxAmount] || 0) || 0;
+  const alreadyLogged = prevPayload?.postServiceLogged === true;
+
+  const fv0 = d.formValues || {};
+  let branch    = fv0.branch    || d?.payload?.formValues?.branch    || '';
+  let executive = fv0.executive || d?.payload?.formValues?.executive || '';
+
+  if ((!branch || !executive) && (mobile10 || jcNo)) {
+    const got = findExistingBranchExec_(mobile10, jcNo);
+    if (!branch)    branch    = got.branch;
+    if (!executive) executive = got.executive;
+  }
+
+  const fv = {
+    ...fv0,
+    branch,
+    executive,
+    amount: (amount > 0 ? amount : fv0.amount),
+    paymentMode: (mode || fv0.paymentMode || ''),
+    jcNo: jcNo || fv0.jcNo
+  };
+
+  // ✅ NEW: store flags so next postservice won't double count
+  payload0.postServiceLogged = true;
+  payload0.postServiceAmount = amount;
+  payload0.postServiceMode = mode;
+
+  // 1) Save/update main Job Card row
+  const result = upsertByMobile_({
+    ...d,
+    collectedAmount: amount,
+    paymentMode: mode,
+    formValues: fv,
+    payload: payload0
+  });
+
+  // 2) Update DailyCollections for this JC amount (with split)
+  try {
+    const b = String(fv.branch || '').trim();
+    const s = String(fv.executive || '').trim();
+    const newAmt = Number(amount || 0);
+
+    // ✅ NEW: delta logic
+    const deltaAmt = alreadyLogged ? Math.max(0, newAmt - prevAmt) : newAmt;
+    if (!(deltaAmt > 0)) return result; // nothing extra to log
+
+    let cashCollected = Number(d.cashCollected || 0) || 0;
+    let onlineCollected = Number(d.onlineCollected || 0) || 0;
+
+    if (!(cashCollected > 0) && !(onlineCollected > 0) && Array.isArray(d.payments)) {
+      cashCollected = d.payments
+        .filter(p => String(p.mode||'').toLowerCase()==='cash')
+        .reduce((sum,p)=> sum + (Number(p.amount)||0), 0);
+      onlineCollected = d.payments
+        .filter(p => String(p.mode||'').toLowerCase()==='online')
+        .reduce((sum,p)=> sum + (Number(p.amount)||0), 0);
+    }
+
+    if (!(cashCollected > 0) && !(onlineCollected > 0) && deltaAmt > 0) {
+      if (mode === 'cash') cashCollected = deltaAmt;
+      else if (mode === 'online') onlineCollected = deltaAmt;
+      else cashCollected = deltaAmt;
+    }
+
+    if (b && s && deltaAmt > 0) {
+      updateDailyCollection_(b, s, deltaAmt, 'jc', { cashCollected, onlineCollected });
+    }
+  } catch (err) {}
+
+  return result;
+}
+
+// Produce a normalized object for one sheet row
+function toRowObject_(row, ix){
+  const payload = ix.idxPayloads.length ? safeJson_(row[ix.idxPayloads[0]]) : null;
+
+  const pr = payload && payload.remark ? payload.remark : null;
+  const levelFromCols = (ix.idxRemarkLevel >= 0) ? String(row[ix.idxRemarkLevel] || '') : '';
+  const textFromCols = (ix.idxRemarkText >= 0) ? String(row[ix.idxRemarkText] || '') : '';
+  const remarkLevel = pr && pr.level ? pr.level : levelFromCols;
+  const remarkText = pr && pr.text ? pr.text : textFromCols;
+
+  return {
+    values: {
+      Timestamp: row[ix.idxTime],
+      Customer_Name: row[ix.idxName],
+      Mobile: row[ix.idxMobile],
+      Collected_Amount: row[ix.idxAmount],
+      Vehicle_No: row[ix.idxReg],
+      Service_Type: row[ix.idxSvc],
+      Branch: row[ix.idxBranch],
+      Customer_Observation: row[ix.idxObs],
+      Expected_Delivery_Date: row[ix.idxExp],
+      Payment_Mode: ix.idxPayment >= 0 ? row[ix.idxPayment] : '',
+      'JC No.': row[ix.idxJC],
+      RemarkLevel: remarkLevel || '',
+      RemarkText: remarkText || '',
+      Executive: ix.idxExecutive2 >= 0 ? row[ix.idxExecutive2] : '',
+      Allotted_Mechanic: ix.idxMechanic >= 0 ? row[ix.idxMechanic] : '',
+      Model: ix.idxModel >= 0 ? row[ix.idxModel] : '',
+      Colour: ix.idxColour >= 0 ? row[ix.idxColour] : '',
+      KM: ix.idxKM >= 0 ? row[ix.idxKM] : '',
+      Fuel_Level: ix.idxFuel >= 0 ? row[ix.idxFuel] : '',
+      Vehicle_Type: ix.idxVehType >= 0 ? row[ix.idxVehType] : '',
+      Post_Service_At: ix.idxPostAt >= 0 ? row[ix.idxPostAt] : '',
+      UTR_No: ix.idxUTR >= 0 ? row[ix.idxUTR] : '',
+    },
+    payload
+  };
+}
+
+// Search by JC or Mobile
+function search_(mode, query){
+  const s = sh_(), ix = headerIx_(s);
+  const last = s.getLastRow();
+  if (last <= 1) return [];
+
+  const rows = s.getRange(2,1,last-1,ix.width).getValues();
+  const q = String(query || '').trim();
+  const q10 = ten_(q);
+
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+
+    let match = false;
+    if (mode === 'mobile') {
+      const m = ten_(r[ix.idxMobile]);
+      match = q10 ? (q10.length < 10 ? m.endsWith(q10) : (m === q10)) : false;
+    } else {
+      match = String(r[ix.idxJC] || '').trim() === q;
+    }
+    if (!match) continue;
+
+    out.push(toRowObject_(r, ix));
+  }
+  return out;
+}
+
+/* ============================
+Follow-up listing + updates
+============================ */
+
+function startOfToday_(){
+  const d = new Date();
+  d.setHours(0,0,0,0);
+  return d;
+}
+function endOfToday_(){
+  const d = new Date();
+  d.setHours(23,59,59,999);
+  return d;
+}
+function isValidDate_(d){ return d && Object.prototype.toString.call(d) === '[object Date]' && !isNaN(d.getTime()); }
+
+function followups_(filter, branch, executive){
+  const s = sh_();
+  const ix = headerIx_(s);
+  const last = s.getLastRow();
+  if (last <= 1) return { success:true, rows: [] };
+
+  const rows = s.getRange(2,1,last-1,ix.width).getValues();
+  const t0 = startOfToday_().getTime();
+  const t1 = endOfToday_().getTime();
+
+  const want = String(filter || 'today').toLowerCase();
+  const wantBranchKey = norm_(branch);
+  const wantExecKey = norm_(executive);
+
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const jc = String(r[ix.idxJC] || '').trim();
+    if (!jc) continue;
+
+    const payload = ix.idxPayloads.length ? safeJson_((r[ix.idxPayloads[0]] || '{}')) : null;
+    const fu = payload && payload.followUp ? payload.followUp : null;
+    if (!fu || fu.enabled === false) continue;
+
+    const at = fu.at ? new Date(fu.at) : null;
+    const t = isValidDate_(at) ? at.getTime() : null;
+
+    const rowBranch = String(fu.branch || r[ix.idxBranch] || '').trim();
+    const execPayload = payload && payload.formValues ? String(payload.formValues.executive || '') : '';
+    const rowExec = String(execPayload || fu.assignedTo || '').trim();
+
+    if (wantBranchKey && norm_(rowBranch) !== wantBranchKey) continue;
+    if (wantExecKey && norm_(rowExec) !== wantExecKey) continue;
+
+    let datePass = true;
+    if (want !== 'all') {
+      if (!t) datePass = false;
+      else if (want === 'today') datePass = (t >= t0 && t <= t1);
+      else if (want === 'overdue') datePass = (t < t0);
+      else if (want === 'upcoming')datePass = (t > t1);
+    }
+    if (!datePass) continue;
+
+    const fvFromSheet = {
+      name: String(r[ix.idxName] || '').trim(),
+      mobile: String(r[ix.idxMobile] || '').trim(),
+      branch: rowBranch,
+      jcNo: jc,
+      model: payload && payload.formValues ? (payload.formValues.model || '') : '',
+      bikeModel: payload && payload.formValues ? (payload.formValues.model || '') : '',
+      executive: rowExec,
+    };
+
+    out.push({
+      formValues: fvFromSheet,
+      followUp: {
+        enabled: (fu.enabled !== false),
+        at: fu.at || null,
+        notes: fu.notes || '',
+        assignedTo: rowExec || '',
+        branch: rowBranch || '',
+        customer: fu.customer || { name: fvFromSheet.name, mobile: fvFromSheet.mobile },
+        status: fu.status || 'pending',
+      },
+      brand: (payload && payload.brand) ? payload.brand : '',
+    });
+  }
+
+  out.sort((a,b) => {
+    const ta = a.followUp.at ? new Date(a.followUp.at).getTime() : 0;
+    const tb = b.followUp.at ? new Date(b.followUp.at).getTime() : 0;
+    return tb - ta;
+  });
+
+  return { success:true, rows: out };
+}
+
+function mergeObj_(target, src){
+  if (!src || typeof src !== 'object') return target || {};
+  if (!target || typeof target !== 'object') target = {};
+  Object.keys(src).forEach(k => {
+    const v = src[k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      target[k] = mergeObj_(target[k], v);
+    } else {
+      target[k] = v;
+    }
+  });
+  return target;
+}
+
+function updateFollowup_(serialNo, patch){
+  if (!serialNo) return { success:false, message:'serialNo is required' };
+  const s = sh_();
+  const ix = headerIx_(s);
+  if (ix.idxJC < 0) return { success:false, message:'JC column not found' };
+  if (!ix.idxPayloads.length) return { success:false, message:'Payload column not found' };
+
+  const last = s.getLastRow();
+  if (last <= 1) return { success:false, message:'No data' };
+
+  const rows = s.getRange(2,1,last-1,ix.width).getValues();
+  let hit = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const jc = String(rows[i][ix.idxJC] || '').trim();
+    if (jc === String(serialNo).trim()) { hit = i + 2; break; }
+  }
+  if (hit < 0) return { success:false, message:'Not found' };
+
+  const row = s.getRange(hit,1,1,ix.width).getValues()[0];
+  const cur = safeJson_(row[ix.idxPayloads[0]]) || {};
+  cur.followUp = mergeObj_(cur.followUp || {}, (patch && patch.followUp) || {});
+  if (typeof patch?.status !== 'undefined') cur.followUp.status = patch.status;
+  if (cur.followUp && typeof cur.followUp.enabled === 'undefined') cur.followUp.enabled = true;
+
+  row[ix.idxPayloads[0]] = JSON.stringify(cur);
+  s.getRange(hit,1,1,ix.width).setValues([row]);
+  return { success:true, updated:true, row: hit };
+}
+
+function list_(opts) {
+  const s = sh_();
+  const ix = headerIx_(s);
+  const last = s.getLastRow();
+  if (last <= 1) return compat_({ ok: true, data: [], total: 0 });
+  const rows = s.getRange(2,1,last-1,ix.width).getValues();
+
+  const wantBranchKey = norm_(String((opts && opts.branch) || ''));
+  const wantExecKey = norm_(String((opts && opts.executive) || ''));
+  const wantService = String((opts && opts.service) || '').toLowerCase();
+  const q = String((opts && opts.q) || '').trim();
+
+  const startMs = (opts && typeof opts.startMs === 'number') ? opts.startMs : null;
+  const endMs = (opts && typeof opts.endMs === 'number') ? opts.endMs : null;
+  const sinceISO = (opts && opts.sinceISO) ? String(opts.sinceISO) : '';
+  const untilISO = (opts && opts.untilISO) ? String(opts.untilISO) : '';
+
+  const page = Math.max(parseInt((opts && opts.page) || '1', 10) || 1, 1);
+  const pageSize = Math.min(100, Math.max(0, parseInt((opts && opts.pageSize) || '0', 10) || 0));
+  const limit = Math.max(parseInt((opts && opts.limit) || '0', 10) || 0, 0);
+
+  const enriched = rows.map((r) => {
+    const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
+
+    const t = r[ix.idxTime];
+    let tsMs = 0;
+    if (t instanceof Date) tsMs = t.getTime();
+    else if (t) { const d = new Date(String(t)); if (!isNaN(d.getTime())) tsMs = d.getTime(); }
+
+    const rowBranch = String(r[ix.idxBranch] || '').trim();
+    const execFromPayload = String((payload && payload.formValues && payload.formValues.executive) || '').trim();
+    const branchPayload = String((payload && payload.formValues && payload.formValues.branch) || '').trim();
+    const paymentMode = ix.idxPayment >= 0 ? String(r[ix.idxPayment] || '') : '';
+    const model = payload && payload.formValues ? (payload.formValues.model || '') : '';
+
+    return {
+      raw: r,
+      payload,
+      tsMs,
+      name: String(r[ix.idxName] || ''),
+      mobile: String(r[ix.idxMobile] || ''),
+      regNo: String(r[ix.idxReg] || ''),
+      serviceType: String(r[ix.idxSvc] || '').toLowerCase(),
+      branchSheet: rowBranch,
+      branchPayload,
+      executive: execFromPayload,
+      paymentMode,
+      jcNo: String(r[ix.idxJC] || '').trim(),
+      model
+    };
+  });
+
+  let filtered = enriched.filter((x) => {
+    if (wantBranchKey) {
+      const b1 = norm_(x.branchSheet);
+      const b2 = norm_(x.branchPayload);
+      if (!(b1 === wantBranchKey || b2 === wantBranchKey)) return false;
+    }
+    if (wantExecKey && norm_(x.executive) !== wantExecKey) return false;
+    if (wantService && x.serviceType !== wantService) return false;
+
+    if (startMs && endMs) {
+      if (!x.tsMs || x.tsMs < startMs || x.tsMs > endMs) return false;
+    } else if (sinceISO || untilISO) {
+      const since = sinceISO ? new Date(sinceISO) : null;
+      const until = untilISO ? new Date(untilISO) : null;
+      if (since && (!x.tsMs || x.tsMs < since.getTime())) return false;
+      if (until && (!x.tsMs || x.tsMs > until.getTime())) return false;
+    }
+
+    if (q) {
+      const hay = [x.name, x.mobile, x.jcNo, x.regNo, x.model, x.branchSheet, x.branchPayload, x.executive, x.paymentMode];
+      let hit = false;
+      for (var i=0;i<hay.length;i++){ if (norm_(hay[i]).indexOf(norm_(q)) !== -1) { hit = true; break; } }
+      if (!hit) return false;
+    }
+    return true;
+  });
+
+  filtered.sort((a,b) => (b.tsMs||0)-(a.tsMs||0));
+
+  const total = filtered.length;
+  let slice;
+  if (pageSize > 0) {
+    const start = (page - 1) * pageSize;
+    slice = filtered.slice(start, start + pageSize);
+  } else if (limit > 0) {
+    const start = (page - 1) * limit;
+    slice = filtered.slice(start, start + limit);
+  } else {
+    slice = filtered;
+  }
+
+  const data = slice.map(x => toRowObject_(x.raw, headerIx_(s)));
+  return compat_({ ok: true, data, rows: data, total });
+}
+
+function compat_(obj) {
+  const out = obj || {};
+  if (typeof out.success === 'undefined') out.success = true;
+  if (!Array.isArray(out.rows) && Array.isArray(out.data)) out.rows = out.data;
+  return out;
+}
+
+/* ============================
+Remarks (Payload.remark + optional columns)
+============================ */
+function updateRemark_(jcNo, level, text, by) {
+  if (!jcNo) return { success:false, message:'jcNo is required' };
+  var lv = String(level || '').toLowerCase();
+  if (!/(^ok$|^warning$|^alert$)/.test(lv)) return { success:false, message:'level must be ok|warning|alert' };
+
+  var s = sh_();
+  var ix = headerIx_(s);
+  if (ix.idxJC < 0) return { success:false, message:'JC column not found' };
+  if (!ix.idxPayloads.length) return { success:false, message:'Payload column not found' };
+
+  var last = s.getLastRow();
+  if (last <= 1) return { success:false, message:'No data' };
+
+  var rows = s.getRange(2,1,last-1,ix.width).getValues();
+  var hit = -1;
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var jc = String(rows[i][ix.idxJC] || '').trim();
+    if (jc === String(jcNo).trim()) { hit = i + 2; break; }
+  }
+  if (hit < 0) return { success:false, message:'Not found' };
+
+  var row = s.getRange(hit,1,1,ix.width).getValues()[0];
+  var payload = safeJson_(row[ix.idxPayloads[0]]) || {};
+  var nowIso = new Date().toISOString();
+  payload.remark = {
+    level: lv,
+    text: String(text || '').slice(0, 240),
+    by: String(by || '').slice(0, 120),
+    at: nowIso
+  };
+  row[ix.idxPayloads[0]] = JSON.stringify(payload);
+
+  var info = headerIx_(s);
+  var headers = info.headers;
+  var rl = info.idxRemarkLevel;
+  var rt = info.idxRemarkText;
+  if (rl < 0) {
+    rl = headers.length;
+    s.getRange(1, rl + 1).setValue('RemarkLevel');
+    headers = headerIx_(s).headers;
+    rl = headerIx_(s).idxRemarkLevel;
+  }
+  if (rt < 0) {
+    headers = headerIx_(s).headers;
+    rt = headers.length;
+    s.getRange(1, rt + 1).setValue('RemarkText');
+    headers = headerIx_(s).headers;
+    rt = headerIx_(s).idxRemarkText;
+  }
+
+  if (rl >= 0) row[rl] = lv.toUpperCase();
+  if (rt >= 0) row[rt] = String(text || '').slice(0, 240);
+
+  s.getRange(hit,1,1,Math.max(headerIx_(s).width, row.length)).setValues([row]);
+
+  return { success:true, updated:true, row: hit, jcNo: jcNo, level: lv, text: String(text || '') };
+}
+
+/* ============== DAILY COLLECTIONS MODULE (MASTER) ============== */
+function dcTodayStrIndia_() {
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+}
+function dcTsIndia_() {
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+}
+function dcToNum_(x) {
+  const n = Number(x || 0);
+  return isNaN(n) ? 0 : n;
+}
+
+function dcGetSheet_() {
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string'
+    ? DC_MASTER_SPREADSHEET_ID
+    : '';
+  const ss = masterId
+    ? SpreadsheetApp.openById(masterId)
+    : (SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet());
+
+  let sh = ss.getSheetByName(DC_SHEET);
+  if (!sh) sh = ss.insertSheet(DC_SHEET);
+
+  const w = Math.max(sh.getLastColumn(), DC_HEADERS.length);
+  const first = sh.getRange(1,1,1,w).getValues()[0];
+  const lastRow = sh.getLastRow();
+  const a1 = String(first[0] || '').trim();
+  const looksLikeHint = /^type "@dropdown"/i.test(a1);
+
+  if (lastRow === 0 || (lastRow === 1 && (!a1 || looksLikeHint))) {
+    sh.clear();
+    sh.getRange(1,1,1,DC_HEADERS.length).setValues([DC_HEADERS]);
+  }
+
+  return sh;
+}
+
+function dcFindCol_(headers, names) {
+  // Trim + case-insensitive match for robustness
+  const norm = (s) => String(s||'').trim().toLowerCase();
+  const H = headers.map(norm);
+  for (var i=0;i<names.length;i++) {
+    var j = H.indexOf(norm(names[i]));
+    if (j >= 0) return j;
+  }
+  return -1;
+}
+
+function dcIdx_(headers) {
+  return {
+    Date:   dcFindCol_(headers, ['Date']),
+    Branch: dcFindCol_(headers, ['Branch']),
+    Staff:  dcFindCol_(headers, ['Staff']),
+    Booking: dcFindCol_(headers, ['Booking Amount']),
+    JC:      dcFindCol_(headers, ['JC Amount']),
+    Minor:   dcFindCol_(headers, ['Minor Sales Amount','Minor Sales Amt']),
+    Total:   dcFindCol_(headers, ['Total']),
+    Cash:    dcFindCol_(headers, ['Cash Amount']),
+    Online:  dcFindCol_(headers, ['Online Amount']),
+    TotalCollected: dcFindCol_(headers, ['Total Collected','Total Coln']),
+    Opening: dcFindCol_(headers, ['Opening Balance','Opening']),
+    Due:     dcFindCol_(headers, ['Due Today','Due']),
+    CollectedToday: dcFindCol_(headers, ['Collected Today','Collected']),
+    Closing: dcFindCol_(headers, ['Closing Balance','Closing']),
+    Done:    dcFindCol_(headers, ['Settlement Done']),
+    At:      dcFindCol_(headers, ['Settlement At']),
+    UpdatedAt: dcFindCol_(headers, ['Updated At']),
+    Notes:   dcFindCol_(headers, ['Notes']),
+    Raw:     dcFindCol_(headers, ['Raw Payload']),
+    width:   headers.length
+  };
+}
+
+// Normalize any date cell to 'yyyy-MM-dd' in IST
+function dcNormDate_(val) {
+  var tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  if (val instanceof Date) return Utilities.formatDate(val, tz, 'yyyy-MM-dd');
+  var s = String(val || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  return s;
+}
+// Derive cash/online from Raw Payload when columns are missing
+function dcReadCashOnlineFromRaw_(rawCell) {
+  try {
+    const raw = JSON.parse(String(rawCell || '{}'));
+    if (typeof raw.cash === 'number' || typeof raw.online === 'number') {
+      return { cash: Number(raw.cash || 0) || 0, online: Number(raw.online || 0) || 0 };
+    }
+    const logs = Array.isArray(raw.logs) ? raw.logs : [];
+    var c = 0, o = 0;
+    for (var i = 0; i < logs.length; i++) {
+      c += Number(logs[i] && logs[i].cash || 0) || 0;
+      o += Number(logs[i] && logs[i].online || 0) || 0;
+    }
+    return { cash: c, online: o };
+  } catch (_) { return { cash: 0, online: 0 }; }
+}
+
+function updateDailyCollection_(branch, staff, amount, type, opt) {
+  const b = String(branch || '').trim();
+  const s = String(staff || '').trim();
+  const amt = dcToNum_(amount);
+
+  const cashInc   = dcToNum_(opt && opt.cashCollected);
+  const onlineInc = dcToNum_(opt && opt.onlineCollected);
+
+  if (!b || !s || !(amt > 0)) {
+    return { success:false, message:'missing branch/staff or amount<=0' };
+  }
+
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const dateStr = dcTodayStrIndia_();
+
+  const last = sh.getLastRow();
+  let hit = -1;
+
+  if (last > 1) {
+    const rows = sh.getRange(2,1,last-1,I.width).getValues();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const sameDate = dcNormDate_(r[I.Date]) === dateStr;
+      const sameBranch = String(r[I.Branch] || '').trim().toLowerCase() === b.toLowerCase();
+      const sameStaff = String(r[I.Staff] || '').trim().toLowerCase() === s.toLowerCase();
+      const notDone = String(r[I.Done] || '').toLowerCase() !== 'true';
+      if (sameDate && sameBranch && sameStaff && notDone) {
+        hit = i + 2;
+        break;
+      }
+    }
+  }
+
+  if (hit < 0) {
+    const row = new Array(I.width).fill('');
+    row[I.Date] = dateStr;
+    row[I.Branch] = b;
+    row[I.Staff] = s;
+
+    row[I.Booking] = 0;
+    row[I.JC]      = 0;
+    row[I.Minor]   = 0;
+
+    if (type === 'booking')         row[I.Booking] = amt;
+    else if (type === 'jc')         row[I.JC]      = amt;
+    else if (type === 'minorsales') row[I.Minor]   = amt;
+
+    row[I.Total] = dcToNum_(row[I.Booking]) + dcToNum_(row[I.JC]) + dcToNum_(row[I.Minor]);
+
+    if (I.Cash >= 0)   row[I.Cash]   = cashInc;
+    if (I.Online >= 0) row[I.Online] = onlineInc;
+
+    row[I.Done]  = false;
+    row[I.At]    = '';
+    row[I.Raw]   = JSON.stringify({ createdAt: dcTsIndia_(), type, amount: amt, cash: cashInc, online: onlineInc });
+
+    sh.appendRow(row);
+    hit = sh.getLastRow();
+  } else {
+    const cur = sh.getRange(hit,1,1,I.width).getValues()[0];
+
+    if (type === 'booking')         cur[I.Booking] = dcToNum_(cur[I.Booking]) + amt;
+    else if (type === 'jc')         cur[I.JC]      = dcToNum_(cur[I.JC]) + amt;
+    else if (type === 'minorsales') cur[I.Minor]   = dcToNum_(cur[I.Minor]) + amt;
+
+    cur[I.Total] = dcToNum_(cur[I.Booking]) + dcToNum_(cur[I.JC]) + dcToNum_(cur[I.Minor]);
+
+    if (I.Cash >= 0)   cur[I.Cash]   = dcToNum_(cur[I.Cash])   + cashInc;
+    if (I.Online >= 0) cur[I.Online] = dcToNum_(cur[I.Online]) + onlineInc;
+    if (I.TotalCollected >= 0) cur[I.TotalCollected] = (I.Cash>=0?dcToNum_(cur[I.Cash]):0) + (I.Online>=0?dcToNum_(cur[I.Online]):0);
+
+    let raw = {};
+    try { raw = JSON.parse(String(cur[I.Raw] || '{}')); } catch (_) {}
+    if (!Array.isArray(raw.logs)) raw.logs = [];
+    raw.logs.push({ at: dcTsIndia_(), type, amount: amt, cash: cashInc, online: onlineInc });
+    cur[I.Raw] = JSON.stringify(raw);
+
+    sh.getRange(hit,1,1,I.width).setValues([cur]);
+  }
+
+  const out = sh.getRange(hit,1,1,I.width).getValues()[0];
+
+  return {
+    success:true,
+    updatedRow: {
+      date: out[I.Date],
+      branch: out[I.Branch],
+      staff: out[I.Staff],
+      booking: dcToNum_(out[I.Booking]),
+      jc: dcToNum_(out[I.JC]),
+      minor: dcToNum_(out[I.Minor]),
+      cashAmount: (I.Cash>=0 ? dcToNum_(out[I.Cash]) : 0),
+      onlineAmount: (I.Online>=0 ? dcToNum_(out[I.Online]) : 0),
+      total: (I.TotalCollected>=0 ? dcToNum_(out[I.TotalCollected]) : dcToNum_(out[I.Total])),
+      settled: String(out[I.Done]).toLowerCase() === 'true',
+      settledAt: out[I.At] || ''
+    }
+  };
+}
+
+function settleCollection_(branch, staff, dateOpt) {
+  const b = String(branch || '').trim();
+  const s = String(staff || '').trim();
+  const dateStr = String(dateOpt || dcTodayStrIndia_());
+
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return { success:false, message:'No data' };
+
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  let hit = -1;
+
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    const sameDate = dcNormDate_(r[I.Date]) === dateStr;
+    const sameBranch = String(r[I.Branch] || '').trim().toLowerCase() === b.toLowerCase();
+    const sameStaff = String(r[I.Staff] || '').trim().toLowerCase() === s.toLowerCase();
+    const notDone = String(r[I.Done] || '').toLowerCase() !== 'true';
+    if (sameDate && sameBranch && sameStaff && notDone) {
+      hit = i + 2;
+      break;
+    }
+  }
+
+  if (hit < 0) return { success:false, message:'Not found or already settled' };
+
+  const cur = sh.getRange(hit,1,1,I.width).getValues()[0];
+  // Compute closing to block settlement with pending amounts
+  const opening = I.Opening>=0 ? dcToNum_(cur[I.Opening]) : 0;
+  const due     = I.Due>=0 ? dcToNum_(cur[I.Due]) : (dcToNum_(cur[I.Booking]) + dcToNum_(cur[I.JC]) + dcToNum_(cur[I.Minor]));
+  const coll    = I.CollectedToday>=0 ? dcToNum_(cur[I.CollectedToday]) : 0;
+  const closing = opening + due - coll;
+  if (closing > 0.00001) {
+    return { success:false, message:'Cannot settle. Pending amount exists: ' + closing };
+  }
+
+  cur[I.Done] = true;
+  cur[I.At] = dcTsIndia_();
+  sh.getRange(hit,1,1,I.width).setValues([cur]);
+
+  return {
+    success:true,
+    settled:true,
+    row: hit,
+    date: cur[I.Date],
+    staff: cur[I.Staff],
+    branch: cur[I.Branch]
+  };
+}
+
+function getStaffCollectionSummary_(branch, staff) {
+  const bKey = String(branch || '').trim().toLowerCase();
+  const sKey = String(staff || '').trim().toLowerCase();
+  const today = dcTodayStrIndia_();
+
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) {
+    return { success:true, data: {
+      bookingAmountPending:0, jcAmountPending:0, minorSalesAmountPending:0,
+      totalPending:0, cashAmountPending:0, onlineAmountPending:0, settlementDone:true
+    }};
+  }
+
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  var booking=0, jc=0, minor=0;
+  var any = false;
+  var latestIdx = -1; var latestTs = 0; var latestRow = null;
+
+  for (var idx = 0; idx < rows.length; idx++) {
+    const r = rows[idx];
+    const done = String(r[I.Done] || '').toLowerCase() === 'true';
+    if (done) continue;
+
+    const sameDate  = dcNormDate_(r[I.Date]) === today;
+    const sameBranch= String(r[I.Branch] || '').trim().toLowerCase() === bKey;
+    const sameStaff = String(r[I.Staff]  || '').trim().toLowerCase() === sKey;
+    if (!(sameDate && sameBranch && sameStaff)) continue;
+
+    any = true;
+    booking += dcToNum_(r[I.Booking]);
+    jc      += dcToNum_(r[I.JC]);
+    minor   += dcToNum_(r[I.Minor]);
+
+    // track latest row by Updated At or fallback to last row order
+    var uts = 0;
+    if (I.UpdatedAt >= 0) {
+      const u = rows[idx][I.UpdatedAt];
+      if (u instanceof Date) uts = u.getTime(); else if (u) { var d = new Date(String(u)); if (!isNaN(d.getTime())) uts = d.getTime(); }
+    }
+    if (uts >= latestTs) { latestTs = uts; latestIdx = idx; latestRow = rows[idx]; }
+    if (latestTs === 0) { latestIdx = idx; latestRow = rows[idx]; }
+  }
+
+  var collected = 0, cash = 0, online = 0, closingPending = 0;
+  if (latestRow) {
+    collected = (I.CollectedToday>=0 ? dcToNum_(latestRow[I.CollectedToday]) : 0);
+    cash = collected; // treat as cash handover for the day
+    online = 0;
+    const opening = (I.Opening>=0 ? dcToNum_(latestRow[I.Opening]) : 0);
+    const dueSum  = booking + jc + minor;
+    const close   = opening + dueSum - collected;
+    closingPending = Math.max(0, close);
+  }
+
+  return { success:true, data: {
+    bookingAmountPending: booking,
+    jcAmountPending: jc,
+    minorSalesAmountPending: minor,
+    totalPending: collected,
+    cashAmountPending: cash,
+    onlineAmountPending: online,
+    bookingAmount: booking, jcAmount: jc, minorSalesAmount: minor,
+    total: collected, cashAmount: cash, onlineAmount: online,
+    closingPending,
+    settlementDone: !any
+  }};
+}
+
+function collections_(opts) {
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return { ok:true, data:[], total:0 };
+
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  const wantBranch = String(opts && opts.branch || '').trim().toLowerCase();
+  const wantDate = String(opts && opts.date || '').trim();
+  const page = Math.max(parseInt((opts && opts.page) || '1', 10) || 1, 1);
+  const pageSize = Math.min(100, Math.max(0, parseInt((opts && opts.pageSize) || '10',10) || 10));
+
+  function prevClosingFor(dateStr, branch, staff) {
+    try {
+      let best = '', prev = 0;
+      for (let i=0;i<rows.length;i++) {
+        const rr = rows[i];
+        const d = dcNormDate_(rr[I.Date]);
+        if (!d || d >= dateStr) continue;
+        if (String(rr[I.Branch]||'').trim().toLowerCase() !== String(branch||'').trim().toLowerCase()) continue;
+        if (String(rr[I.Staff]||'').trim().toLowerCase() !== String(staff||'').trim().toLowerCase()) continue;
+        if (best === '' || d > best) { best = d; prev = (I.Closing>=0 ? dcToNum_(rr[I.Closing]) : 0); }
+      }
+      return prev;
+    } catch(_) { return 0; }
+  }
+
+  const arr = rows.map(r => {
+    let cash = 0, online = 0;
+    if (I.Cash >= 0 && I.Online >= 0) {
+      cash   = dcToNum_(r[I.Cash]);
+      online = dcToNum_(r[I.Online]);
+    } else if (I.Raw >= 0) {
+      const x = dcReadCashOnlineFromRaw_(r[I.Raw]);
+      cash = x.cash; online = x.online;
+    }
+    let opening  = I.Opening >= 0 ? dcToNum_(r[I.Opening]) : 0;
+    const dueToday = I.Due     >= 0 ? dcToNum_(r[I.Due])     : (dcToNum_(r[I.Booking]) + dcToNum_(r[I.JC]) + dcToNum_(r[I.Minor]));
+    const collToday= I.CollectedToday >= 0 ? dcToNum_(r[I.CollectedToday]) : 0;
+    if (!opening) {
+      opening = prevClosingFor(dcNormDate_(r[I.Date]), r[I.Branch], r[I.Staff]);
+    }
+    const closing  = (opening + dueToday - collToday);
+    return {
+      date: dcNormDate_(r[I.Date]),
+      branch: r[I.Branch],
+      staff: r[I.Staff],
+      bookingAmount: dcToNum_(r[I.Booking]),
+      jcAmount: dcToNum_(r[I.JC]),
+      minorSalesAmount: dcToNum_(r[I.Minor]),
+      cashAmount: cash,
+      onlineAmount: online,
+      total: I.TotalCollected >= 0 ? dcToNum_(r[I.TotalCollected]) : (I.Total >= 0 ? dcToNum_(r[I.Total]) : (cash + online)),
+      openingBalance: opening,
+      dueToday: dueToday,
+      collectedToday: collToday,
+      closingBalance: closing,
+      settlementDone: String(r[I.Done]).toLowerCase() === 'true',
+      settlementAt: r[I.At] || '',
+      updatedAt: I.UpdatedAt >= 0 ? (r[I.UpdatedAt] || '') : ''
+    };
+  }).filter(x => {
+    if (wantBranch && String(x.branch || '').trim().toLowerCase() !== wantBranch) return false;
+    if (wantDate && String(x.date || '') !== wantDate) return false;
+    return true;
+  });
+
+  arr.sort((a,b) =>
+    String(b.date).localeCompare(String(a.date)) ||
+    String(b.settlementAt || '').localeCompare(String(a.settlementAt || ''))
+  );
+
+  const total = arr.length;
+  const start = (page - 1) * pageSize;
+  const data = pageSize > 0 ? arr.slice(start, start + pageSize) : arr;
+
+  return { ok:true, data, total };
+}
+
+// Update Opening/Due/Collected/Closing on the same DailyCollections row
+function updateCollectionDC_(req) {
+  const date = String(req.date || '').trim();
+  const branch = String(req.branch || '').trim();
+  const staff = String(req.staff || '').trim();
+  const collectedToday = dcToNum_(req.collectedToday);
+  if (!date || !branch || !staff) return { success:false, message:'date/branch/staff required' };
+
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const last = sh.getLastRow();
+
+  let hit = -1;
+  let rows = [];
+  if (last > 1) {
+    rows = sh.getRange(2,1,last-1,I.width).getValues();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      if (dcNormDate_(r[I.Date]) === date && String(r[I.Branch]||'').trim().toLowerCase() === branch.toLowerCase() && String(r[I.Staff]||'').trim().toLowerCase() === staff.toLowerCase()) {
+        hit = i + 2; break;
+      }
+    }
+  }
+
+  if (hit < 0) { // create new
+    const row = new Array(I.width).fill('');
+    row[I.Date] = date; row[I.Branch] = branch; row[I.Staff] = staff;
+    if (I.Opening >= 0) row[I.Opening] = 0;
+    if (I.Due >= 0) row[I.Due] = 0;
+    if (I.CollectedToday >= 0) row[I.CollectedToday] = collectedToday;
+    if (I.Closing >= 0) row[I.Closing] = 0;
+    if (I.UpdatedAt >= 0) row[I.UpdatedAt] = dcTsIndia_();
+    sh.appendRow(row);
+    hit = sh.getLastRow();
+    rows = sh.getRange(2,1,hit-1,I.width).getValues();
+  }
+
+  const cur = sh.getRange(hit,1,1,I.width).getValues()[0];
+
+  const prevClosing = (function(){
+    let prev = 0, best = '';
+    for (let i=0;i<rows.length;i++){
+      const r = rows[i];
+      if (String(r[I.Branch]||'').trim().toLowerCase() !== branch.toLowerCase()) continue;
+      if (String(r[I.Staff]||'').trim().toLowerCase() !== staff.toLowerCase()) continue;
+      const rd = dcNormDate_(r[I.Date]);
+      if (!rd || rd >= date) continue;
+      if (best === '' || rd > best) { best = rd; prev = (I.Closing>=0 ? dcToNum_(r[I.Closing]) : 0); }
+    }
+    return prev;
+  })();
+
+  const booking = I.Booking>=0 ? dcToNum_(cur[I.Booking]) : 0;
+  const jc = I.JC>=0 ? dcToNum_(cur[I.JC]) : 0;
+  const minor = I.Minor>=0 ? dcToNum_(cur[I.Minor]) : 0;
+  const dueToday = booking + jc + minor;
+  const opening = (I.Opening>=0 ? dcToNum_(cur[I.Opening]) : 0) || prevClosing;
+  const closing = opening + dueToday - collectedToday;
+
+  if (I.Opening>=0) cur[I.Opening] = opening;
+  if (I.Due>=0) cur[I.Due] = dueToday;
+  if (I.CollectedToday>=0) cur[I.CollectedToday] = collectedToday;
+  if (I.Closing>=0) cur[I.Closing] = closing;
+  if (I.TotalCollected>=0) cur[I.TotalCollected] = (I.Cash>=0?dcToNum_(cur[I.Cash]):0) + (I.Online>=0?dcToNum_(cur[I.Online]):0);
+  if (I.UpdatedAt>=0) cur[I.UpdatedAt] = dcTsIndia_();
+
+  sh.getRange(hit,1,1,I.width).setValues([cur]);
+  return { success:true, row: hit, date, branch, staff, openingBalance: opening, dueToday, collectedToday, closingBalance: closing };
+}

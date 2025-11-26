@@ -270,7 +270,8 @@ export default function Quotation() {
   );
 
   const [downPayment, setDownPayment] = useState(0);
-  const [busy, setBusy] = useState(false); // disable actions while saving/printing
+  const [busy, setBusy] = useState(false); // disable actions while saving
+  const [printing, setPrinting] = useState(false); // lock Print until window opens
   const savingRef = useRef(false);
   const [vehicleType, setVehicleType] = useState("scooter");
   const [fittings, setFittings] = useState(["Side Stand", "Floor Mat", "ISI Helmet", "Grip Cover"]);
@@ -593,6 +594,9 @@ export default function Quotation() {
     try {
       if (Date.now() < actionCooldownUntil) return; // ignore rapid re-clicks
       startActionCooldown(6000);
+      setPrinting(true);
+      // Ensure spinner paints before heavy work
+      await new Promise((r) => setTimeout(r, 0));
       await validateCore(form);
       await safeAutoSave();
       await toastSaved("Saved (background sync). Preparing print…");
@@ -776,6 +780,8 @@ export default function Quotation() {
         scrollToFirstError(form, errInfo);
       }
       return;
+    } finally {
+      setPrinting(false);
     }
   };
 
@@ -1710,7 +1716,14 @@ export default function Quotation() {
                   WhatsApp
                 </Button>
 
-                <Button className="no-print" type="primary" icon={<PrinterOutlined />} onClick={handlePrint} disabled={!canAct || busy || actionCooldownUntil > 0}>
+                <Button
+                  className="no-print"
+                  type="primary"
+                  icon={<PrinterOutlined />}
+                  onClick={handlePrint}
+                  disabled={!canAct || busy || actionCooldownUntil > 0 || printing}
+                  loading={printing}
+                >
                   Print
                 </Button>
               </Col>
