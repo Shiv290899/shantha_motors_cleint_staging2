@@ -1238,9 +1238,13 @@ function getStaffCollectionSummary_(branch, staff) {
 
   var collected = 0, cash = 0, online = 0, closingPending = 0;
   if (latestRow) {
-    collected = (I.CollectedToday>=0 ? dcToNum_(latestRow[I.CollectedToday]) : 0);
-    cash = collected; // treat as cash handover for the day
-    online = 0;
+    const tot = (I.TotalCollected>=0 ? dcToNum_(latestRow[I.TotalCollected]) : 0) ||
+                (I.Total>=0 ? dcToNum_(latestRow[I.Total]) : 0);
+    const cashCol = (I.Cash>=0 ? dcToNum_(latestRow[I.Cash]) : 0);
+    const onlineCol = (I.Online>=0 ? dcToNum_(latestRow[I.Online]) : 0);
+    collected = tot || (I.CollectedToday>=0 ? dcToNum_(latestRow[I.CollectedToday]) : (cashCol + onlineCol));
+    cash = cashCol || collected; // if split not available, assume all cash for handover indicator
+    online = onlineCol;
     const opening = (I.Opening>=0 ? dcToNum_(latestRow[I.Opening]) : 0);
     const dueSum  = booking + jc + minor;
     const close   = opening + dueSum - collected;
@@ -1289,34 +1293,65 @@ function collections_(opts) {
     } catch(_) { return 0; }
   }
 
-  const arr = rows.map(r => {
+  const arr = rows.map((r, rowIx) => {
+    // Cash/Online robust read
     let cash = 0, online = 0;
     if (I.Cash >= 0 && I.Online >= 0) {
-      cash   = dcToNum_(r[I.Cash]);
+      cash = dcToNum_(r[I.Cash]);
       online = dcToNum_(r[I.Online]);
     } else if (I.Raw >= 0) {
       const x = dcReadCashOnlineFromRaw_(r[I.Raw]);
       cash = x.cash; online = x.online;
     }
-    let opening  = I.Opening >= 0 ? dcToNum_(r[I.Opening]) : 0;
-    const dueToday = I.Due     >= 0 ? dcToNum_(r[I.Due])     : (dcToNum_(r[I.Booking]) + dcToNum_(r[I.JC]) + dcToNum_(r[I.Minor]));
-    const collToday= I.CollectedToday >= 0 ? dcToNum_(r[I.CollectedToday]) : 0;
+
+    // Base numbers
+    const book = dcToNum_(r[I.Booking]);
+    const jc   = dcToNum_(r[I.JC]);
+    const minor= dcToNum_(r[I.Minor]);
+    const derivedDue = book + jc + minor;
+
+    const totalCollectedPref =
+      (I.TotalCollected >= 0 ? dcToNum_(r[I.TotalCollected]) : 0) ||
+      (I.Total >= 0 ? dcToNum_(r[I.Total]) : 0) ||
+      (cash + online);
+
+    // Opening: prefer sheet; fallback to previous closing
+    const openingRaw = I.Opening >= 0 ? dcToNum_(r[I.Opening]) : 0;
+    let opening = openingRaw;
     if (!opening) {
       opening = prevClosingFor(dcNormDate_(r[I.Date]), r[I.Branch], r[I.Staff]);
     }
-    const closing  = (opening + dueToday - collToday);
+
+    // Due: prefer sheet value when present and > 0; otherwise derive
+    let dueToday = I.Due >= 0 ? dcToNum_(r[I.Due]) : 0;
+    if (!dueToday) dueToday = derivedDue;
+
+    // Collected: prefer explicit column when > 0; otherwise use totals
+    let collToday = I.CollectedToday >= 0 ? dcToNum_(r[I.CollectedToday]) : 0;
+    if (!collToday) collToday = totalCollectedPref;
+
+    const closing = opening + dueToday - collToday;
+
+    // Opportunistically write back computed Opening so the sheet stays correct and the UI
+    // does not need historical lookbacks. Only write when sheet has 0/blank and we computed > 0.
+    try {
+      if (I.Opening >= 0 && openingRaw === 0 && opening > 0) {
+        sh.getRange(2 + rowIx, 1 + I.Opening).setValue(opening);
+      }
+    } catch (_) { /* ignore write errors in read path */ }
+
     return {
       date: dcNormDate_(r[I.Date]),
       branch: r[I.Branch],
       staff: r[I.Staff],
-      bookingAmount: dcToNum_(r[I.Booking]),
-      jcAmount: dcToNum_(r[I.JC]),
-      minorSalesAmount: dcToNum_(r[I.Minor]),
+      bookingAmount: book,
+      jcAmount: jc,
+      minorSalesAmount: minor,
       cashAmount: cash,
       onlineAmount: online,
-      total: I.TotalCollected >= 0 ? dcToNum_(r[I.TotalCollected]) : (I.Total >= 0 ? dcToNum_(r[I.Total]) : (cash + online)),
+      total: totalCollectedPref,
       openingBalance: opening,
-      dueToday: dueToday,
+      dueToday,
       collectedToday: collToday,
       closingBalance: closing,
       settlementDone: String(r[I.Done]).toLowerCase() === 'true',

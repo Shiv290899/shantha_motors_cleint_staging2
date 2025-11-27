@@ -12,7 +12,8 @@ export default function AdminDailyCollections() {
   const [loading, setLoading] = useState(false);
   // Multi-branch filter (same UX as staff filter)
   const [branchFilter, setBranchFilter] = useState([]); // [] = all branches
-  const [date, setDate] = useState(dayjs());
+  // Support both single day and date range; default to today → today
+  const [dateRange, setDateRange] = useState([dayjs(), dayjs()]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
@@ -23,6 +24,8 @@ export default function AdminDailyCollections() {
   const [collectRow, setCollectRow] = useState(null);
   const [collectMode, setCollectMode] = useState('partial'); // partial | full
   const [collectAmt, setCollectAmt] = useState(0);
+  // Show instant feedback while saving a row's collection
+  const [savingRowKey, setSavingRowKey] = useState(null);
   
   
   const norm = (s) => String(s || '').trim().toLowerCase();
@@ -32,11 +35,13 @@ export default function AdminDailyCollections() {
     setLoading(true);
     try {
       // Helper: fetch and compact a single date
-      const fetchOne = async (isoDate) => {
+      const fetchOne = async (isoDate, pageOverride = null, pageSizeOverride = null) => {
         const branchForFetch = Array.isArray(branchFilter) && branchFilter.length === 1 ? branchFilter[0] : '';
+        const effectivePage = pageOverride == null ? page : pageOverride;
+        const effectivePageSize = pageSizeOverride == null ? pageSize : pageSizeOverride;
         const payload = SECRET
-          ? { action:'collections', branch: branchForFetch, date: isoDate, page, pageSize, secret: SECRET }
-          : { action:'collections', branch: branchForFetch, date: isoDate, page, pageSize };
+          ? { action:'collections', branch: branchForFetch, date: isoDate, page: effectivePage, pageSize: effectivePageSize, secret: SECRET }
+          : { action:'collections', branch: branchForFetch, date: isoDate, page: effectivePage, pageSize: effectivePageSize };
         const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload });
         const js = resp?.data || resp || {};
         const list = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
@@ -78,22 +83,54 @@ export default function AdminDailyCollections() {
         return Array.from(grouped.values()).map((g) => ({ ...g, total: g.cashAmount + g.onlineAmount }));
       };
 
-      const todayIso = date ? date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
-      const todayRows = await fetchOne(todayIso);
-      setRows(todayRows);
-      setTotal(todayRows.length);
-      // Preload previous day's rows for Opening computation
-      try {
-        const prevIso = dayjs(todayIso).subtract(1, 'day').format('YYYY-MM-DD');
-        const prevRows = await fetchOne(prevIso);
-        (window.__DC_PREV__ = window.__DC_PREV__ || new Map()).set(prevIso, prevRows);
-      } catch { /* ignore */ }
+      // Determine date(s) to fetch
+      const [start, end] = Array.isArray(dateRange) && dateRange.length === 2
+        ? dateRange
+        : [dayjs(), dayjs()];
+
+      // Clamp overly large ranges to keep requests reasonable
+      const MAX_RANGE_DAYS = 31;
+      const datesToFetch = [];
+      let cur = (start || dayjs()).startOf('day');
+      const endDay = (end || start || dayjs()).startOf('day');
+      while (cur.isBefore(endDay) || cur.isSame(endDay, 'day')) {
+        datesToFetch.push(cur.format('YYYY-MM-DD'));
+        cur = cur.add(1, 'day');
+        if (datesToFetch.length > MAX_RANGE_DAYS) break;
+      }
+      if (Array.isArray(dateRange) && dateRange.length === 2) {
+        const fullRange = end.diff(start, 'day') + 1;
+        if (fullRange > MAX_RANGE_DAYS) {
+          message.warning(`Showing first ${MAX_RANGE_DAYS} days to keep it fast.`);
+        }
+      }
+
+      // For ranges, pull everything per day (pageSize 0 disables paging in GAS)
+      const perDayPage = datesToFetch.length > 1 ? 1 : page;
+      const perDayPageSize = datesToFetch.length > 1 ? 0 : pageSize;
+
+      const allRows = [];
+      for (const d of datesToFetch) {
+        const dayRows = await fetchOne(d, perDayPage, perDayPageSize);
+        allRows.push(...dayRows);
+        // Preload previous day cache for each date for opening computation
+        try {
+          const prevIso = dayjs(d).subtract(1, 'day').format('YYYY-MM-DD');
+          const prevRows = await fetchOne(prevIso, 1, 0);
+          (window.__DC_PREV__ = window.__DC_PREV__ || new Map()).set(prevIso, prevRows);
+        } catch { /* ignore */ }
+      }
+
+      // Sort by date desc for a stable multi-day view
+      allRows.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      setRows(allRows);
+      setTotal(allRows.length);
     } catch  {
       message.error('Load failed');
     } finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchRows(); /* eslint-disable-next-line */ }, [branchFilter, date, page, pageSize]);
+  useEffect(() => { fetchRows(); /* eslint-disable-next-line */ }, [branchFilter, dateRange, page, pageSize]);
 
   // Build staff + branch lists for filters (dynamic from data)
   const staffOptions = Array.from(new Set(rows.map(r => (r.staff || '').toString()))).map(s => ({ value: s, label: s || '(Unknown)' }));
@@ -115,19 +152,27 @@ export default function AdminDailyCollections() {
 
   // Compute Opening/Due/Closing using previous day's closing (client-side helper)
   const visibleRows = useMemo(() => {
-    const todayIso = date ? date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
-    const prevIso = dayjs(todayIso).subtract(1, 'day').format('YYYY-MM-DD');
-    const prevList = (window.__DC_PREV__ && window.__DC_PREV__.get(prevIso)) || [];
     const normKey = (b,s) => `${String(b||'').trim().toLowerCase()}|${String(s||'').trim().toLowerCase()}`;
-    const prevClose = new Map();
-    prevList.forEach(r => {
+    // Cache of prev-day closing per date
+    const prevCache = new Map(); // prevIso -> Map(key -> close)
+    const getPrevMap = (prevIso) => {
+      if (prevCache.has(prevIso)) return prevCache.get(prevIso);
+      const prevList = (window.__DC_PREV__ && window.__DC_PREV__.get(prevIso)) || [];
+      const m = new Map();
+      prevList.forEach((r) => {
+        const key = normKey(r.branch, r.staff);
+        const close = Number(r.closingBalance ?? r.closing ?? r.closingAmount ?? 0) || 0;
+        if (!m.has(key)) m.set(key, close);
+      });
+      prevCache.set(prevIso, m);
+      return m;
+    };
+
+    return visibleBase.map((r) => {
       const key = normKey(r.branch, r.staff);
-      const close = Number(r.closingBalance ?? r.closing ?? r.closingAmount ?? 0) || 0;
-      if (!prevClose.has(key)) prevClose.set(key, close);
-    });
-    return visibleBase.map(r => {
-      const key = normKey(r.branch, r.staff);
-      const opening = Number(r.openingBalance ?? r.opening ?? prevClose.get(key) ?? 0) || 0;
+      const prevIso = dayjs(r.date).subtract(1, 'day').format('YYYY-MM-DD');
+      const prevMap = getPrevMap(prevIso);
+      const opening = Number(r.openingBalance ?? r.opening ?? prevMap.get(key) ?? 0) || 0;
       const dueToday = (Number(r.bookingAmount || r.booking || 0) || 0)
         + (Number(r.jcAmount || r.jc || 0) || 0)
         + (Number(r.minorSalesAmount || r.minor || 0) || 0);
@@ -137,7 +182,7 @@ export default function AdminDailyCollections() {
       return { ...r, opening, dueToday, collectedToday, closing, toCollect };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleBase, date]);
+  }, [visibleBase, dateRange]);
 
   // Aggregate across visible rows (branch totals)
   const agg = visibleRows.reduce((a, r) => {
@@ -179,6 +224,20 @@ export default function AdminDailyCollections() {
     } catch { message.error('Update failed'); }
   };
 
+  // Mark as settled via GAS when full amount is collected
+  const settleRow = async (r) => {
+    try {
+      const payload = SECRET
+        ? { action:'settle_collection', date: r.date, branch: r.branch, staff: r.staff, secret: SECRET }
+        : { action:'settle_collection', date: r.date, branch: r.branch, staff: r.staff };
+      const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'POST', payload });
+      const ok = (resp?.data || resp)?.success !== false;
+      if (!ok) throw new Error('Failed');
+      message.success('Settled');
+      fetchRows();
+    } catch { message.error('Settle failed'); }
+  };
+
   // Open Collect modal for a row
   const openCollect = (row) => {
     setCollectRow(row);
@@ -204,10 +263,21 @@ export default function AdminDailyCollections() {
       }
       nextCollected = collectedSoFar + inc;
     }
-
-    await onUpdateCollected(r, nextCollected);
+    // Close modal immediately and show spinner on the row button
+    const rowKey = `${r.date}-${r.branch}-${r.staff}`;
+    setSavingRowKey(rowKey);
     setCollectOpen(false);
     setCollectRow(null);
+    message.loading({ key: 'dc-save', content: 'Saving…' });
+    try {
+      await onUpdateCollected(r, nextCollected);
+      if (collectMode === 'full') { await settleRow(r); }
+      message.success({ key: 'dc-save', content: 'Saved' });
+    } catch  {
+      message.error({ key: 'dc-save', content: 'Save failed' });
+    } finally {
+      setSavingRowKey(null);
+    }
   };
 
   const cols = [
@@ -236,9 +306,13 @@ export default function AdminDailyCollections() {
         {r.settlementDone ? 'Settled' : 'Pending'}
       </Tag>
     )},
-    { title:'Action', key:'act', render:(_,r)=> (
-      <Button size='small' onClick={()=>openCollect(r)}>Collect</Button>
-    )},
+    { title:'Action', key:'act', render:(_,r)=> {
+      const rowKey = `${r.date}-${r.branch}-${r.staff}`;
+      const disabled = !!r.settlementDone || savingRowKey === rowKey;
+      return (
+        <Button size='small' onClick={()=>openCollect(r)} disabled={disabled} loading={savingRowKey===rowKey}>Collect</Button>
+      );
+    }},
   ];
 
   return (
@@ -254,7 +328,7 @@ export default function AdminDailyCollections() {
             style={{ minWidth: 220 }}
             options={branchOptions}
           />
-          <DatePicker value={date} onChange={setDate} />
+          <DatePicker.RangePicker value={dateRange} onChange={setDateRange} allowClear={false} />
           <Segmented
             value={status}
             onChange={setStatus}

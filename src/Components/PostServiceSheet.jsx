@@ -35,6 +35,10 @@ const PostServiceSheet = forwardRef(function PostServiceSheet({ active, vals, to
   const nextServiceKm = kmVal != null ? kmVal + 2000 : null;
   const branch = String(vals?.branch || "").trim();
   const isNH = branch === "Byadarahalli"; // Switch branding for Byadarahalli
+  const mobileDigits = useMemo(() => {
+    const d = String(vals?.custMobile || "").replace(/\D/g, "").slice(-10);
+    return d || "";
+  }, [vals?.custMobile]);
 
   return (
     <div ref={ref} className={`print-sheet ${active ? "active" : ""}`}>
@@ -173,10 +177,11 @@ img { max-width: 100%; height: auto; background: transparent; }
             <div className="id-grid">
               <div><span className="label">Bill To (Customer):</span> {vals?.custName || "-"}</div>
               <div><span className="label">Invoice No:</span> {vals?.jcNo || "-"}</div>
-              <div><span className="label">Vehicle No:</span> {vals?.regNo || "-"}</div>
+              <div><span className="label">Vehicle No:</span> {vals?.regNo || "-"}{mobileDigits ? `(${mobileDigits})` : ''}</div>
               <div><span className="label">Date:</span> {fmtDate(vals?.createdAt)}</div>
               <div><span className="label">Odometer Reading:</span> {kmVal != null ? `${kmVal} KM` : "-"}</div>
               <div><span className="label">Next Service:</span> {nextServiceKm != null ? `${nextServiceKm} KM` : "-"}</div>
+              
             </div>
 
             <table className="tbl">

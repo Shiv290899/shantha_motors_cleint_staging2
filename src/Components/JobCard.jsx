@@ -850,6 +850,33 @@ export default function JobCard({ initialValues = null } = {}) {
       setPostPay1Utr('');
       setPostPay2Amt('');
       setPostPay2Utr('');
+
+      // After a successful post-service action, reset the Job Card form
+      try {
+        // Clear form to a fresh state with current timestamp and default branch/executive
+        form.resetFields();
+        const fresh = {
+          ...initialFormValues,
+          createdAt: dayjs(),
+          expectedDelivery: null,
+          branch: defaultBranchName || undefined,
+          executive: defaultExecutiveName || undefined,
+          jcNo: '',
+          labourRows: [],
+          discounts: { labour: 0 },
+          gstLabour: DEFAULT_GST_LABOUR,
+        };
+        form.setFieldsValue(fresh);
+        setServiceTypeLocal(null);
+        setVehicleTypeLocal(null);
+        setRegDisplay('');
+        setFollowUpEnabled(false);
+        setFollowUpAt(null);
+        setFollowUpNotes('');
+        // Recompute button enablement for new form
+        recomputeReady();
+        message.success('Ready for the next Job Card');
+      } catch { /* ignore reset errors */ }
     } catch (e) {
       console.warn('post-service save error:', e);
       message.error((e && e.message) || 'Could not save post-service details.');

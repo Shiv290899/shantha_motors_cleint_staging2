@@ -28,7 +28,7 @@ export default function StaffAccountCard() {
       if (!js?.success) throw new Error('Failed');
       const payloadData = js?.data && typeof js.data === 'object' ? js.data : js;
 
-      // Also read today's branch rows from Daily Collections to separate cash vs online precisely (no GAS changes needed)
+      // Read today's branch rows from Daily Collections to separate cash vs online and opening (carry-forward)
       try {
         const dateIso = dayjs().format('YYYY-MM-DD');
         const p2 = SECRET
@@ -55,6 +55,9 @@ export default function StaffAccountCard() {
             bookingAmount: row.bookingAmount,
             jcAmount: row.jcAmount,
             minorSalesAmount: row.minorSalesAmount,
+            // carry forward provided by GAS (Opening Balance or fallback computed there)
+            openingBalance: Number(row.openingBalance || row.opening || 0) || 0,
+            closingPending: Number(row.closingBalance || row.closing || 0) || 0,
           });
           setLoading(false);
           return;
@@ -86,6 +89,7 @@ export default function StaffAccountCard() {
     const minor = num(data.minorSalesAmountPending ?? data.minorSalesAmount ?? 0);
     const jcSales = num(data.jcAmountPending ?? data.jcAmount ?? 0);
     const salesSum = booking + minor + jcSales; // S (today's sales)
+    const opening = num(data.openingBalance ?? data.opening ?? 0); // carry forward (previous unsettled)
     // Prefer explicit JC collected fields if API provides them
     const jcCash = num(data.jcCashPending ?? data.jcCash ?? 0);
     const jcOnline = num(data.jcOnlinePending ?? data.jcOnline ?? 0);
@@ -97,7 +101,8 @@ export default function StaffAccountCard() {
     }
     // Compute pending if API didn't send it: S - C
     let pending = num(data.closingPending ?? data.outstandingPending ?? data.closing ?? 0);
-    if (!pending) pending = Math.max(0, salesSum - total);
+    if (!pending) pending = Math.max(0, salesSum - total); // only today's pending
+    const pendingAll = Math.max(0, opening + salesSum - total); // include previous unsettled
     const cashToHandOver = cash; // physical handover is only cash
     return {
       total, // C
@@ -107,9 +112,11 @@ export default function StaffAccountCard() {
       jc: jcCollected || jcSales,
       booking,
       minor,
+      prevDue: opening,
       settlementDone: Boolean(data.settlementDone),
       lastSettledAt: data.lastSettledAt || data.lastSettlementAt || undefined,
       pending,
+      pendingAll,
       sales: salesSum, // S
     };
   }, [data]);
@@ -168,15 +175,18 @@ export default function StaffAccountCard() {
           <Text strong>Today’s Sales</Text>
           <div style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center', gap:12 }}>
             <Progress percent={
-              totals.sales ? Math.round(((totals.total || 0) / (totals.sales || 1)) * 100) : 0
+              (() => { const base = (totals.sales || 0) + (totals.prevDue || 0); return base ? Math.round(((totals.total || 0) / base) * 100) : 0; })()
             } showInfo={false} strokeColor={{ from: '#52c41a', to: '#2f54eb' }} />
             <Text style={{ fontSize: 18, fontWeight: 700 }}>₹ {formatINR(totals.sales)}</Text>
           </div>
-          <Text type='secondary' style={{ fontSize: 12 }}>Collected today: ₹ {formatINR(totals.total)} • Pending today: ₹ {formatINR(totals.pending)}</Text>
+          <Text type='secondary' style={{ fontSize: 12 }}>
+            Collected: ₹ {formatINR(totals.total)} • Pending today: ₹ {formatINR(totals.pending)} • Previous due: ₹ {formatINR(totals.prevDue)} • Pending (total): ₹ {formatINR(totals.pendingAll)}
+          </Text>
         </div>
 
         <Divider style={{ margin: '8px 0' }} />
         <Text type='secondary' style={{ fontSize: 12 }}>Breakdown</Text>
+        <Item label='Previous Due (carry forward)' value={totals.prevDue} subtle />
         <Item label='From Job Cards' value={totals.jc} subtle />
         <Item label='From Bookings' value={totals.booking} subtle />
         <Item label='From Minor Sales' value={totals.minor} subtle />
