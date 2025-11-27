@@ -1848,7 +1848,7 @@ export default function Quotation() {
                   }}
                 >
                   <img
-                    src={brand === "SHANTHA" ? "/shantha-logoprint.png" : "/honda-logo.png"}
+                    src={brand === "SHANTHA" ? "/shantha-logoprint.jpg" : "/honda-logo.png"}
                     alt="Brand Logo"
                     style={{
                       height: 130,

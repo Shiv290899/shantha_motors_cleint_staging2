@@ -264,10 +264,20 @@ export default function AdminDailyCollections() {
       nextCollected = collectedSoFar + inc;
     }
     // Close modal immediately and show spinner on the row button
-    const rowKey = `${r.date}-${r.branch}-${r.staff}`;
+    const keyFor = (row) => `${row.date}-${row.branch}-${row.staff}`;
+    const rowKey = keyFor(r);
     setSavingRowKey(rowKey);
     setCollectOpen(false);
     setCollectRow(null);
+    // Optimistically patch the row so UI feels instant
+    setRows((prev) => prev.map((it) => {
+      if (keyFor(it) !== rowKey) return it;
+      const opening = Number(it.opening || 0) || 0;
+      const due = (Number(it.bookingAmount||0) + Number(it.jcAmount||0) + Number(it.minorSalesAmount||0));
+      const closing = Math.max(0, opening + due - Number(nextCollected||0));
+      const settled = collectMode === 'full' || closing === 0;
+      return { ...it, collectedToday: nextCollected, closing, settlementDone: settled };
+    }));
     message.loading({ key: 'dc-save', content: 'Saving…' });
     try {
       await onUpdateCollected(r, nextCollected);
@@ -277,6 +287,9 @@ export default function AdminDailyCollections() {
       message.error({ key: 'dc-save', content: 'Save failed' });
     } finally {
       setSavingRowKey(null);
+      setTimeout(() => { try { fetchRows(); } catch {
+        //fk
+      } }, 800);
     }
   };
 

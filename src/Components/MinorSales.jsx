@@ -59,6 +59,30 @@ export default function MinorSales() {
   const [printVals, setPrintVals] = useState(null);
   const printRef = React.useRef(null);
 
+  // Lightweight outbox (like JobCard) so saving can happen in background
+  const OUTBOX_KEY = 'MinorSales:outbox';
+  const readJson = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
+  const writeJson = (k, obj) => { try { localStorage.setItem(k, JSON.stringify(obj)); } catch { /* ignore */ } };
+  const enqueueOutbox = (job) => { const box = readJson(OUTBOX_KEY, []); const item = { id: Date.now()+':' + Math.random().toString(36).slice(2), job }; box.push(item); writeJson(OUTBOX_KEY, box); return item.id; };
+  const removeOutboxById = (id) => { const box = readJson(OUTBOX_KEY, []); writeJson(OUTBOX_KEY, box.filter(x=>x.id!==id)); };
+  const retryOutbox = async () => {
+    try {
+      const box = readJson(OUTBOX_KEY, []);
+      for (const item of box) {
+        const j = item.job || {};
+        if (j?.type === 'minor' && MINOR_SALES_GAS_URL) {
+          try {
+            const resp = await saveBookingViaWebhook({ webhookUrl: MINOR_SALES_GAS_URL, method: 'POST', payload: j.data });
+            const ok = (resp?.data || resp)?.success !== false;
+            if (ok) removeOutboxById(item.id);
+          } catch { /* keep */ }
+        }
+      }
+    } catch { /* ignore */ }
+  };
+  useEffect(() => { setTimeout(() => { retryOutbox(); }, 0); }, []);
+  useEffect(() => { const onOnline = () => retryOutbox(); window.addEventListener('online', onOnline); return () => window.removeEventListener('online', onOnline); }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -210,13 +234,18 @@ export default function MinorSales() {
         },
       };
 
-      if (MINOR_SALES_GAS_URL) {
-        const resp = await saveBookingViaWebhook({ webhookUrl: MINOR_SALES_GAS_URL, method: "POST", payload });
-        if (!resp?.success) { message.error("Failed to save before printing"); return; }
-        message.success("Saved successfully");
-      } else {
-        message.success("Saved successfully (offline)");
-      }
+      // Optimistic: enqueue background save so we don't block printing
+      const outboxId = enqueueOutbox({ type: 'minor', data: payload });
+      setTimeout(async () => {
+        try {
+          if (MINOR_SALES_GAS_URL) {
+            const resp = await saveBookingViaWebhook({ webhookUrl: MINOR_SALES_GAS_URL, method: 'POST', payload });
+            const ok = (resp?.data || resp)?.success !== false;
+            if (ok) removeOutboxById(outboxId);
+          }
+        } catch { /* keep queued */ }
+      }, 0);
+      message.loading({ key: 'msave', content: 'Saving in background…', duration: 1 });
       // Prepare print values from validated form values
       setPrintVals({
         staffName: userMeta.staffName,

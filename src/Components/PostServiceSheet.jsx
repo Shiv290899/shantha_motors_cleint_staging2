@@ -145,7 +145,7 @@ img { max-width: 100%; height: auto; background: transparent; }
           <div className="bill-box">
             <div className="hdr-grid">
               <img
-                src={isNH ? "/honda-logo.png" : "/shantha-logoprint.png"}
+                src={isNH ? "/honda-logo.png" : "/shantha-logoprint.jpg"}
                 alt={isNH ? "NH Motors" : "Shantha Motors"}
                 style={{ width: "100%", maxHeight: 100 }}
               />

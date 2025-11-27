@@ -425,7 +425,7 @@ export default function Navbar() {
             {/* Logo + Wordmark */}
             <div style={styles.logoWrap}>
               <img
-                src="/shantha-logo.png"
+                src="/shantha-logo.jpg"
                 alt="Shantha Motors Logo"
                 style={styles.logoImg}
                 onError={(e) => {
@@ -609,7 +609,7 @@ export default function Navbar() {
         <div style={styles.drawerHead}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <img
-              src="/shantha-logo.png"
+              src="/shantha-logo.jpg"
               alt="Shantha Motors Logo"
               style={{ height: 28, width: "auto" }}
               onError={(e) => {

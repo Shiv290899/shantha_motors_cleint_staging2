@@ -39,7 +39,18 @@ export default function StaffAccountCard() {
         const list = Array.isArray(j2?.data) ? j2.data : (Array.isArray(j2?.rows) ? j2.rows : []);
         const norm = (s) => String(s || '').trim().toLowerCase();
         const staffKey = norm(staff);
-        const row = list.find(r => norm(r?.staff) === staffKey) || null;
+        const toTs = (v) => { try { const d = new Date(v); const t = d.getTime(); return Number.isFinite(t) ? t : 0; } catch { return 0; } };
+        const candidates = list.filter(r => norm(r?.staff) === staffKey);
+        // Prefer any unsettled row for the staff/day; otherwise fall back to latest settled
+        candidates.sort((a, b) => {
+          const aUn = (String(a?.settlementDone).toLowerCase() === 'true') ? 0 : 1;
+          const bUn = (String(b?.settlementDone).toLowerCase() === 'true') ? 0 : 1;
+          if (aUn !== bUn) return bUn - aUn; // unsettled first
+          const tb = toTs(b?.updatedAt || b?.settlementAt || b?.date);
+          const ta = toTs(a?.updatedAt || a?.settlementAt || a?.date);
+          return tb - ta; // then most recent
+        });
+        const row = candidates[0] || null;
         if (row) {
           setData({
             ...payloadData,
@@ -58,6 +69,8 @@ export default function StaffAccountCard() {
             // carry forward provided by GAS (Opening Balance or fallback computed there)
             openingBalance: Number(row.openingBalance || row.opening || 0) || 0,
             closingPending: Number(row.closingBalance || row.closing || 0) || 0,
+            settlementDone: Boolean(row.settlementDone === true || String(row.settlementDone).toLowerCase()==='true'),
+            lastSettledAt: row.settlementAt || row.lastSettledAt || row.lastSettlementAt || undefined,
           });
           setLoading(false);
           return;
@@ -70,6 +83,14 @@ export default function StaffAccountCard() {
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [GAS_URL]);
+  // Auto-refresh so staff sees updated pending after owner collections
+  // Configurable via Vite env: VITE_STAFF_ACCOUNT_REFRESH_MS (default 20000ms)
+  const REFRESH_MS = Math.max(1000, parseInt(import.meta.env.VITE_STAFF_ACCOUNT_REFRESH_MS || '600000', 10) || 600000);
+  useEffect(() => {
+    const id = setInterval(() => { try { load(); } catch { /* ignore */ } }, REFRESH_MS);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [GAS_URL, REFRESH_MS]);
 
   const formatINR = (v) => new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Number(v || 0));
 
@@ -104,7 +125,7 @@ export default function StaffAccountCard() {
     if (!pending) pending = Math.max(0, salesSum - total); // only today's pending
     const pendingAll = Math.max(0, opening + salesSum - total); // include previous unsettled
     const cashToHandOver = cash; // physical handover is only cash
-    return {
+    const base = {
       total, // C
       cash: cashToHandOver,
       online,
@@ -119,6 +140,24 @@ export default function StaffAccountCard() {
       pendingAll,
       sales: salesSum, // S
     };
+    // If owner has settled the row, show a fresh zeroed view for the staff
+    if (base.settlementDone) {
+      return {
+        total: 0,
+        cash: 0,
+        online: 0,
+        jc: 0,
+        booking: 0,
+        minor: 0,
+        prevDue: 0,
+        settlementDone: true,
+        lastSettledAt: base.lastSettledAt,
+        pending: 0,
+        pendingAll: 0,
+        sales: 0,
+      };
+    }
+    return base;
   }, [data]);
 
   const Item = ({ label, value, subtle }) => (
