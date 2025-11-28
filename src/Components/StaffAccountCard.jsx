@@ -1,17 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Space, Typography, message, Button, Divider, Tag, Tooltip, Progress } from 'antd';
-import dayjs from 'dayjs';
+import { Card, Space, Typography, message, Button, Divider, Tag, Tooltip, Progress, Modal, Table } from 'antd';
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
 
 const { Text } = Typography;
 
 export default function StaffAccountCard() {
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbzhUcfXt2RA4sxKedNxpiJNwbzygmuDQxt-r5oYyZyJuMZDw3o4sRl-lO2pSPS_ijugGA/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycby1vN6naQNj8k_sRNLwUQoD_vX1rbAhrpT5bJk0FgyuYuS27Zj_5i_DVXzyWPsttrInzQ/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
   const [data, setData] = useState({ bookingAmountPending:0, jcAmountPending:0, minorSalesAmountPending:0, totalPending:0 });
   const [loading, setLoading] = useState(false);
+  const [txOpen, setTxOpen] = useState(false);
+  const [txMode, setTxMode] = useState('cash'); // 'cash' | 'online'
+  const [txRows, setTxRows] = useState([]);
 
   const readUser = () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } };
   const me = readUser();
@@ -22,62 +24,44 @@ export default function StaffAccountCard() {
     if (!GAS_URL || !branch || !staff) return;
     setLoading(true);
     try {
-      const payload = SECRET ? { action:'staff_collection_summary', branch, staff, secret: SECRET } : { action:'staff_collection_summary', branch, staff };
+      // Prefer new StaffLedger summary
+      const payload = SECRET ? { action:'staff_ledger_summary', branch, staff, secret: SECRET } : { action:'staff_ledger_summary', branch, staff };
       const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload });
       const js = resp?.data || resp || {};
       if (!js?.success) throw new Error('Failed');
       const payloadData = js?.data && typeof js.data === 'object' ? js.data : js;
 
-      // Read today's branch rows from Daily Collections to separate cash vs online and opening (carry-forward)
-      try {
-        const dateIso = dayjs().format('YYYY-MM-DD');
-        const p2 = SECRET
-          ? { action:'collections', branch, date: dateIso, page: 1, pageSize: 50, secret: SECRET }
-          : { action:'collections', branch, date: dateIso, page: 1, pageSize: 50 };
-        const resp2 = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload: p2 });
-        const j2 = resp2?.data || resp2 || {};
-        const list = Array.isArray(j2?.data) ? j2.data : (Array.isArray(j2?.rows) ? j2.rows : []);
-        const norm = (s) => String(s || '').trim().toLowerCase();
-        const staffKey = norm(staff);
-        const toTs = (v) => { try { const d = new Date(v); const t = d.getTime(); return Number.isFinite(t) ? t : 0; } catch { return 0; } };
-        const candidates = list.filter(r => norm(r?.staff) === staffKey);
-        // Prefer any unsettled row for the staff/day; otherwise fall back to latest settled
-        candidates.sort((a, b) => {
-          const aUn = (String(a?.settlementDone).toLowerCase() === 'true') ? 0 : 1;
-          const bUn = (String(b?.settlementDone).toLowerCase() === 'true') ? 0 : 1;
-          if (aUn !== bUn) return bUn - aUn; // unsettled first
-          const tb = toTs(b?.updatedAt || b?.settlementAt || b?.date);
-          const ta = toTs(a?.updatedAt || a?.settlementAt || a?.date);
-          return tb - ta; // then most recent
-        });
-        const row = candidates[0] || null;
-        if (row) {
-          setData({
-            ...payloadData,
-            cashAmountPending: row.cashAmount,
-            onlineAmountPending: row.onlineAmount,
-            cashAmount: row.cashAmount,
-            onlineAmount: row.onlineAmount,
-            total: row.total,
-            totalPending: row.total,
-            bookingAmountPending: row.bookingAmount,
-            jcAmountPending: row.jcAmount,
-            minorSalesAmountPending: row.minorSalesAmount,
-            bookingAmount: row.bookingAmount,
-            jcAmount: row.jcAmount,
-            minorSalesAmount: row.minorSalesAmount,
-            // carry forward provided by GAS (Opening Balance or fallback computed there)
-            openingBalance: Number(row.openingBalance || row.opening || 0) || 0,
-            closingPending: Number(row.closingBalance || row.closing || 0) || 0,
-            settlementDone: Boolean(row.settlementDone === true || String(row.settlementDone).toLowerCase()==='true'),
-            lastSettledAt: row.settlementAt || row.lastSettledAt || row.lastSettlementAt || undefined,
-          });
-          setLoading(false);
-          return;
-        }
-      } catch { /* ignore; fall back to summary */ }
+      // Only use ledger summary for totals (single source of truth)
+      const base = {
+        bookingAmountPending: 0,
+        jcAmountPending: 0,
+        minorSalesAmountPending: 0,
+        totalPending: Number(payloadData.totalPending||0) || 0,
+        cashAmountPending: Number(payloadData.cashPending||0) || 0,
+        onlineAmountPending: Number(payloadData.onlinePending||0) || 0,
+        total: Number(payloadData.totalPending||0) || 0,
+        cashAmount: Number(payloadData.cashPending||0) || 0,
+        onlineAmount: Number(payloadData.onlinePending||0) || 0,
+        settlementDone: false,
+        lastSettledAt: payloadData.lastSettledAt || undefined,
+      };
 
-      setData(payloadData);
+      // Also fetch transactions to compute per-source breakdown from ledger
+      try {
+        const all = await fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode: 'all' });
+        const sums = all.reduce((a, r) => {
+          const t = String(r.sourceType||'').toLowerCase();
+          const amt = (Number(r.cashPending||0)||0) + (Number(r.onlinePending||0)||0);
+          if (t === 'booking') a.booking += amt;
+          else if (t === 'jc') a.jc += amt;
+          else if (t === 'minorsales') a.minor += amt;
+          else a.other += amt;
+          return a;
+        }, { booking:0, jc:0, minor:0, other:0 });
+        setData({ ...base, bookingAmount: sums.booking, jcAmount: sums.jc, minorSalesAmount: sums.minor });
+      } catch {
+        setData(base);
+      }
     } catch { message.error('Could not load account summary'); }
     finally { setLoading(false); }
   };
@@ -167,6 +151,16 @@ export default function StaffAccountCard() {
     </div>
   );
 
+  const openTx = async (mode) => {
+    try {
+      setTxMode(mode);
+      setTxOpen(true);
+      setTxRows([]);
+      const rows = await fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode });
+      setTxRows(rows);
+    } catch { message.error('Could not load transactions'); }
+  };
+
   return (
     <Card
       size='small'
@@ -189,7 +183,10 @@ export default function StaffAccountCard() {
           }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
               <Text strong>Cash to Hand Over</Text>
-              <Tag color='green'>Cash</Tag>
+              <Space size={6}>
+                <Button size='small' onClick={()=>openTx('cash')}>View</Button>
+                <Tag color='green'>Cash</Tag>
+              </Space>
             </div>
             <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>₹ {formatINR(totals.cash)}</div>
             
@@ -203,7 +200,10 @@ export default function StaffAccountCard() {
           }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
               <Text strong>Online Collected</Text>
-              <Tag color='blue'>Online</Tag>
+              <Space size={6}>
+                <Button size='small' onClick={()=>openTx('online')}>View</Button>
+                <Tag color='blue'>Online</Tag>
+              </Space>
             </div>
             <div style={{ fontSize: 24, fontWeight: 800, marginTop: 6 }}>₹ {formatINR(totals.online)}</div>
             <Text type='secondary' style={{ fontSize: 12 }}>Shown for record, not handed over</Text>
@@ -243,6 +243,39 @@ export default function StaffAccountCard() {
           ) : null}
         </div>
       </Space>
+      <Modal
+        open={txOpen}
+        title={txMode === 'cash' ? 'Cash Transactions (Pending)' : 'Online Transactions (Pending)'}
+        onCancel={()=>{ setTxOpen(false); setTxRows([]); }}
+        footer={null}
+        width={800}
+      >
+        <Table
+          size='small'
+          rowKey={(r)=>`${r.dateTimeIso}-${r.sourceType}-${r.sourceId}`}
+          dataSource={txRows}
+          columns={[
+            { title:'Date', dataIndex:'date', key:'date' },
+            { title:'Customer', dataIndex:'customerName', key:'customer' },
+            { title:'Mobile', dataIndex:'customerMobile', key:'mobile' },
+            { title:'Source', key:'src', render:(_,r)=> `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}` },
+            { title:'Amount', key:'amt', align:'right', render:(_,r)=> (txMode==='cash' ? r.cashPending : r.onlinePending).toLocaleString('en-IN') },
+            { title:'UTR', dataIndex:'utr', key:'utr' },
+          ]}
+          pagination={{ pageSize: 10 }}
+        />
+      </Modal>
     </Card>
   );
 }
+
+// Helpers for transactions modal
+async function fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode }){
+  const payload = SECRET ? { action:'staff_ledger_transactions', branch, staff, mode, secret: SECRET } : { action:'staff_ledger_transactions', branch, staff, mode };
+  const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload });
+  const js = resp?.data || resp || {};
+  if (!js?.success) throw new Error('Failed');
+  return Array.isArray(js.rows) ? js.rows : [];
+}
+
+// (openTx defined inside component)

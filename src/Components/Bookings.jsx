@@ -81,7 +81,7 @@ export default function Bookings() {
 
   // Reuse the same GAS URL for list + print so search works
   const DEFAULT_BOOKING_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbwEfpDBJbJEN3atxfvxLpHhptXFnYLqeIcT-uov148Mr-mqO9wSvzPD0eE5B4Fvnd2tmw/exec";
+    "https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
@@ -220,7 +220,7 @@ export default function Bookings() {
   const updateBooking = async (bookingId, patch, mobile) => {
     try {
       setUpdating(bookingId);
-      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbwEfpDBJbJEN3atxfvxLpHhptXFnYLqeIcT-uov148Mr-mqO9wSvzPD0eE5B4Fvnd2tmw/exec";
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
       const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
       const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
       // Mirror patch keys to exact Sheet headers to ensure update reflects
@@ -256,7 +256,7 @@ export default function Bookings() {
 
   // Minimal upload helper to GAS (same endpoint used by BookingForm)
   const uploadFileToGAS = async (file) => {
-    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbwEfpDBJbJEN3atxfvxLpHhptXFnYLqeIcT-uov148Mr-mqO9wSvzPD0eE5B4Fvnd2tmw/exec";
+    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
     const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
     const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
     if (!GAS_URL) throw new Error('GAS URL not configured');

@@ -23,7 +23,7 @@ const DEFAULT_HEADERS = [
 ];
 
 /* ============== DAILY COLLECTIONS (MASTER) CONFIG ============== */
-const DC_MASTER_SPREADSHEET_ID = '1615xwv8Ns71sta8Tr0_w-kDSAyfIAzUEyU5Rzy2oqQE';
+const DC_MASTER_SPREADSHEET_ID = '1oYOaFhEr7PgdF0BDC5A4V2zfPPoFtnhbxcP16jMqiGs';
 const DC_SHEET = 'DailyCollections';
 
 const DC_HEADERS = [
@@ -143,6 +143,46 @@ function handle_(e){
 
     if (action === 'dc_test') {
       return json_(updateDailyCollection_('Muddinapalya','Rukmini',123,'jc'));
+    }
+
+    // ===== Staff Ledger (NEW endpoints) =====
+    if (action === 'staff_ledger_summary') {
+      const p = e && e.parameter ? e.parameter : {};
+      const b = p.branch || body.branch || '';
+      const s = p.staff  || body.staff  || '';
+      return json_(staffLedgerSummary_(b, s));
+    }
+
+    if (action === 'staff_ledger_transactions') {
+      const p = e && e.parameter ? e.parameter : {};
+      const b = p.branch || body.branch || '';
+      const s = p.staff  || body.staff  || '';
+      const mode = (p.mode || body.mode || 'all')+'';
+      return json_(staffLedgerTransactions_(b, s, mode));
+    }
+
+    if (action === 'owner_ledger_list') {
+      const p = e && e.parameter ? e.parameter : {};
+      const branch = p.branch || body.branch || '';
+      const staff = p.staff || body.staff || '';
+      const status = (p.status || body.status || 'unsettled')+'';
+      const fromDate = p.fromDate || body.fromDate || '';
+      const toDate = p.toDate || body.toDate || '';
+      return json_(ownerLedgerList_({ branch, staff, status, fromDate, toDate }));
+    }
+
+    if (action === 'owner_ledger_settle') {
+      const p = e && e.parameter ? e.parameter : {};
+      const branch = p.branch || body.branch || '';
+      const staff = p.staff || body.staff || '';
+      const mode = (p.mode || body.mode || 'both')+'';
+      const idsRaw = (p.ids || body.ids || '');
+      const settledBy = p.settledBy || body.settledBy || 'OWNER';
+      const ids = Array.isArray(idsRaw)
+        ? idsRaw.map(x=>+x).filter(n=>Number.isFinite(n))
+        : String(idsRaw||'').split(/[,\s]+/).map(x=>+x).filter(n=>Number.isFinite(n));
+      const rv = staffLedgerSettleRows_(ids, mode, settledBy, { branch, staff });
+      return json_({ success:true, updatedCount: rv.updatedCount||0 });
     }
 
     return json_({
@@ -559,7 +599,17 @@ function postService_(d){
     }
 
     if (b && s && deltaAmt > 0) {
-      updateDailyCollection_(b, s, deltaAmt, 'jc', { cashCollected, onlineCollected });
+      const ledgerCtx = {
+        sourceType: 'jc',
+        sourceId: jcNo,
+        jcNo: jcNo,
+        customerName: fv.custName || fv.customerName || '',
+        customerMobile: mobile10,
+        paymentMode: mode || fv.paymentMode || '',
+        payments: Array.isArray(d.payments) ? d.payments : undefined,
+        utr: String(d.utr || d.utrNo || (d.payload && (d.payload.utr || d.payload.utrNo)) || '').trim()
+      };
+      updateDailyCollection_(b, s, deltaAmt, 'jc', { cashCollected, onlineCollected, staffLedgerContext: ledgerCtx });
     }
   } catch (err) {}
 
@@ -1118,6 +1168,11 @@ function updateDailyCollection_(branch, staff, amount, type, opt) {
     sh.getRange(hit,1,1,I.width).setValues([cur]);
   }
 
+  // NEW: Append to StaffLedger (non-breaking)
+  try {
+    staffLedgerAppendFromDailyUpdate_(b, s, amt, type, opt);
+  } catch (_){ /* ignore ledger errors to avoid breaking existing flow */ }
+
   const out = sh.getRange(hit,1,1,I.width).getValues()[0];
 
   return {
@@ -1445,4 +1500,316 @@ function updateCollectionDC_(req) {
 
   sh.getRange(hit,1,1,I.width).setValues([cur]);
   return { success:true, row: hit, date, branch, staff, openingBalance: opening, dueToday, collectedToday, closingBalance: closing };
+}
+
+/* ============================
+   StaffLedger (NEW HELPERS + ENDPOINT LOGIC)
+   Sheet: StaffLedger in the same master spreadsheet as DailyCollections
+============================ */
+
+const STAFF_LEDGER_SHEET = 'StaffLedger';
+const STAFF_LEDGER_HEADERS = [
+  'DateTime ISO','Date','Branch','Staff',
+  'Source Type','Source ID',
+  'Customer Name','Customer Mobile',
+  'Payment Mode','Cash Amount','Online Amount','UTR / Ref No',
+  'Collected Total','Settled Cash','Settled Online','Settled Total',
+  'Settled Flag','Settled At','Settled By','Raw Payload'
+];
+
+function slNowIsoIndia_(){
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+}
+function slDateIndia_(d){
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(d || new Date(), tz, 'yyyy-MM-dd');
+}
+
+function staffLedgerGetSheet_(){
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string' ? DC_MASTER_SPREADSHEET_ID : '';
+  const ss = masterId ? SpreadsheetApp.openById(masterId) : (SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet());
+  let sh = ss.getSheetByName(STAFF_LEDGER_SHEET);
+  if (!sh) sh = ss.insertSheet(STAFF_LEDGER_SHEET);
+  const width = Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length);
+  const first = width ? sh.getRange(1,1,1,width).getValues()[0] : [];
+  const hasAny = first.some(v => String(v||'').trim().length);
+  if (!hasAny) sh.getRange(1,1,1,STAFF_LEDGER_HEADERS.length).setValues([STAFF_LEDGER_HEADERS]);
+  return sh;
+}
+
+function staffLedgerIdx_(headers){
+  const H = headers.map(h => String(h||'').trim().toLowerCase());
+  const find = (name) => H.indexOf(String(name||'').trim().toLowerCase());
+  return {
+    DateTimeISO: find('datetime iso'),
+    Date: find('date'),
+    Branch: find('branch'),
+    Staff: find('staff'),
+    SrcType: find('source type'),
+    SrcId: find('source id'),
+    CustName: find('customer name'),
+    CustMobile: find('customer mobile'),
+    PayMode: find('payment mode'),
+    Cash: find('cash amount'),
+    Online: find('online amount'),
+    UTR: find('utr / ref no'),
+    Total: find('collected total'),
+    SCash: find('settled cash'),
+    SOnline: find('settled online'),
+    STotal: find('settled total'),
+    SFlag: find('settled flag'),
+    SAt: find('settled at'),
+    SBy: find('settled by'),
+    Raw: find('raw payload'),
+    width: headers.length
+  };
+}
+
+function appendStaffLedgerTransaction_(rowObj){
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const row = new Array(I.width).fill('');
+  const put = (i,v)=>{ if (i>=0) row[i] = (v==null?'':v); };
+  put(I.DateTimeISO, rowObj.dateTimeIso || slNowIsoIndia_());
+  put(I.Date, rowObj.date || slDateIndia_(new Date()));
+  put(I.Branch, rowObj.branch || '');
+  put(I.Staff, rowObj.staff || '');
+  put(I.SrcType, rowObj.sourceType || '');
+  put(I.SrcId, rowObj.sourceId || '');
+  put(I.CustName, rowObj.customerName || '');
+  put(I.CustMobile, rowObj.customerMobile || '');
+  put(I.PayMode, rowObj.paymentMode || '');
+  put(I.Cash, Number(rowObj.cashAmount||0)||0);
+  put(I.Online, Number(rowObj.onlineAmount||0)||0);
+  put(I.UTR, rowObj.utr || '');
+  const cash = Number(rowObj.cashAmount||0)||0;
+  const online = Number(rowObj.onlineAmount||0)||0;
+  put(I.Total, cash + online);
+  put(I.SCash, 0);
+  put(I.SOnline, 0);
+  put(I.STotal, 0);
+  put(I.SFlag, false);
+  put(I.SAt, '');
+  put(I.SBy, '');
+  try { put(I.Raw, JSON.stringify(rowObj.rawPayload || {})); } catch(_){ put(I.Raw, ''); }
+  sh.appendRow(row);
+  return { row: sh.getLastRow() };
+}
+
+function staffLedgerAppendFromDailyUpdate_(branch, staff, amount, type, opt){
+  try{
+    const b = String(branch||'').trim();
+    const s = String(staff||'').trim();
+    const amt = dcToNum_(amount);
+    if (!b || !s || !(amt>0)) return { skipped:true };
+    const ctx = (opt && opt.staffLedgerContext) || {};
+    let cash = dcToNum_(opt && opt.cashCollected);
+    let online = dcToNum_(opt && opt.onlineCollected);
+
+    // Try derive split from ctx.payments if missing
+    if (!(cash>0) && !(online>0) && Array.isArray(ctx.payments)){
+      try {
+        cash = ctx.payments.filter(p=>String(p.mode||'').toLowerCase()==='cash').reduce((a,p)=>a+(Number(p.amount)||0),0);
+        online = ctx.payments.filter(p=>String(p.mode||'').toLowerCase()==='online').reduce((a,p)=>a+(Number(p.amount)||0),0);
+      } catch(_) {}
+    }
+    // Fallback from paymentMode
+    if (!(cash>0) && !(online>0)){
+      const pm = String(ctx.paymentMode || '').toLowerCase();
+      if (pm === 'cash') cash = amt; else if (pm) online = amt; else cash = amt;
+    }
+    const pmode = (cash>0 && online>0) ? 'mixed' : (cash>0 ? 'cash' : (online>0 ? 'online' : ''));
+    // UTR from ctx or payments
+    let utr = String(ctx.utr||'').trim();
+    if (!utr && Array.isArray(ctx.payments)){
+      try {
+        const p = ctx.payments.find(p=>String(p.mode||'').toLowerCase()==='online');
+        utr = String(p && (p.utr || p.ref || p.reference || p.txnId || p.txn || p.upiRef || '')).trim();
+      } catch(_) {}
+    }
+    const obj = {
+      branch: b,
+      staff: s,
+      sourceType: String(type||'').toLowerCase(),
+      sourceId: String(ctx.sourceId||ctx.jcNo||ctx.bookingId||ctx.orderId||'').trim(),
+      customerName: ctx.customerName || ctx.custName || '',
+      customerMobile: String(ctx.customerMobile || ctx.custMobile || '').replace(/\D/g,'').slice(-10),
+      paymentMode: pmode,
+      cashAmount: cash,
+      onlineAmount: online,
+      utr: utr,
+      rawPayload: { from: 'updateDailyCollection_', ctx }
+    };
+    return appendStaffLedgerTransaction_(obj);
+  }catch(err){ return { error: String(err) }; }
+}
+
+function staffLedgerSummary_(branch, staff){
+  const b = String(branch||'').trim().toLowerCase();
+  const s = String(staff||'').trim().toLowerCase();
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return { success:true, data: { branch:branch, staff:staff, cashPending:0, onlinePending:0, totalPending:0 } };
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  let c=0,o=0; let lastSettledAt = '';
+  for (let i=0;i<rows.length;i++){
+    const r = rows[i];
+    if (String(r[I.Branch]||'').trim().toLowerCase() !== b) continue;
+    if (String(r[I.Staff]||'').trim().toLowerCase() !== s) continue;
+    const cashAmt = Number(r[I.Cash]||0)||0;
+    const onAmt = Number(r[I.Online]||0)||0;
+    const sc = Number(r[I.SCash]||0)||0;
+    const so = Number(r[I.SOnline]||0)||0;
+    const cp = Math.max(0, cashAmt - sc);
+    const op = Math.max(0, onAmt - so);
+    if (cp>0 || op>0){ c += cp; o += op; }
+    const sat = r[I.SAt];
+    if (sat) { const t = (sat instanceof Date) ? sat.getTime() : (new Date(String(sat))).getTime(); if (isFinite(t)) lastSettledAt = String(sat); }
+  }
+  return { success:true, data: { branch, staff, cashPending:c, onlinePending:o, totalPending:(c+o), lastSettledAt } };
+}
+
+function staffLedgerTransactions_(branch, staff, mode){
+  const m = String(mode||'all').toLowerCase();
+  const bKey = String(branch||'').trim().toLowerCase();
+  const sKey = String(staff||'').trim().toLowerCase();
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const last = sh.getLastRow();
+  const out = [];
+  if (last > 1){
+    const rows = sh.getRange(2,1,last-1,I.width).getValues();
+    for (let i=0;i<rows.length;i++){
+      const r = rows[i];
+      if (String(r[I.Branch]||'').trim().toLowerCase() !== bKey) continue;
+      if (String(r[I.Staff]||'').trim().toLowerCase() !== sKey) continue;
+      const cashAmt = Number(r[I.Cash]||0)||0;
+      const onAmt = Number(r[I.Online]||0)||0;
+      const sc = Number(r[I.SCash]||0)||0;
+      const so = Number(r[I.SOnline]||0)||0;
+      const cp = Math.max(0, cashAmt - sc);
+      const op = Math.max(0, onAmt - so);
+      const totalPend = cp + op;
+      if (!(totalPend>0)) continue;
+      if (m==='cash' && !(cp>0)) continue;
+      if (m==='online' && !(op>0)) continue;
+      out.push({
+        dateTimeIso: r[I.DateTimeISO],
+        date: r[I.Date],
+        sourceType: r[I.SrcType],
+        sourceId: r[I.SrcId],
+        customerName: r[I.CustName],
+        customerMobile: r[I.CustMobile],
+        paymentMode: r[I.PayMode],
+        cashPending: cp,
+        onlinePending: op,
+        utr: r[I.UTR]
+      });
+    }
+  }
+  return { success:true, rows: out };
+}
+
+function ownerLedgerList_(opts){
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const last = sh.getLastRow();
+  const wantBranch = String(opts && opts.branch || '').trim().toLowerCase();
+  const wantStaff  = String(opts && opts.staff  || '').trim().toLowerCase();
+  const status     = String(opts && opts.status || 'unsettled').toLowerCase();
+  const fromDate   = String(opts && opts.fromDate || '');
+  const toDate     = String(opts && opts.toDate || '');
+  const rows = (last>1) ? sh.getRange(2,1,last-1,I.width).getValues() : [];
+  const within = (d) => {
+    const dd = slDateIndia_(d);
+    if (fromDate && dd < fromDate) return false;
+    if (toDate && dd > toDate) return false;
+    return true;
+  };
+  const out = [];
+  for (let i=0;i<rows.length;i++){
+    const r = rows[i];
+    const b = String(r[I.Branch]||'').trim();
+    const s = String(r[I.Staff]||'').trim();
+    if (wantBranch && b.toLowerCase() !== wantBranch) continue;
+    if (wantStaff && s.toLowerCase() !== wantStaff) continue;
+    const d = r[I.Date] || slDateIndia_(r[I.DateTimeISO]||new Date());
+    if (!within(d)) continue;
+    const cashAmt = Number(r[I.Cash]||0)||0;
+    const onAmt = Number(r[I.Online]||0)||0;
+    const sc = Number(r[I.SCash]||0)||0;
+    const so = Number(r[I.SOnline]||0)||0;
+    const cp = Math.max(0, cashAmt - sc);
+    const op = Math.max(0, onAmt - so);
+    const settledFlag = String(r[I.SFlag]||'').toLowerCase()==='true';
+    const unsettled = (cp + op) > 0;
+    if (status==='unsettled' && !unsettled) continue;
+    if (status==='settled' && !settledFlag) continue;
+    out.push({
+      id: i+2, // actual sheet row index
+      dateTimeIso: r[I.DateTimeISO],
+      date: d,
+      branch: b,
+      staff: s,
+      sourceType: r[I.SrcType],
+      sourceId: r[I.SrcId],
+      customerName: r[I.CustName],
+      customerMobile: r[I.CustMobile],
+      paymentMode: r[I.PayMode],
+      cashAmount: cashAmt,
+      onlineAmount: onAmt,
+      cashPending: cp,
+      onlinePending: op,
+      utr: r[I.UTR],
+      settledFlag: settledFlag,
+      settledAt: r[I.SAt] || '',
+      settledBy: r[I.SBy] || ''
+    });
+  }
+  return { success:true, rows: out };
+}
+
+function staffLedgerSettleRows_(ids, mode, settledBy, scope){
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const nowIso = slNowIsoIndia_();
+  let updated = 0;
+  const idsArr = Array.isArray(ids) ? ids.slice() : [];
+  idsArr.sort((a,b)=>a-b);
+  for (let k=0;k<idsArr.length;k++){
+    const rowIx = idsArr[k];
+    if (!Number.isFinite(rowIx) || rowIx < 2) continue;
+    const r = sh.getRange(rowIx,1,1,I.width).getValues()[0];
+    // Optional scope filter
+    if (scope && scope.branch && String(r[I.Branch]||'').trim().toLowerCase() !== String(scope.branch).trim().toLowerCase()) continue;
+    if (scope && scope.staff && String(r[I.Staff]||'').trim().toLowerCase() !== String(scope.staff).trim().toLowerCase()) continue;
+    const cashAmt = Number(r[I.Cash]||0)||0;
+    const onAmt   = Number(r[I.Online]||0)||0;
+    let sCash = Number(r[I.SCash]||0)||0;
+    let sOn   = Number(r[I.SOnline]||0)||0;
+    const m = String(mode||'both').toLowerCase();
+    if (m==='cash' || m==='both') sCash = cashAmt;
+    if (m==='online' || m==='both') sOn = onAmt;
+    const sTot = sCash + sOn;
+    const tot = cashAmt + onAmt;
+    const flag = (sTot >= tot);
+    r[I.SCash] = sCash;
+    r[I.SOnline] = sOn;
+    r[I.STotal] = sTot;
+    r[I.SFlag] = flag;
+    if (flag) {
+      r[I.SAt] = nowIso;
+      r[I.SBy] = String(settledBy||'OWNER');
+    }
+    sh.getRange(rowIx,1,1,I.width).setValues([r]);
+    updated++;
+  }
+  return { updatedCount: updated };
 }

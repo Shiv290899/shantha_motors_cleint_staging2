@@ -112,6 +112,9 @@ export default function Navbar() {
   // ^ Centralized way to read current user info.
 
   const [user, setUser] = React.useState(() => getCurrentUser());
+  // Logo fallbacks to avoid repeated failing requests
+  const [logoSrc, setLogoSrc] = React.useState('/shantha-logo.jpg');
+  const [logoSmallSrc, setLogoSmallSrc] = React.useState('/shantha-logo.jpg');
   // ^ Holds the current user object or null when logged out.
 
   // Keep user state in sync when localStorage changes (e.g., in other tabs)
@@ -425,12 +428,13 @@ export default function Navbar() {
             {/* Logo + Wordmark */}
             <div style={styles.logoWrap}>
               <img
-                src="/shantha-logo.jpg"
+                src={logoSrc}
                 alt="Shantha Motors Logo"
                 style={styles.logoImg}
                 onError={(e) => {
-                  // graceful fallback if logo missing
-                  e.currentTarget.src = "https://via.placeholder.com/200x48?text=Shantha+Motors";
+                  // graceful fallback if logo missing; prevent loops
+                  e.currentTarget.onerror = null;
+                  setLogoSrc('https://via.placeholder.com/200x48?text=Shantha+Motors');
                 }}
               />
               <div>
@@ -609,11 +613,12 @@ export default function Navbar() {
         <div style={styles.drawerHead}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <img
-              src="/shantha-logo.jpg"
+              src={logoSmallSrc}
               alt="Shantha Motors Logo"
               style={{ height: 28, width: "auto" }}
               onError={(e) => {
-                e.currentTarget.src = "https://via.placeholder.com/120x28?text=SM";
+                e.currentTarget.onerror = null;
+                setLogoSmallSrc('https://via.placeholder.com/120x28?text=SM');
               }}
             />
             <strong>Menu</strong>
