@@ -49,6 +49,7 @@ export default function Quotations() {
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({}); // key: serialNo -> { level, text }
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [hasCache, setHasCache] = useState(false);
 
   useEffect(() => {
     try {
@@ -72,6 +73,26 @@ export default function Quotations() {
       setBranchFilter(allowedBranches[0]);
     }
   }, [userRole, allowedBranches, branchFilter]);
+
+  const cacheKey = (() => {
+    const start = dateRange && dateRange[0] ? dateRange[0].startOf('day').valueOf() : '';
+    const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
+    return `Quotations:list:${JSON.stringify({ branchFilter, modeFilter, statusFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
+  })();
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) return;
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.rows)) {
+        setRows(cached.rows);
+        setTotalCount(typeof cached.total === 'number' ? cached.total : cached.rows.length);
+        setHasCache(true);
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   // Server-mode: refetch on filters/page/date change
   useEffect(() => {
@@ -153,10 +174,14 @@ export default function Quotations() {
         const filteredRows = withRemarks.filter((r)=>r.name || r.mobile || r.serialNo);
         if (!cancelled) {
           setRows(filteredRows);
-          setTotalCount(typeof js.total === 'number' ? js.total : filteredRows.length);
+          const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
+          setTotalCount(nextTotal);
           const map = {};
           filteredRows.forEach(rr => { if (rr.serialNo) map[rr.serialNo] = { level: rr._remarkLevel || undefined, text: rr._remarkText || '' }; });
           setRemarksMap(map);
+          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
+            //hjsd
+          }
         }
       } catch  {
         message.error('Could not load quotations via Apps Script. Check QUOTATION Web App URL / access.');
@@ -316,7 +341,7 @@ export default function Quotations() {
       <Table
         dataSource={visibleRows}
         columns={columns}
-        loading={loading}
+        loading={loading && !hasCache}
         size={isMobile ? 'small' : 'middle'}
         scroll={{ x: 'max-content', y: tableHeight }}
         pagination={USE_SERVER_PAG ? {

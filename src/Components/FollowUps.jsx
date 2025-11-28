@@ -87,6 +87,7 @@ const STATUS_LABEL = {
 export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
+  const [hasCache, setHasCache] = useState(false);
   const [filter, setFilter] = useState('all'); // today | overdue | upcoming | all
   // Show follow-ups based on Branch only (not executive)
   // Set to false so we never filter by executive name
@@ -153,6 +154,34 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
     return await saveBookingViaWebhook({ webhookUrl, method, payload });
   };
+
+  // Cache key (tab + filters + pagination + branch)
+  const cacheKey = React.useMemo(() => {
+    const keyObj = {
+      mode: modeKey,
+      filter,
+      branchOnly,
+      jobStatus,
+      page,
+      pageSize,
+      branch: me?.branch || '',
+    };
+    return `FollowUps:${JSON.stringify(keyObj)}`;
+  }, [modeKey, filter, branchOnly, jobStatus, page, pageSize, me?.branch]);
+
+  // Seed from cache for instant tab switch
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) { setHasCache(false); return; }
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.rows)) {
+        setRows(cached.rows);
+        setHasCache(true);
+      } else { setHasCache(false); }
+    } catch { setHasCache(false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   // Minimal Google Drive helper for booking file previews
   const extractDriveId = (u) => {
@@ -440,6 +469,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         return tb - ta;
       });
       setRows(filtered);
+      try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filtered })); } catch {}
       setPage(1); // reset to first page after refresh/filters
     } catch (e) {
       console.warn('followups fetch failed', e);
@@ -654,7 +684,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         rowKey={(r)=>String(r.key)}
         dataSource={rows}
         columns={columns}
-        loading={loading}
+        loading={loading && !hasCache}
         size="small"
         tableLayout="fixed"
         pagination={{

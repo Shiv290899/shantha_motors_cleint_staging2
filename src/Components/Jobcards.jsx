@@ -6,7 +6,7 @@ import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycby1vN6naQNj8k_sRNLwUQoD_vX1rbAhrpT5bJk0FgyuYuS27Zj_5i_DVXzyWPsttrInzQ/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -56,6 +56,7 @@ export default function Jobcards() {
   
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [hasCache, setHasCache] = useState(false);
 
   useEffect(() => {
     try {
@@ -79,6 +80,28 @@ export default function Jobcards() {
       setBranchFilter(allowedBranches[0]);
     }
   }, [userRole, allowedBranches, branchFilter]);
+
+  // Cache key (covers both server/client pagination inputs)
+  const cacheKey = (() => {
+    const start = dateRange && dateRange[0] ? dateRange[0].startOf('day').valueOf() : '';
+    const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
+    return `Jobcards:list:${JSON.stringify({ branchFilter, serviceFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
+  })();
+
+  // Seed from cache for instant paint
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) { setHasCache(false); return; }
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.rows)) {
+        setRows(cached.rows);
+        setTotalCount(typeof cached.total === 'number' ? cached.total : cached.rows.length);
+        setHasCache(true);
+      } else { setHasCache(false); }
+    } catch { setHasCache(false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   // Server-mode: refetch on filters/page/date change
   useEffect(() => {
@@ -167,9 +190,13 @@ export default function Jobcards() {
         const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
         if (!cancelled) {
           setRows(filteredRows);
-          setTotalCount(typeof js.total === 'number' ? js.total : filteredRows.length);
+          const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
+          setTotalCount(nextTotal);
           const map = {}; filteredRows.forEach(rr => { if (rr.jcNo) map[rr.jcNo] = { level: String(rr.RemarkLevel||'').toLowerCase(), text: rr.RemarkText||'' }; });
           setRemarksMap(map);
+          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
+            //skdhj
+          }
         }
       } catch  {
         message.error('Could not load job cards via Apps Script. Check JOBCARD Web App URL / access.');
@@ -335,7 +362,7 @@ export default function Jobcards() {
       <Table
         dataSource={visibleRows}
         columns={columns}
-        loading={loading}
+        loading={loading && !hasCache}
         size={isMobile ? 'small' : 'middle'}
         pagination={USE_SERVER_PAG ? {
           current: page,

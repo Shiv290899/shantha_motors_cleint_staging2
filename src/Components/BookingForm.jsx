@@ -60,7 +60,7 @@ const SHEET_CSV_URL =
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
+  "https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
 
 const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 

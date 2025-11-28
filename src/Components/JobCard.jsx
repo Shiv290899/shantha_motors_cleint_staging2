@@ -24,7 +24,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycby1vN6naQNj8k_sRNLwUQoD_vX1rbAhrpT5bJk0FgyuYuS27Zj_5i_DVXzyWPsttrInzQ/exec";
+  "https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
@@ -822,6 +822,19 @@ export default function JobCard({ initialValues = null } = {}) {
         utr: joinedUtr || undefined,
         utrNo: joinedUtr || undefined,
         payload: { ...payload, payments },
+        // Important: also send minimal formValues so Apps Script can
+        // upsert name/mobile into the Job Card sheet and StaffLedger.
+        // Without this, rows created via postService (without a prior save)
+        // end up missing Customer Name in StaffLedger.
+        formValues: {
+          custName: String(valsNow.custName || ''),
+          custMobile: mobile10,
+          branch: String(valsNow.branch || ''),
+          executive: String(valsNow.executive || ''),
+          regNo: String(valsNow.regNo || ''),
+          serviceType: String(valsNow.serviceType || ''),
+          vehicleType: String(valsNow.vehicleType || ''),
+        },
         source: 'jobcard',
         cashCollected,
         onlineCollected,

@@ -5,7 +5,7 @@ import { saveJobcardViaWebhook } from '../apiCalls/forms';
 const { Text } = Typography;
 
 export default function StaffAccountCard() {
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycby1vN6naQNj8k_sRNLwUQoD_vX1rbAhrpT5bJk0FgyuYuS27Zj_5i_DVXzyWPsttrInzQ/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -14,11 +14,34 @@ export default function StaffAccountCard() {
   const [txOpen, setTxOpen] = useState(false);
   const [txMode, setTxMode] = useState('cash'); // 'cash' | 'online'
   const [txRows, setTxRows] = useState([]);
+  const [txLoading, setTxLoading] = useState(false);
+  const [hasCache, setHasCache] = useState(false);
 
   const readUser = () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } };
   const me = readUser();
   const branch = me?.formDefaults?.branchName || me?.primaryBranch?.name || '';
   const staff = me?.formDefaults?.staffName || me?.name || '';
+
+  const CACHE_KEY = `StaffAccount:${branch}|${staff}`;
+
+  // Seed UI from last cached summary (instant paint)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (cached && cached.data) {
+          setData(cached.data);
+          setHasCache(true);
+        }
+      }
+    } catch {/* ignore */}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [CACHE_KEY]);
+
+  const saveCache = (obj) => {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data: obj })); } catch {/* ignore */}
+  };
 
   const load = async () => {
     if (!GAS_URL || !branch || !staff) return;
@@ -45,22 +68,58 @@ export default function StaffAccountCard() {
         settlementDone: false,
         lastSettledAt: payloadData.lastSettledAt || undefined,
       };
+      // Paint immediately and cache
+      setData(base);
+      saveCache(base);
+      setLoading(false); // stop spinner while we compute detailed breakdown
 
       // Also fetch transactions to compute per-source breakdown from ledger
       try {
         const all = await fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode: 'all' });
+        const normType = (x) => {
+          const s = String(x||'').toLowerCase().trim();
+          const z = s.replace(/[^a-z]/g,'');
+          if (z.startsWith('book')) return 'booking';
+          if (z==='jc' || z.includes('jobcard') || z.includes('job')) return 'jc';
+          if (z.includes('minor')) return 'minor';
+          return 'other';
+        };
         const sums = all.reduce((a, r) => {
-          const t = String(r.sourceType||'').toLowerCase();
-          const amt = (Number(r.cashPending||0)||0) + (Number(r.onlinePending||0)||0);
+          // Accept multiple casings/aliases from GAS rows
+          const t = normType(r.sourceType ?? r.SourceType ?? r.srcType ?? r.SrcType);
+          const cashVal = Number(
+            r.cashPending ?? r.CashPending ?? r.cash ?? r.Cash ?? 0
+          ) || 0;
+          const onlineVal = Number(
+            r.onlinePending ?? r.OnlinePending ?? r.onLinePending ?? r.online ?? r.Online ?? 0
+          ) || 0;
+          const amt = cashVal + onlineVal;
           if (t === 'booking') a.booking += amt;
           else if (t === 'jc') a.jc += amt;
-          else if (t === 'minorsales') a.minor += amt;
+          else if (t === 'minor') a.minor += amt;
           else a.other += amt;
           return a;
         }, { booking:0, jc:0, minor:0, other:0 });
-        setData({ ...base, bookingAmount: sums.booking, jcAmount: sums.jc, minorSalesAmount: sums.minor });
+        if (import.meta && import.meta.env && import.meta.env.DEV) {
+          // Helpful debug in dev: see how we classified
+          // eslint-disable-next-line no-console
+          console.log('[StaffAccountCard] ledger breakdown', { input: all, sums });
+        }
+        // Write both the generic and *Pending fields so totals coalesce correctly
+        const nextData = {
+          ...base,
+          bookingAmount: sums.booking,
+          jcAmount: sums.jc,
+          minorSalesAmount: sums.minor,
+          bookingAmountPending: sums.booking,
+          jcAmountPending: sums.jc,
+          minorSalesAmountPending: sums.minor,
+        };
+        setData(nextData);
+        saveCache(nextData);
       } catch {
         setData(base);
+        saveCache(base);
       }
     } catch { message.error('Could not load account summary'); }
     finally { setLoading(false); }
@@ -114,7 +173,8 @@ export default function StaffAccountCard() {
       cash: cashToHandOver,
       online,
       // Breakdowns (prefer collected JC; others already represent collected amounts)
-      jc: jcCollected || jcSales,
+      // Use category totals from ledger for breakdown
+      jc: jcSales,
       booking,
       minor,
       prevDue: opening,
@@ -156,15 +216,35 @@ export default function StaffAccountCard() {
       setTxMode(mode);
       setTxOpen(true);
       setTxRows([]);
+      setTxLoading(true);
       const rows = await fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode });
       setTxRows(rows);
+      // Lazy-enrich names for JC rows missing customerName (older entries)
+      try {
+        const missing = rows.filter(r => !r.customerName && String(r.sourceType||'').toLowerCase()==='jc');
+        if (missing.length) {
+          const filled = await Promise.all(rows.map(async (r) => {
+            if (r.customerName || String(r.sourceType||'').toLowerCase() !== 'jc') return r;
+            try {
+              const payload = SECRET ? { action:'search', mode:'jc', query: String(r.sourceId||''), secret: SECRET } : { action:'search', mode:'jc', query: String(r.sourceId||'') };
+              const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload });
+              const js = resp?.data || resp || {};
+              const first = Array.isArray(js.rows) && js.rows.length ? js.rows[0] : null;
+              const nm = first?.values?.Customer_Name || first?.payload?.formValues?.custName || '';
+              return nm ? { ...r, customerName: nm } : r;
+            } catch { return r; }
+          }));
+          setTxRows(filled);
+        }
+      } catch { /* keep base rows */ }
     } catch { message.error('Could not load transactions'); }
+    finally { setTxLoading(false); }
   };
 
   return (
     <Card
       size='small'
-      loading={loading}
+      loading={loading && !hasCache}
       title='Account Summary'
       style={{ maxWidth: 520 }}
       extra={<Button size='small' onClick={load} disabled={loading}>Refresh</Button>}
@@ -218,9 +298,7 @@ export default function StaffAccountCard() {
             } showInfo={false} strokeColor={{ from: '#52c41a', to: '#2f54eb' }} />
             <Text style={{ fontSize: 18, fontWeight: 700 }}>₹ {formatINR(totals.sales)}</Text>
           </div>
-          <Text type='secondary' style={{ fontSize: 12 }}>
-            Collected: ₹ {formatINR(totals.total)} • Pending today: ₹ {formatINR(totals.pending)} • Previous due: ₹ {formatINR(totals.prevDue)} • Pending (total): ₹ {formatINR(totals.pendingAll)}
-          </Text>
+         
         </div>
 
         <Divider style={{ margin: '8px 0' }} />
@@ -254,8 +332,10 @@ export default function StaffAccountCard() {
           size='small'
           rowKey={(r)=>`${r.dateTimeIso}-${r.sourceType}-${r.sourceId}`}
           dataSource={txRows}
+          loading={txLoading}
+          locale={txLoading ? { emptyText: ' ' } : undefined}
           columns={[
-            { title:'Date', dataIndex:'date', key:'date' },
+            { title:'Date', key:'date', render:(_,r)=> formatShortDate(r.dateTimeIso || r.date) },
             { title:'Customer', dataIndex:'customerName', key:'customer' },
             { title:'Mobile', dataIndex:'customerMobile', key:'mobile' },
             { title:'Source', key:'src', render:(_,r)=> `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}` },
@@ -279,3 +359,19 @@ async function fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode })
 }
 
 // (openTx defined inside component)
+
+// Local helpers
+function formatShortDate(raw){
+  try {
+    if (!raw) return '';
+    const d = raw instanceof Date ? raw : new Date(String(raw));
+    if (Number.isNaN(d.getTime())) return String(raw);
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    const day = String(d.getDate()).padStart(2,'0');
+    let h = d.getHours()%12; if (h===0) h = 12;
+    const hh = String(h).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    return `${y}-${m}-${day} ${hh}:${mm}`;
+  } catch { return String(raw||''); }
+}

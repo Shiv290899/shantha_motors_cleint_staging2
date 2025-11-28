@@ -52,6 +52,7 @@ export default function Bookings() {
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [hasCache, setHasCache] = useState(false);
   const [actionModal, setActionModal] = useState({ open: false, type: '', row: null, fileList: [], loading: false });
 
   // User + branch scoping
@@ -81,9 +82,25 @@ export default function Bookings() {
 
   // Reuse the same GAS URL for list + print so search works
   const DEFAULT_BOOKING_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
+    "https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
+
+  const cacheKey = (() => `Bookings:list:${JSON.stringify({ branchFilter, statusFilter, q: debouncedQ||'', page, pageSize, USE_SERVER_PAG })}`)();
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) return;
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.rows)) {
+        setRows(cached.rows);
+        setTotalCount(typeof cached.total === 'number' ? cached.total : cached.rows.length);
+        setHasCache(true);
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   // Server-mode: refetch on filters/page change
   useEffect(() => {
@@ -140,9 +157,13 @@ export default function Bookings() {
         const filteredRows = withRemarks.filter((r)=>r.bookingId || r.name || r.mobile);
         if (!cancelled) {
           setRows(filteredRows);
-          setTotalCount(typeof js.total === 'number' ? js.total : filteredRows.length);
+          const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
+          setTotalCount(nextTotal);
           const map = {}; filteredRows.forEach(rr => { if (rr.bookingId) map[rr.bookingId] = { level: String(rr.RemarkLevel||'').toLowerCase(), text: rr.RemarkText||'' }; });
           setRemarksMap(map);
+          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
+            //hg
+          }
         }
       } catch {
         message.error('Could not load bookings via Apps Script. Check Web App URL / access.');
@@ -220,7 +241,7 @@ export default function Bookings() {
   const updateBooking = async (bookingId, patch, mobile) => {
     try {
       setUpdating(bookingId);
-      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
       const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
       const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
       // Mirror patch keys to exact Sheet headers to ensure update reflects
@@ -256,7 +277,7 @@ export default function Bookings() {
 
   // Minimal upload helper to GAS (same endpoint used by BookingForm)
   const uploadFileToGAS = async (file) => {
-    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbw62384lU_y38K8d2HSmTnctPiQMh-zxMgW_uxgr6pusJmUf5ftGh0FrKAsw4bQ9PkXXA/exec";
+    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
     const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
     const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
     if (!GAS_URL) throw new Error('GAS URL not configured');
@@ -523,7 +544,7 @@ export default function Bookings() {
       <Table
         dataSource={visibleRows}
         columns={columns}
-        loading={loading}
+        loading={loading && !hasCache}
         size={isMobile ? 'small' : 'middle'}
         pagination={USE_SERVER_PAG ? {
           current: page,

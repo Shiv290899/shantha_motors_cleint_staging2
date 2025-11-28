@@ -710,6 +710,7 @@ export default function Quotation() {
           //
         }
         win.print();
+        setTimeout(resetForm, 1000);
         return;
       }
 
@@ -769,6 +770,7 @@ export default function Quotation() {
           //console.log(err)
         }
         try { win.print(); } catch { window.print(); }
+        setTimeout(resetForm, 1000);
       } finally {
         setTimeout(() => { iframe.parentNode && iframe.parentNode.removeChild(iframe); }, 800);
       }
@@ -817,6 +819,33 @@ export default function Quotation() {
       const n = Number(all.downPayment || 0);
       setDownPayment(n);
     }
+  };
+
+  const resetForm = () => {
+    form.resetFields();
+    setBrand("SHANTHA");
+    setCompany("");
+    setModel("");
+    setVariant("");
+    setOnRoadPrice(0);
+    setManual(!sheetOk);
+    setMode("loan");
+    setEmiSet("12");
+    setDownPayment(0);
+    setVehicleType("scooter");
+    setFittings(["Side Stand", "Floor Mat", "ISI Helmet", "Grip Cover"]);
+    setDocsReq(DOCS_REQUIRED);
+    setExtraVehicles([]);
+    setFollowUpEnabled(true);
+    setFollowUpAt(dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
+    setFollowUpNotes("");
+
+    // Restore default branch and executive
+    const patch = {};
+    if (defaultBranchName) patch.branch = defaultBranchName;
+    if (defaultExecutiveName) patch.executive = defaultExecutiveName;
+    if (Object.keys(patch).length) form.setFieldsValue(patch);
+    msgApi.success("Form has been reset for a new quotation.");
   };
 
   /* ======================
@@ -1097,6 +1126,7 @@ export default function Quotation() {
 
       const w = window.open(url, "_blank", "noopener,noreferrer");
       if (!w) window.location.href = url;
+      setTimeout(resetForm, 1000);
     } catch (err) {
       msgApi.warning(err?.message || "Please fill all required fields before sending on WhatsApp.");
       try {
@@ -1209,7 +1239,7 @@ export default function Quotation() {
                     </Radio.Group>
                   </Form.Item>
                   {/* Right-side stacked buttons */}
-                  <div className="brand-actions" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div className="brand-actions" style={{ display: "flex", flexDirection: "row", gap: 8, alignItems: 'center' }}>
                     <FetchQuot
                       form={form}
                       webhookUrl={QUOT_GAS_URL}

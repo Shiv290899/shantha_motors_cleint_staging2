@@ -1629,13 +1629,28 @@ function staffLedgerAppendFromDailyUpdate_(branch, staff, amount, type, opt){
         utr = String(p && (p.utr || p.ref || p.reference || p.txnId || p.txn || p.upiRef || '')).trim();
       } catch(_) {}
     }
+    const sourceId = String(ctx.sourceId||ctx.jcNo||ctx.bookingId||ctx.orderId||'').trim();
+    const mobile10 = String(ctx.customerMobile || ctx.custMobile || '').replace(/\D/g,'').slice(-10);
+    let custName = String(ctx.customerName || ctx.custName || '').trim();
+    // Fallback: if name missing, try fetch from existing JobCard row by JC or Mobile
+    if (!custName && (mobile10 || sourceId)){
+      try {
+        const found = findExistingRowFull_(mobile10, sourceId);
+        if (found){
+          const fv = (found.payload && found.payload.formValues) ? found.payload.formValues : {};
+          const fromSheet = (found.rowValues && found.ix && found.ix.idxName>=0) ? String(found.rowValues[found.ix.idxName]||'') : '';
+          custName = String(fv.custName || fv.customerName || fromSheet || '').trim();
+        }
+      } catch(_){ /* ignore */ }
+    }
+
     const obj = {
       branch: b,
       staff: s,
       sourceType: String(type||'').toLowerCase(),
-      sourceId: String(ctx.sourceId||ctx.jcNo||ctx.bookingId||ctx.orderId||'').trim(),
-      customerName: ctx.customerName || ctx.custName || '',
-      customerMobile: String(ctx.customerMobile || ctx.custMobile || '').replace(/\D/g,'').slice(-10),
+      sourceId: sourceId,
+      customerName: custName,
+      customerMobile: mobile10,
       paymentMode: pmode,
       cashAmount: cash,
       onlineAmount: online,

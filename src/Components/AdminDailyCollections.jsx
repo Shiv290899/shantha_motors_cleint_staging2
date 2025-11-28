@@ -4,7 +4,7 @@ import { Table, Space, Button, Select, message, Segmented } from 'antd';
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
 
 export default function AdminDailyCollections() {
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycby1vN6naQNj8k_sRNLwUQoD_vX1rbAhrpT5bJk0FgyuYuS27Zj_5i_DVXzyWPsttrInzQ/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -15,13 +15,32 @@ export default function AdminDailyCollections() {
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerStatus, setLedgerStatus] = useState('unsettled'); // unsettled | settled | all
   const [selectedKeys, setSelectedKeys] = useState([]);
+  const [hasCache, setHasCache] = useState(false);
   // Multi-branch filter (same UX as staff filter)
   const [branchFilter, setBranchFilter] = useState([]); // [] = all branches
   // No date pagination/total when using ledger-only summary
   const [staffFilter, setStaffFilter] = useState([]); // [] = all
+  // Per-row/bulk action spinners
+  const [rowBusy, setRowBusy] = useState({});
+  const [bulkBusyMode, setBulkBusyMode] = useState(''); // '' | 'cash' | 'online'
   
 
   // (Removed legacy DailyCollections date-based fetch)
+
+  const CACHE_KEY = (status) => `OwnerLedger:list:${String(status||'unsettled')}`;
+
+  // Seed from cache for instant UI
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY(ledgerStatus));
+      if (!raw) { setHasCache(false); return; }
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.rows)) {
+        setLedgerRows(cached.rows);
+        setHasCache(true);
+      } else { setHasCache(false); }
+    } catch { setHasCache(false); }
+  }, [ledgerStatus]);
 
   const fetchLedger = async () => {
     if (!GAS_URL) { message.error('Job Card GAS URL not configured'); return; }
@@ -35,6 +54,10 @@ export default function AdminDailyCollections() {
       const js = resp?.data || resp || {};
       const list = Array.isArray(js.rows) ? js.rows : [];
       setLedgerRows(list);
+      try { localStorage.setItem(CACHE_KEY(ledgerStatus), JSON.stringify({ at: Date.now(), rows: list })); } catch {
+        //sdhjv
+      }
+      setHasCache(true);
     } catch { message.error('Failed to load transactions'); }
     finally { setLedgerLoading(false); }
   };
@@ -43,6 +66,9 @@ export default function AdminDailyCollections() {
     fetchLedger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, JSON.stringify(branchFilter), JSON.stringify(staffFilter), ledgerStatus, GAS_URL]);
+
+  // Clear row selections when filters change so totals reflect visible rows
+  useEffect(() => { setSelectedKeys([]); }, [JSON.stringify(branchFilter), JSON.stringify(staffFilter)]);
 
   // DailyCollections date-based fetch disabled; working purely from StaffLedger
   // useEffect(() => { fetchRows(); }, []);
@@ -59,8 +85,22 @@ export default function AdminDailyCollections() {
   // (No DailyCollections columns in ledger-only mode)
 
   // Ledger table setup
+  const fmtLocalShort = (raw) => {
+    try {
+      if (!raw) return '';
+      const d = raw instanceof Date ? raw : new Date(String(raw));
+      if (Number.isNaN(d.getTime())) return String(raw);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      let h = d.getHours() % 12; if (h === 0) h = 12;
+      const hh = String(h).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${day} ${hh}:${mm}`;
+    } catch { return String(raw || ''); }
+  };
   const ledgerCols = [
-    { title:'DateTime', dataIndex:'dateTimeIso', key:'dt' },
+    { title:'DateTime', dataIndex:'dateTimeIso', key:'dt', render:(v,r)=> fmtLocalShort(v || r.dateTimeIso || r.date) },
     { title:'Branch', dataIndex:'branch', key:'branch' },
     { title:'Staff', dataIndex:'staff', key:'staff' },
     { title:'Source', key:'src', render:(_,r)=> `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}` },
@@ -73,10 +113,17 @@ export default function AdminDailyCollections() {
     { title:'Action', key:'act', render:(_,r)=> {
       const canCash = Number(r.cashPending||0) > 0;
       const canOn = Number(r.onlinePending||0) > 0;
+      const busy = !!rowBusy[r.id];
+      const onClick = async (mode) => {
+        if (busy) return;
+        setRowBusy(prev => ({ ...prev, [r.id]: true }));
+        try { await settleRows([mode], [r.id]); }
+        finally { setRowBusy(prev => ({ ...prev, [r.id]: false })); }
+      };
       return (
         <Space size={6}>
-          {canCash ? <Button size='small' onClick={()=>settleRows(['cash'], [r.id])}>Collect</Button> : null}
-          {canOn ? <Button size='small' onClick={()=>settleRows(['online'], [r.id])}>Verify</Button> : null}
+          {canCash ? <Button size='small' loading={busy} disabled={busy} onClick={()=>onClick('cash')}>Collect</Button> : null}
+          {canOn ? <Button size='small' loading={busy} disabled={busy} onClick={()=>onClick('online')}>Verify</Button> : null}
         </Space>
       );
     } },
@@ -118,13 +165,26 @@ export default function AdminDailyCollections() {
     return a;
   }, {}), [staffAgg]);
 
+  // Filter transactions by selected branches/staff for the Transactions table
+  const ledgerRowsFiltered = useMemo(() => {
+    const wantBranches = new Set((branchFilter||[]).map(lc));
+    const wantStaffs = new Set((staffFilter||[]).map(lc));
+    return (ledgerRows||[]).filter(r => {
+      const b = lc(r.branch);
+      const s = lc(r.staff);
+      if (wantBranches.size && !wantBranches.has(b)) return false;
+      if (wantStaffs.size && !wantStaffs.has(s)) return false;
+      return true;
+    });
+  }, [ledgerRows, branchFilter, staffFilter]);
+
   const selected = useMemo(() => {
     const set = new Set(selectedKeys);
-    const rows = ledgerRows.filter(r => set.has(r.id));
+    const rows = ledgerRowsFiltered.filter(r => set.has(r.id));
     const cash = rows.reduce((a,r)=>a+(Number(r.cashPending||0)||0), 0);
     const on = rows.reduce((a,r)=>a+(Number(r.onlinePending||0)||0), 0);
     return { cash, online: on };
-  }, [selectedKeys, ledgerRows]);
+  }, [selectedKeys, ledgerRowsFiltered]);
 
   const settleRows = async (modes, ids) => {
     const mode = modes.includes('cash') && modes.includes('online') ? 'both' : (modes[0] || 'both');
@@ -197,7 +257,7 @@ export default function AdminDailyCollections() {
         rowKey={(r)=>`${r.branch}-${r.staff}`}
         dataSource={staffAgg}
         columns={staffAggCols}
-        loading={ledgerLoading}
+        loading={ledgerLoading && !hasCache}
         pagination={{ pageSize: 20 }}
       />
       </>
@@ -209,15 +269,15 @@ export default function AdminDailyCollections() {
             <div><strong>Selected Online:</strong> {selected.online.toLocaleString('en-IN')}</div>
           </div>
           <Space>
-            <Button type='primary' disabled={selected.cash<=0} onClick={()=>settleRows(['cash'], selectedKeys)}>Collect Cash</Button>
-            <Button type='primary' disabled={selected.online<=0} onClick={()=>settleRows(['online'], selectedKeys)}>Verify Online</Button>
+            <Button type='primary' disabled={selected.cash<=0 || !!bulkBusyMode} loading={bulkBusyMode==='cash'} onClick={async ()=>{ setBulkBusyMode('cash'); try { await settleRows(['cash'], selectedKeys); } finally { setBulkBusyMode(''); } }}>Collect Cash</Button>
+            <Button type='primary' disabled={selected.online<=0 || !!bulkBusyMode} loading={bulkBusyMode==='online'} onClick={async ()=>{ setBulkBusyMode('online'); try { await settleRows(['online'], selectedKeys); } finally { setBulkBusyMode(''); } }}>Verify Online</Button>
           </Space>
         </div>
         <Table
           rowKey={(r)=>r.id}
-          dataSource={ledgerRows}
+          dataSource={ledgerRowsFiltered}
           columns={ledgerCols}
-          loading={ledgerLoading}
+          loading={ledgerLoading && !hasCache}
           rowSelection={{
             selectedRowKeys: selectedKeys,
             onChange: setSelectedKeys
