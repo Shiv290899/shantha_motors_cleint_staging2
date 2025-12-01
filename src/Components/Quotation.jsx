@@ -1114,7 +1114,7 @@ export default function Quotation() {
         `• *Sales Executive:* ${execNameDisplay} (${execPhone || '-'})`,
         `*Our Locations* 📍`,
         `Muddinapalya • Hegganahalli • Nelagadrahalli • Andrahalli`,
-        `Kadabagere • Channenahalli • Tavarekere • D-Group Layout`,
+        `Kadabagere • Channenahalli • Tavarekere `,
         ``,
         `• *Note:* Prices are indicative and may change without prior notice.`,
         ``,
@@ -1848,7 +1848,7 @@ export default function Quotation() {
                         • Muddinapalya • Hegganahalli   • Nelagadrahalli  • Andrahalli
                       </div>
                       <div className="addr-line" style={{ fontSize: "13pt" }}>
-                        • Kadabagere   • Channenahali  • Tavarekere • D-Group Layout
+                        • Kadabagere   • Channenahali  • Tavarekere 
                       </div>
                       <div style={{ marginTop: 6, fontWeight: 600 }}>
                         Mob: 9731366921 / 8073283502 / 9035131806

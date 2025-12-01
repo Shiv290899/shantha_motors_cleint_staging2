@@ -3,6 +3,7 @@ import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, Da
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
+import { useNavigate } from "react-router-dom";
 
 const { Text } = Typography;
 
@@ -27,6 +28,7 @@ const pick = (obj, aliases) => String(aliases.map((k) => obj[k] ?? "").find((v) 
 export default function Quotations() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const navigate = useNavigate();
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -321,6 +323,7 @@ export default function Quotations() {
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
+          <Button type="primary" onClick={() => navigate('/quotation')}>Quotation</Button>
           <Tag color="blue">Total: {total}</Tag>
           <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}</Tag>
           {!USE_SERVER_PAG && (

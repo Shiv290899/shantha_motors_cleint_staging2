@@ -12,7 +12,8 @@ import PostServiceSheet from "./PostServiceSheet";
 import FetchJobcard from "./FetchJobcard";
 import { saveJobcardViaWebhook, reserveJobcardSerial } from "../apiCalls/forms";
 import { GetCurrentUser } from "../apiCalls/users";
-import { getBranch } from "../apiCalls/branches";
+import { getBranch, listBranchesPublic } from "../apiCalls/branches";
+import { listUsersPublic } from "../apiCalls/adminUsers";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -34,7 +35,6 @@ const BRANCHES = [
   "Byadarahalli",
   "Kadabagere",
   "Muddinapalya",
-  "D-Group Layout",
   "Andrahalli",
   "Tavarekere",
   "Hegganahalli",
@@ -42,8 +42,22 @@ const BRANCHES = [
   "Nelagadrahalli",
 ];
 
-// Deprecated static mapping removed — WhatsApp now uses logged-in staff's name and phone
-const EXECUTIVES = [];
+// Fallback list used for owner/admin executive dropdown when API not loaded
+const EXECUTIVES = [
+  { name: "Rukmini", phone: "9901678562" },
+  { name: "Meghana", phone: "9741609799" },
+  { name: "Shubha", phone: "8971585057" },
+  { name: "Rani", phone: "9108970455" },
+  { name: "Likhitha", phone: "9535190015" },
+  { name: "Vanitha", phone: "9380729861" },
+  { name: "Prakash", phone: "9740176476" },
+  { name: "Swathi", phone: "6363116317" },
+  { name: "Kumar", phone: "7975807667" },
+  { name: "Sujay", phone: "7022878048" },
+  { name: "Kavi", phone: "9108970455" },
+  { name: "Narasimha", phone: "9900887666" },
+  { name: "Kavya", phone: "8073165374" },
+];
 
 const SERVICE_TYPES = ["Free", "Paid"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
@@ -225,6 +239,7 @@ export default function JobCard({ initialValues = null } = {}) {
   const [defaultExecutiveName, setDefaultExecutiveName] = useState("");
   const [branchCode, setBranchCode] = useState("");
   const [branchId, setBranchId] = useState("");
+  const [execOptions, setExecOptions] = useState([]); // [{name, phone}]
   // Optimistic outbox for background sync
   const OUTBOX_KEY = 'JobCard:outbox';
   const readJson = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
@@ -437,23 +452,43 @@ export default function JobCard({ initialValues = null } = {}) {
           // who can switch branches
           const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
           setCanSwitch(can);
-          // Build allowed branch list from primary + branches
+          // Build allowed branch list
           try {
-            const list = [];
-            const push = (b) => {
-              if (!b) return;
-              const id = (b && (b._id || b.id || b.$oid || b)) || '';
-              const name = typeof b === 'string' ? '' : (b?.name || '');
-              const code = typeof b === 'string' ? '' : (b?.code || '');
-              if (!id || !name) return;
-              list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
-            };
-            if (user?.primaryBranch) push(user.primaryBranch);
-            if (Array.isArray(user?.branches)) user.branches.forEach(push);
-            const seen = new Set();
-            const uniq = [];
-            list.forEach((b) => { if (!seen.has(b.id)) { seen.add(b.id); uniq.push(b); } });
-            setAllowedBranches(uniq);
+            const roleLc = String(role || '').toLowerCase();
+            if (["owner","admin"].includes(roleLc)) {
+              // Owners/Admins: load all branches and staff list for executive dropdown
+              try {
+                const res = await listBranchesPublic({ limit: 500 });
+                if (res?.success && Array.isArray(res?.data?.items)) {
+                  const all = res.data.items.map((b) => ({ id: String(b.id || b._id || ''), name: b.name, code: b.code ? String(b.code).toUpperCase() : '' }));
+                  setAllowedBranches(all);
+                }
+              } catch { /* ignore */ }
+              try {
+                const users = await listUsersPublic({ role: 'staff', status: 'active', limit: 100000 });
+                if (users?.success && Array.isArray(users?.data?.items)) {
+                  const items = users.data.items.map((u) => ({ name: u.name, phone: u.phone || '' }));
+                  setExecOptions(items);
+                }
+              } catch { /* ignore */ }
+            } else {
+              // Staff: only own + additional branches
+              const list = [];
+              const push = (b) => {
+                if (!b) return;
+                const id = (b && (b._id || b.id || b.$oid || b)) || '';
+                const name = typeof b === 'string' ? '' : (b?.name || '');
+                const code = typeof b === 'string' ? '' : (b?.code || '');
+                if (!id || !name) return;
+                list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
+              };
+              if (user?.primaryBranch) push(user.primaryBranch);
+              if (Array.isArray(user?.branches)) user.branches.forEach(push);
+              const seen = new Set();
+              const uniq = [];
+              list.forEach((b) => { if (!seen.has(b.id)) { seen.add(b.id); uniq.push(b); } });
+              setAllowedBranches(uniq);
+            }
           } catch { /* ignore */ }
           let branchName = user?.formDefaults?.branchName;
           const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
@@ -1049,7 +1084,16 @@ export default function JobCard({ initialValues = null } = {}) {
 
               <Col xs={24} sm={12} md={8}>
                 <Form.Item label="Executive" name="executive" rules={[{ required: true }]}>
-                  <Input readOnly placeholder="Auto-fetched from your profile" />
+                  {canSwitch ? (
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="Select executive"
+                      options={(execOptions.length ? execOptions : EXECUTIVES).map((e) => ({ value: e.name, label: e.name }))}
+                    />
+                  ) : (
+                    <Input readOnly placeholder="Auto-fetched from your profile" />
+                  )}
                 </Form.Item>
               </Col>
 

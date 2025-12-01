@@ -1,6 +1,7 @@
 import { axiosInstance } from "./index";
 
-export const listStocks = async ({ branch, mode, limit = 200, page = 1 } = {}) => {
+// Fetch stock movements. Default to a high limit so admin can see all recent records.
+export const listStocks = async ({ branch, mode, limit = 1000, page = 1 } = {}) => {
   const params = {};
   if (branch) params.branch = branch;
   if (mode) params.mode = mode;
@@ -14,7 +15,7 @@ export const listStocks = async ({ branch, mode, limit = 200, page = 1 } = {}) =
   return pub.data || { success: false, data: [] };
 };
 
-export const listStocksPublic = async ({ branch, mode, limit = 200, page = 1 } = {}) => {
+export const listStocksPublic = async ({ branch, mode, limit = 1000, page = 1 } = {}) => {
   const params = {};
   if (branch) params.branch = branch;
   if (mode) params.mode = mode;

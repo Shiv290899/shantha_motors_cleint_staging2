@@ -403,6 +403,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           branch: String(branchDisp || '-').trim(),
           executive: fv.executive || fu.assignedTo || values.Executive || '-',
           followUpAt: fu.at ? dayjs(fu.at) : null,
+          dateAt: fallbackFuAt || savedAt || null,
           sortAtMs,
           // Make notes resilient to varying key names from webhook/sheet
           followUpNotes: fu.notes || p.notes || p.closeNotes || fv.remarks || p.remarks || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Notes'] || '',
@@ -469,7 +470,10 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         return tb - ta;
       });
       setRows(filtered);
-      try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filtered })); } catch {}
+      try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filtered })); } catch {
+        //bgahdh
+      }
+      //dkl
       setPage(1); // reset to first page after refresh/filters
     } catch (e) {
       console.warn('followups fetch failed', e);
@@ -537,7 +541,10 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     </span>
   );
 
+  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YYYY-MM-DD HH:mm') : '—';
+
   const columns = isJobcard ? [
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 40, render: (_, r) => fmt(r.dateAt) },
     { title: 'Vehicle No.', dataIndex: 'regNo', key: 'regNo', width: 30 },
     { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 20 },
@@ -550,6 +557,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 20 },
   ] : (isBooking ? [
 
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 50, render: (_, r) => fmt(r.dateAt) },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 50 },
     { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 50, ellipsis: true },
@@ -609,6 +617,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     // Quotation ordering: Quotation_ID, Customer, Mobile, Notes, Status, Actions, Remarks
     // Use nowrap titles to keep headers on a single line
     
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 120, render: (_, r) => fmt(r.dateAt) },
     { title: (<span style={{ whiteSpace: 'nowrap' }}>Customer</span>), dataIndex: 'name', key: 'name', width: 180, align: 'left' },
     { title: (<span style={{ whiteSpace: 'nowrap' }}>Mobile</span>), dataIndex: 'mobile', key: 'mobile', width: 140, align: 'left' },
     { title: (<span style={{ whiteSpace: 'nowrap' }}>Notes</span>), dataIndex: 'followUpNotes', key: 'followUpNotes', width: 180, align: 'left', render: (v) => (

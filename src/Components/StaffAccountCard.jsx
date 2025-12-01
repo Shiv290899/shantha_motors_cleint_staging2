@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Card, Space, Typography, message, Button, Divider, Tag, Tooltip, Progress, Modal, Table } from 'antd';
+import { Card, Space, Typography, message, Button, Divider, Tag, Tooltip, Progress, Modal, Table, Grid } from 'antd';
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
 
 const { Text } = Typography;
 
 export default function StaffAccountCard() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
@@ -246,13 +248,13 @@ export default function StaffAccountCard() {
       size='small'
       loading={loading && !hasCache}
       title='Account Summary'
-      style={{ maxWidth: 520 }}
+      style={{ width: '100%', maxWidth: isMobile ? '100%' : 520, margin: isMobile ? '0 auto' : undefined }}
       extra={<Button size='small' onClick={load} disabled={loading}>Refresh</Button>}
     >
       <Space direction='vertical' style={{ width: '100%' }}>
         <div style={{
           display:'grid',
-          gridTemplateColumns:'1fr 1fr',
+          gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
           gap: 12,
         }}>
           <div style={{
@@ -291,7 +293,7 @@ export default function StaffAccountCard() {
         </div>
 
         <div style={{ paddingTop: 6 }}>
-          <Text strong>Today’s Sales</Text>
+          <Text strong>Total’s Sales</Text>
           <div style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center', gap:12 }}>
             <Progress percent={
               (() => { const base = (totals.sales || 0) + (totals.prevDue || 0); return base ? Math.round(((totals.total || 0) / base) * 100) : 0; })()
@@ -326,7 +328,7 @@ export default function StaffAccountCard() {
         title={txMode === 'cash' ? 'Cash Transactions (Pending)' : 'Online Transactions (Pending)'}
         onCancel={()=>{ setTxOpen(false); setTxRows([]); }}
         footer={null}
-        width={800}
+        width={isMobile ? Math.min((typeof window!=='undefined'? window.innerWidth : 360) - 24, 520) : 800}
       >
         <Table
           size='small'
@@ -342,7 +344,8 @@ export default function StaffAccountCard() {
             { title:'Amount', key:'amt', align:'right', render:(_,r)=> (txMode==='cash' ? r.cashPending : r.onlinePending).toLocaleString('en-IN') },
             { title:'UTR', dataIndex:'utr', key:'utr' },
           ]}
-          pagination={{ pageSize: 10 }}
+          pagination={{ pageSize: isMobile ? 6 : 10, size: isMobile ? 'small' : 'default' }}
+          scroll={{ x: 'max-content' }}
         />
       </Modal>
     </Card>

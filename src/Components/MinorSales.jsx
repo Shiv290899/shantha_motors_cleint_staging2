@@ -4,7 +4,6 @@ import { handleSmartPrint } from "../utils/printUtils";
 import MinorSalesPrintSheet from "./MinorSalesPrintSheet";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import { GetCurrentUser } from "../apiCalls/users";
-import { SALES_DISPLAY } from "../data/contactInfo";
 
 // Optional: Configure your Minor Sales Google Apps Script Web App URL via Vite env
 // Add to client/.env (vite-project/.env):

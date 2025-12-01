@@ -4,6 +4,7 @@ import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
+import { useNavigate } from "react-router-dom";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
 const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec";
@@ -34,6 +35,7 @@ const pick = (obj, aliases) => String(aliases.map((k) => obj?.[k] ?? "").find((v
 export default function Jobcards() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const navigate = useNavigate();
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -342,6 +344,7 @@ export default function Jobcards() {
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
+          <Button type="primary" onClick={() => navigate('/jobcard')}>Job Card</Button>
           <Tag color="blue">Total: {total}</Tag>
           <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}</Tag>
           {!USE_SERVER_PAG && (

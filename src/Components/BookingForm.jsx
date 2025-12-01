@@ -158,6 +158,7 @@ export default function BookingForm({
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const isTabletOnly = screens.md && !screens.lg;
+  const ctlSize = isMobile ? 'middle' : 'large';
 
   const [form] = Form.useForm();
   const [addressProofFiles, setAddressProofFiles] = useState([]);
@@ -1137,7 +1138,7 @@ export default function BookingForm({
             rules={[{ required: true, message: "Executive is required" }]}
           >
             <Input
-              size="large"
+              size={ctlSize}
               placeholder="Executive name"
               readOnly={!!executiveDefault}
               disabled={paymentsOnlyMode}
@@ -1151,7 +1152,7 @@ export default function BookingForm({
             rules={[{ required: true, message: "Branch is required" }]}
           >
             <Input
-              size="large"
+              size={ctlSize}
               placeholder="Branch name"
               readOnly={!!branchDefault}
               disabled={paymentsOnlyMode}
@@ -1173,7 +1174,7 @@ export default function BookingForm({
             }}
           >
             <Input
-              size="large"
+              size={ctlSize}
               placeholder="e.g., RAHUL SHARMA"
               allowClear
               style={{ textTransform: "uppercase" }}
@@ -1191,7 +1192,7 @@ export default function BookingForm({
             }
           >
             <Input
-              size="large"
+              size={ctlSize}
               placeholder="10-digit number"
               maxLength={10}
               inputMode="numeric"
@@ -1211,7 +1212,7 @@ export default function BookingForm({
             rules={[{ required: true, message: "Select a company" }]}
           >
             <Select
-              size="large"
+              size={ctlSize}
               placeholder="Select Company"
               disabled={paymentsOnlyMode}
               onChange={(value) => {
@@ -1241,7 +1242,7 @@ export default function BookingForm({
             rules={[{ required: true, message: "Select a model" }]}
           >
             <Select
-              size="large"
+              size={ctlSize}
               placeholder="Select Model"
               disabled={paymentsOnlyMode || !selectedCompany}
               onChange={(value) => {
@@ -1269,7 +1270,7 @@ export default function BookingForm({
             rules={[{ required: true, message: "Select a variant" }]}
           >
             <Select
-              size="large"
+              size={ctlSize}
               placeholder="Select Variant"
               disabled={paymentsOnlyMode || !selectedModel}
               onChange={() => {
@@ -1295,7 +1296,7 @@ export default function BookingForm({
             rules={[{ required: true, message: "Select color" }]}
           >
             <AutoComplete
-              size="large"
+              size={ctlSize}
               disabled={paymentsOnlyMode || !selectedVariant}
               placeholder={
                 loadingStocks ? "Loading colors..." : "Select or type color"
@@ -1313,7 +1314,7 @@ export default function BookingForm({
         <Col xs={24} md={12}>
           <Form.Item label="On-Road Price (₹)">
             <InputNumber
-              size="large"
+              size={ctlSize}
               style={{ width: "100%" }}
               value={selectedOnRoadPrice}
               disabled
@@ -1336,7 +1337,7 @@ export default function BookingForm({
             ]}
           >
             <Select
-              size="large"
+              size={ctlSize}
               placeholder={selectedColor ? "Select Chassis" : "Select color first"}
               disabled={paymentsOnlyMode || !selectedColor}
               loading={loadingStocks}
@@ -1411,7 +1412,7 @@ export default function BookingForm({
             }}
           >
             <Input
-              size="large"
+              size={ctlSize}
               placeholder="e.g., KA02"
               maxLength={4}
               disabled={paymentsOnlyMode}
@@ -1447,7 +1448,7 @@ export default function BookingForm({
               rules={[{ required: true, message: "Select financier" }]}
             >
               <Select
-                size="large"
+                size={ctlSize}
                 placeholder="Select Financier"
                 showSearch
                 optionFilterProp="children"
@@ -1472,7 +1473,7 @@ export default function BookingForm({
               name="nohpFinancier"
               rules={[{ required: true, message: "Select option" }]}
             >
-              <Select size="large" placeholder="Select" disabled={paymentsOnlyMode}>
+              <Select size={ctlSize} placeholder="Select" disabled={paymentsOnlyMode}>
                 <Option value="IDFC">IDFC</Option>
                 <Option value="L&T">L&T FINANCE LIMITED</Option>
               </Select>
@@ -1492,7 +1493,7 @@ export default function BookingForm({
               ]}
             >
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 min={1}
                 step={500}
@@ -1631,7 +1632,7 @@ export default function BookingForm({
                 name={`bookingAmount${idx}`}
               >
                 <InputNumber
-                  size="large"
+                  size={ctlSize}
                   style={{ width: "100%" }}
                   min={0}
                   step={500}
@@ -1648,7 +1649,7 @@ export default function BookingForm({
                 initialValue="cash"
               >
                 <Select
-                  size="large"
+                  size={ctlSize}
                   placeholder="Select mode"
                   allowClear
                   options={[
@@ -1679,7 +1680,7 @@ export default function BookingForm({
                       }}
                     >
                       <Input
-                        size="large"
+                        size={ctlSize}
                         placeholder="e.g., 23XXXXUTR123"
                         allowClear
                         disabled={false}
@@ -1697,7 +1698,7 @@ export default function BookingForm({
         <Col xs={24} md={8}>
           <Form.Item label="Total Booking Amount (₹)">
             <InputNumber
-              size="large"
+              size={ctlSize}
               style={{ width: "100%" }}
               value={bookingTotal}
               disabled
@@ -1716,7 +1717,7 @@ export default function BookingForm({
               rules={[{ required: true, message: "Enter down payment" }]}
             >
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 min={0}
                 step={500}
@@ -1732,7 +1733,7 @@ export default function BookingForm({
               initialValue={0}
             >
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 min={0}
                 step={100}
@@ -1751,7 +1752,7 @@ export default function BookingForm({
                 ]}
               >
                 <InputNumber
-                  size="large"
+                  size={ctlSize}
                   style={{ width: "100%" }}
                   min={0}
                   step={100}
@@ -1773,7 +1774,7 @@ export default function BookingForm({
               initialValue={0}
             >
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 min={0}
                 step={100}
@@ -1792,7 +1793,7 @@ export default function BookingForm({
                 ]}
               >
                 <InputNumber
-                  size="large"
+                  size={ctlSize}
                   style={{ width: "100%" }}
                   min={0}
                   step={100}
@@ -1811,7 +1812,7 @@ export default function BookingForm({
           <Col xs={24} md={8}>
             <Form.Item label="Total DP (₹)">
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 value={totalDp}
                 disabled
@@ -1821,7 +1822,7 @@ export default function BookingForm({
           <Col xs={24} md={8}>
             <Form.Item label="Balanced DP (₹)">
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 value={balancedDp}
                 disabled
@@ -1837,7 +1838,7 @@ export default function BookingForm({
           <Col xs={24} md={8}>
             <Form.Item label="Total Vehicle Cost (₹)">
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 value={totalVehicleCost}
                 disabled
@@ -1847,7 +1848,7 @@ export default function BookingForm({
           <Col xs={24} md={8}>
             <Form.Item label="Balanced Amount (₹)">
               <InputNumber
-                size="large"
+                size={ctlSize}
                 style={{ width: "100%" }}
                 value={balancedAmount}
                 disabled
@@ -1923,7 +1924,7 @@ export default function BookingForm({
         }}
         title={
           <div
-            style={{ display: "flex", alignItems: "center", gap: 12 }}
+            style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: isMobile ? 'wrap' : 'nowrap' }}
           >
             {headerBadge}
             <div style={{ display: "flex", flexDirection: "column" }}>

@@ -6,6 +6,7 @@ import Bookings from '../Bookings'
 import Quotations from '../Quotations'
 import Quotation from '../Quotation'
 import Jobcards from '../Jobcards'
+import JobCard from '../JobCard'
 import Branches from '../Admin/Branches'
 import Announcements from '../Announcements'
 import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
@@ -61,23 +62,25 @@ export default function OwnerIndex() {
   ) : null
   const items = [
     // 1) Quotation (form), 2) Quotations (list), 3) Job Cards, 4) Bookings
-    { key: 'quotation', label: 'Quotation', children: <Quotation /> },
+    { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
+    
     { key: 'quotations', label: 'Quotations', children: <Quotations /> },
+    
     { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },
     // 4) Stock Update, 5) In-Stock Update
-    { key: 'stock', label: 'Stock Update', children: <StockUpdate /> },
-    { key: 'instock', label: 'In-Stock Update', children: <InStockUpdate /> },
-    { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
+    { key: 'stock', label: 'Stock Movements', children: <StockUpdate /> },
+    { key: 'instock', label: 'Display Vehicles', children: <InStockUpdate /> },
+    
     // 6) Branches, 7) Users, 8) Announcements
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
     // 9) Analytics & Reports, 10) Branch-level Sales, 11) Multi-branch Compare, 12) Sales Performance
-    { key: 'analytics', label: 'Analytics & Reports', children: <AnalyticsReports /> },
+    /* { key: 'analytics', label: 'Analytics & Reports', children: <AnalyticsReports /> },
     { key: 'branch', label: 'Branch-level Sales', children: <BranchSales /> },
     { key: 'compare', label: 'Multi-branch Compare', children: <MultiBranchCompare /> },
-    { key: 'performance', label: 'Sales Performance', children: <SalesPerformance /> },
+    { key: 'performance', label: 'Sales Performance', children: <SalesPerformance /> },*/
   ]
 
   return (
@@ -85,7 +88,7 @@ export default function OwnerIndex() {
       <h2 style={styles.h1}>Analytics & Reports</h2>
       <div style={styles.sub}>Owner insights across all branches</div>
       <Tabs
-        defaultActiveKey="quotations"
+        defaultActiveKey="collections"
         items={items}
         animated
         size={isMobile ? 'small' : 'middle'}

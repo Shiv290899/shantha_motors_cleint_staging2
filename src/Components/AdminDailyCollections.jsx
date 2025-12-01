@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Table, Space, Button, Select, message, Segmented } from 'antd';
+import { Table, Space, Button, Select, message, Segmented, Grid } from 'antd';
 
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
 
 export default function AdminDailyCollections() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
@@ -213,7 +215,7 @@ export default function AdminDailyCollections() {
             placeholder='Branches'
             value={branchFilter}
             onChange={setBranchFilter}
-            style={{ minWidth: 220 }}
+            style={{ minWidth: isMobile ? 140 : 220 }}
             options={branchOptions}
           />
           <Segmented value={ledgerStatus} onChange={setLedgerStatus} options={[{label:'Unsettled', value:'unsettled'},{label:'Settled', value:'settled'},{label:'All', value:'all'}]} />
@@ -223,7 +225,7 @@ export default function AdminDailyCollections() {
             placeholder='Staff'
             value={staffFilter}
             onChange={setStaffFilter}
-            style={{ minWidth: 220 }}
+            style={{ minWidth: isMobile ? 140 : 220 }}
             options={staffOptions}
           />
         </Space>
@@ -234,7 +236,7 @@ export default function AdminDailyCollections() {
       {viewMode==='summary' ? (
       <>
       {/* Staff-wise (ledger) summary */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap:12, marginBottom:12 }}>
+      <div style={{ display:'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(6, 1fr)', gap:12, marginBottom:12 }}>
         <div style={{padding:12,borderRadius:10,background:'linear-gradient(135deg,#e0f7fa,#b2ebf2)'}}>
           <div style={{fontSize:12,opacity:0.8}}>Staff</div>
           <div style={{fontSize:22,fontWeight:800}}>{(staffAggTotals.count||0)}</div>
@@ -258,7 +260,9 @@ export default function AdminDailyCollections() {
         dataSource={staffAgg}
         columns={staffAggCols}
         loading={ledgerLoading && !hasCache}
-        pagination={{ pageSize: 20 }}
+        size={isMobile ? 'small' : 'middle'}
+        scroll={{ x: 'max-content' }}
+        pagination={{ pageSize: isMobile ? 10 : 20, size: isMobile ? 'small' : 'default' }}
       />
       </>
       ) : (
@@ -282,7 +286,9 @@ export default function AdminDailyCollections() {
             selectedRowKeys: selectedKeys,
             onChange: setSelectedKeys
           }}
-          pagination={{ pageSize: 20 }}
+          size={isMobile ? 'small' : 'middle'}
+          scroll={{ x: 'max-content' }}
+          pagination={{ pageSize: isMobile ? 10 : 20, size: isMobile ? 'small' : 'default' }}
         />
       </>
       )}

@@ -164,7 +164,7 @@ img { max-width: 100%; height: auto; background: transparent; }
                     <div className="en">SHANTHA MOTORS | ಶಾಂತ ಮೋಟರ್ಸ್</div>
                     <div className="shop-sub">Multi Brand Two Wheeler Sales &amp; Service</div>
                     <div className="shop-sub">Mob No : 9731366921 / 8073283502 </div>
-                    <div className="tiny">Kadabagere • Muddinapalya • D-Group Layout • Andrahalli • Tavarekere • Hegganahalli • Channenahalli • Nelagadrahalli</div>
+                    <div className="tiny">Kadabagere • Muddinapalya  • Andrahalli • Tavarekere • Hegganahalli • Channenahalli • Nelagadrahalli</div>
                   </>
                 )}
               </div>
