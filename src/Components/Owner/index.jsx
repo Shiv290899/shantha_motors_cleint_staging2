@@ -85,8 +85,7 @@ export default function OwnerIndex() {
 
   return (
     <div style={styles.wrap}>
-      <h2 style={styles.h1}>Analytics & Reports</h2>
-      <div style={styles.sub}>Owner insights across all branches</div>
+     
       <Tabs
         defaultActiveKey="collections"
         items={items}
