@@ -840,6 +840,9 @@ export default function JobCard({ initialValues = null } = {}) {
           fuelLevel: valsNow.fuelLevel || '',
           vehicleType: valsNow.vehicleType || '',
           floorMat: floorMatStr,
+          expectedDelivery: valsNow.expectedDelivery ? dayjs(valsNow.expectedDelivery).format('DD/MM/YYYY') : '',
+          // Persist observation for later fetch/print (flatten newlines)
+          obs: _rawobsOneLine,
         },
         labourRows: labourRows || [],
         totals,
@@ -847,6 +850,9 @@ export default function JobCard({ initialValues = null } = {}) {
 
       // Optimistic: queue background post-service save
       message.success({ key: 'postsave', content: 'Saved successfully' });
+      const expectedDeliveryStr = valsNow.expectedDelivery
+        ? dayjs(valsNow.expectedDelivery).format('DD/MM/YYYY')
+        : '';
       const data = {
         mobile: mobile10,
         jcNo,
@@ -869,6 +875,15 @@ export default function JobCard({ initialValues = null } = {}) {
           regNo: String(valsNow.regNo || ''),
           serviceType: String(valsNow.serviceType || ''),
           vehicleType: String(valsNow.vehicleType || ''),
+          // Added for full mapping when posting without pre-service
+          mechanic: String(valsNow.mechanic || ''),
+          model: String(valsNow.model || ''),
+          colour: String(valsNow.colour || ''),
+          km: kmOnlyDigits || '',
+          fuelLevel: String(valsNow.fuelLevel || ''),
+          expectedDelivery: expectedDeliveryStr,
+          // Write Customer Observation into sheet column
+          obs: _rawobsOneLine,
         },
         source: 'jobcard',
         cashCollected,

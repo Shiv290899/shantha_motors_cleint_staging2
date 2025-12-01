@@ -314,6 +314,12 @@ export default function FetchJobcard({
       setServiceTypeLocal?.(serviceType);
       setVehicleTypeLocal?.(vehicleType);
 
+      // Derive GST % from saved totals when available
+      const sub = Number(p?.totals?.labourSub || 0) || 0;
+      const gstAmt = Number(p?.totals?.labourGST || 0) || 0;
+      const derivedGstPct = sub > 0 && gstAmt > 0 ? Math.round((gstAmt / sub) * 100) : defaultGstLabour;
+      const savedDiscount = Number(p?.totals?.labourDisc || 0) || 0;
+
       form.setFieldsValue({
         jcNo: fv.jcNo || '',
         branch: fv.branch || undefined,
@@ -332,8 +338,8 @@ export default function FetchJobcard({
         vehicleType: vehicleType || undefined,
         serviceType: serviceType || undefined,
         floorMat: fv.floorMat === 'Yes' ? 'Yes' : fv.floorMat === 'No' ? 'No' : undefined,
-        discounts: { labour: 0 },
-        gstLabour: defaultGstLabour,
+        discounts: { labour: savedDiscount },
+        gstLabour: derivedGstPct,
         labourRows: Array.isArray(p?.labourRows) && p.labourRows.length ? p.labourRows : buildRows(serviceType, vehicleType),
       });
       setRegDisplay?.(fv.regNo || '');

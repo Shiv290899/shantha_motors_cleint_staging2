@@ -352,9 +352,9 @@ export default function Bookings() {
   };
 
   let columns = [
-    { title: 'Timestamp', dataIndex: 'ts', key: 'ts', width: 50, ellipsis: true, render: (v) => {
+    { title: 'Date', dataIndex: 'ts', key: 'ts', width: 50, ellipsis: true, render: (v) => {
       const ms = parseTsMs(v);
-      return ms ? dayjs(ms).format('YYYY-MM-DD HH:mm:ss') : '—';
+      return ms ? dayjs(ms).format('YY-MM-DD HH:mm') : '—';
     } },
     { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 50 },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 50, ellipsis: true },

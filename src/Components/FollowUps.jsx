@@ -289,9 +289,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       // Use that and client-side filter instead of `followups`.
       const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
       const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
-      const payload = isBooking ? (
-        BOOKING_SECRET ? { action: 'list', page, pageSize, secret: BOOKING_SECRET } : { action: 'list', page, pageSize }
-      ) : (() => {
+      const payload = isBooking ? (() => {
+        // Branch-wise followups for Booking too (do not filter by executive)
+        const meBranch = (me.branch || allowedBranches[0] || '');
+        const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
+        const base = BOOKING_SECRET ? { action: 'list', page, pageSize, secret: BOOKING_SECRET } : { action: 'list', page, pageSize };
+        return shouldRestrict ? { ...base, branch: meBranch } : base;
+      })() : (() => {
         // Jobcard: fetch full list for the branch, not just followups
         const meBranch = (me.branch || allowedBranches[0] || '');
         const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
@@ -325,10 +329,42 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         return null;
       };
       const parseTime = (v) => {
-        if (!v && v !== 0) return null;
+        if (v === null || v === undefined || v === '') return null;
         try {
-          const d = dayjs(v);
-          return d.isValid() ? d : null;
+          // numeric millis or numeric-like string
+          if (typeof v === 'number') {
+            const d = dayjs(v);
+            return d.isValid() ? d : null;
+          }
+          const s = String(v).trim();
+          if (!s) return null;
+          const num = Number(s);
+          if (!Number.isNaN(num) && s.length >= 10) {
+            const d = dayjs(num);
+            if (d.isValid()) return d;
+          }
+          // Try native Date first
+          const d1 = new Date(s);
+          if (!Number.isNaN(d1.getTime())) return dayjs(d1);
+          // Try DD/MM/YYYY with optional time + AM/PM
+          const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+          if (m) {
+            let a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+            if (y < 100) y += 2000;
+            let month, day;
+            if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
+            let hh = m[4] ? parseInt(m[4], 10) : 0;
+            const mm = m[5] ? parseInt(m[5], 10) : 0;
+            const ss = m[6] ? parseInt(m[6], 10) : 0;
+            const ap = (m[7] || '').toUpperCase();
+            if (ap === 'PM' && hh < 12) hh += 12;
+            if (ap === 'AM' && hh === 12) hh = 0;
+            const d = new Date(y, month, day, hh, mm, ss);
+            if (!Number.isNaN(d.getTime())) return dayjs(d);
+          }
+          // Fallback
+          const d2 = dayjs(s);
+          return d2.isValid() ? d2 : null;
         } catch { return null; }
       };
 
@@ -336,6 +372,12 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
 
       const items = list.map((r, i) => {
         const p = asPayload(r) || {};
+        // If booking payload stored a nested rawPayload JSON string, parse it for timestamps
+        let rp = null;
+        try {
+          if (typeof p.rawPayload === 'string') rp = JSON.parse(p.rawPayload);
+          else if (p.rawPayload && typeof p.rawPayload === 'object') rp = p.rawPayload;
+        } catch { rp = null; }
         const fv = p.formValues || {};
         // For booking list, values are top-level keys
         const values = (r && r.values) ? r.values : (r || {});
@@ -377,19 +419,36 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         })();
 
         // Compute a unified sort time: prefer latest save/post-service timestamps
-        const savedIso = pickFirst(
-          p.postServiceAt,
-          p.savedAt,
-          values['Post Service At'],
-          values['PostServiceAt'],
-          values['Post_Service_At'],
-          values['Saved At'],
-          values['savedAt'],
-          values['Timestamp'],
-          values['Time'],
-          values['Date'],
+        // Be liberal about possible key names and formats across different GAS deployments
+        let rawTime = pickFirst(
+          // explicit follow-up / post-service/saved in payload
+          p.postServiceAt, p.savedAt, p.ts, p.tsMs, p.createdAt,
+          // nested booking rawPayload timestamps
+          rp?.ts, rp?.createdAt,
+          // sheet/common columns (case and spacing variants)
+          values['Post Service At'], values['PostServiceAt'], values['Post_Service_At'],
+          values['Saved At'], values['savedAt'],
+          values['Timestamp'], values['timestamp'], values['TS'],
+          values['DateTime'], values['Date Time'], values['Date_Time'], values['Submitted At'], values['SubmittedAt'], values['submittedAt'],
+          values['Created At'], values['CreatedAt'], values['createdAt'],
+          values['Time'], values['Date'],
+          // some wrappers return numeric milliseconds
+          r?.tsMs, r?.ts, r?.dateTimeIso
         );
-        const savedAt = parseTime(savedIso);
+        if ((rawTime === null || rawTime === undefined || rawTime === '') && (values['Date'] && values['Time'])) {
+          rawTime = `${values['Date']} ${values['Time']}`;
+        }
+        const savedAt = (() => {
+          if (rawTime === null || rawTime === undefined || rawTime === '') return null;
+          // numeric ms (or numeric-like string)
+          if (typeof rawTime === 'number') return parseTime(rawTime);
+          const numlike = Number(rawTime);
+          if (!Number.isNaN(numlike) && String(rawTime).trim() !== '') {
+            // treat as millis if reasonably large
+            if (numlike > 10_000_000) return parseTime(numlike);
+          }
+          return parseTime(rawTime);
+        })();
         const fallbackFuAt = fu.at ? dayjs(fu.at) : null;
         const sortAt = savedAt || fallbackFuAt;
         const sortAtMs = sortAt && typeof sortAt.valueOf === 'function' ? sortAt.valueOf() : 0;
@@ -541,13 +600,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     </span>
   );
 
-  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YYYY-MM-DD HH:mm') : '—';
+  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YY-MM-DD HH:mm') : '—';
 
   const columns = isJobcard ? [
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 40, render: (_, r) => fmt(r.dateAt) },
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width:70, render: (_, r) => fmt(r.dateAt) },
     { title: 'Vehicle No.', dataIndex: 'regNo', key: 'regNo', width: 30 },
     { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 20 },
+    { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 20 },
     { title: 'Status', dataIndex: 'status',width: 20, key: 'status', render: (_, r) => (
       <Tooltip title={r.closeReason || r.followUpNotes || ''}>
@@ -557,7 +616,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 20 },
   ] : (isBooking ? [
 
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 50, render: (_, r) => fmt(r.dateAt) },
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 200, render: (_, r) => fmt(r.dateAt) },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 50 },
     { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 50, ellipsis: true },

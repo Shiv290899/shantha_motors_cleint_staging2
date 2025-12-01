@@ -108,25 +108,31 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       const joinedUtr = payments.filter(p => p.mode === 'online' && p.utr).map(p => p.utr).join(' / ');
       const cashCollected = payments.filter(p=>String(p.mode).toLowerCase()==='cash').reduce((s,p)=>s+(Number(p.amount)||0),0);
       const onlineCollected = payments.filter(p=>String(p.mode).toLowerCase()==='online').reduce((s,p)=>s+(Number(p.amount)||0),0);
+      const fvRow = (row?.formValues || row?.payload?.formValues || {});
+      const vehicleType = row?.vehicleType || fvRow?.vehicleType || '';
+      const serviceType = row?.serviceType || fvRow?.serviceType || '';
+      const expectedDeliveryStr = fvRow?.expectedDelivery || '';
+      const kmDigits = String(valsForPrint.km || fvRow?.km || "").replace(/\D/g, "");
+      const obsOneLine = String(fvRow?.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
       const payload = {
         postServiceAt: new Date().toISOString(),
         formValues: {
           jcNo: jc,
           branch: valsForPrint.branch || "",
-          mechanic: "",
+          mechanic: fvRow?.mechanic || "",
           executive: valsForPrint.executive || "",
-          expectedDelivery: null,
+          expectedDelivery: expectedDeliveryStr || null,
           regNo: valsForPrint.regNo || "",
           model: valsForPrint.model || "",
           colour: valsForPrint.colour || "",
-          km: String(valsForPrint.km || "").replace(/\D/g, ""),
-          fuelLevel: "",
+          km: kmDigits,
+          fuelLevel: fvRow?.fuelLevel || "",
           callStatus: "",
           custName: valsForPrint.custName || "",
           custMobile: String(valsForPrint.custMobile || ""),
-          obs: "",
-          vehicleType: "",
-          serviceType: "",
+          obs: obsOneLine,
+          vehicleType: String(vehicleType || ""),
+          serviceType: String(serviceType || ""),
           floorMat: undefined,
           amount: String(amount || 0),
         },
@@ -137,10 +143,27 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       // Save via webhook
       if (webhookUrl) {
         // Single post-service update (no background pre-save to avoid duplicates)
+        const formValuesTop = {
+          custName: valsForPrint.custName || '',
+          custMobile: mobile10,
+          branch: valsForPrint.branch || '',
+          executive: valsForPrint.executive || '',
+          regNo: valsForPrint.regNo || '',
+          serviceType: String(serviceType || ''),
+          vehicleType: String(vehicleType || ''),
+          mechanic: String(fvRow?.mechanic || ''),
+          model: valsForPrint.model || '',
+          colour: valsForPrint.colour || '',
+          km: kmDigits || '',
+          fuelLevel: String(fvRow?.fuelLevel || ''),
+          expectedDelivery: expectedDeliveryStr || '',
+          obs: obsOneLine
+        };
+
         await saveJobcardViaWebhook({
           webhookUrl,
           method: 'POST',
-          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, serviceAmount: amount || 0, collectedAmount, paymentMode, payments, utr: joinedUtr || undefined, utrNo: joinedUtr || undefined, payload: { ...payload, payments }, source: 'jobcard', cashCollected, onlineCollected, totalCollected: collectedAmount } },
+          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, serviceAmount: amount || 0, collectedAmount, paymentMode, payments, utr: joinedUtr || undefined, utrNo: joinedUtr || undefined, payload: { ...payload, payments }, source: 'jobcard', cashCollected, onlineCollected, totalCollected: collectedAmount, formValues: formValuesTop } },
         });
       }
       message.success('Saved successfully');
@@ -210,8 +233,8 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
         
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={() => savePostService(false)} disabled={saving || duePreview !== 0} loading={saving}>Save Only</Button>
-          <Button type="primary" onClick={() => savePostService(true)} disabled={saving || duePreview !== 0} loading={saving}>Save & Print</Button>
+          <Button onClick={() => savePostService(false)} disabled={saving || duePreview !== 0} loading={saving}>Save</Button>
+          <Button type="primary" onClick={() => savePostService(true)} disabled={saving || duePreview !== 0} loading={saving}>Print</Button>
         </div>
       </Modal>
 
