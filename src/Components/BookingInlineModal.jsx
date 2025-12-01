@@ -20,6 +20,22 @@ export default function BookingInlineModal({ open, onClose, row, webhookUrl }) {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean);
+    // Map split booking payments into form fields
+    const payArr = Array.isArray(p.payments) ? p.payments : [];
+    // Back-compat: some payloads might store a single bookingAmount/mode/reference
+    if ((!payArr || payArr.length === 0) && (p.bookingAmount || p.paymentMode)) {
+      const single = { amount: p.bookingAmount, mode: p.paymentMode, reference: p.paymentReference || p.utr || p.ref };
+      if (Number(single.amount || 0) > 0 && single.mode) {
+        payArr.push(single);
+      }
+    }
+    const asNum = (x) => Number(String(x ?? '').replace(/[₹,\s]/g, '')) || 0;
+    const modeStr = (m) => String(m || '').toLowerCase() || undefined;
+    const refVal = (o) => (o?.reference || o?.utr || o?.ref || undefined);
+    const p1 = payArr[0] || {};
+    const p2 = payArr[1] || {};
+    const p3 = payArr[2] || {};
+
     return {
       customerName: p.customerName || p.name || '',
       mobileNumber: String(p.mobileNumber || p.mobile || ''),
@@ -38,8 +54,17 @@ export default function BookingInlineModal({ open, onClose, row, webhookUrl }) {
       disbursementAmount: (purchaseType === 'loan' || purchaseType === 'nohp') ? (toNumber(p.disbursementAmount) || undefined) : undefined,
       addressProofMode: p.addressProofMode || p.addressProof || 'aadhaar',
       addressProofTypes: apTypes,
-      paymentMode: p.paymentMode || undefined,
-      paymentReference: p.paymentReference || undefined,
+      // Split payments (prefill booking payments in form)
+      bookingAmount1: asNum(p1.amount) || undefined,
+      paymentMode1: modeStr(p1.mode) || 'cash',
+      paymentReference1: modeStr(p1.mode) === 'online' ? (refVal(p1) || undefined) : undefined,
+      bookingAmount2: asNum(p2.amount) || undefined,
+      paymentMode2: modeStr(p2.mode) || 'cash',
+      paymentReference2: modeStr(p2.mode) === 'online' ? (refVal(p2) || undefined) : undefined,
+      bookingAmount3: asNum(p3.amount) || undefined,
+      paymentMode3: modeStr(p3.mode) || 'cash',
+      paymentReference3: modeStr(p3.mode) === 'online' ? (refVal(p3) || undefined) : undefined,
+      // Legacy totals for completeness (not directly shown; computed in form too)
       bookingAmount: toNumber(p.bookingAmount ?? undefined) || undefined,
       downPayment: toNumber((p.dp && p.dp.downPayment) ?? p.downPayment),
       extraFittingAmount: toNumber((p.dp && p.dp.extraFittingAmount) ?? p.extraFittingAmount),

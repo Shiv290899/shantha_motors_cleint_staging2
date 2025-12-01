@@ -1617,96 +1617,6 @@ export default function BookingForm({
         </Col>
       </Row>
 
-      {/* Booking Amount (3 partial payments) */}
-      <Row gutter={[16, 0]}>
-        <Col xs={24}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>
-            Booking Payments
-          </div>
-        </Col>
-        {[1, 2, 3].map((idx) => (
-          <React.Fragment key={`p-${idx}`}>
-            <Col xs={24} md={8}>
-              <Form.Item
-                label={`Amount ${idx} (₹)`}
-                name={`bookingAmount${idx}`}
-              >
-                <InputNumber
-                  size={ctlSize}
-                  style={{ width: "100%" }}
-                  min={0}
-                  step={500}
-                  prefix={<CreditCardOutlined />}
-                  placeholder={`Amount ${idx}`}
-                  disabled={false}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item
-                label={`Mode ${idx}`}
-                name={`paymentMode${idx}`}
-                initialValue="cash"
-              >
-                <Select
-                  size={ctlSize}
-                  placeholder="Select mode"
-                  allowClear
-                  options={[
-                    { value: "cash", label: "Cash" },
-                    { value: "online", label: "Online" },
-                  ]}
-                  disabled={false}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
-              <Form.Item shouldUpdate noStyle>
-                {() => {
-                  const mode = form.getFieldValue(`paymentMode${idx}`);
-                  return mode === "online" ? (
-                    <Form.Item
-                      label={`UTR / Ref ${idx}`}
-                      name={`paymentReference${idx}`}
-                      rules={[
-                        {
-                          required: true,
-                          message: "Enter UTR / reference number",
-                        },
-                      ]}
-                      getValueFromEvent={(e) => {
-                        const v = e && e.target ? e.target.value : e;
-                        return typeof v === 'string' ? v.toUpperCase() : v;
-                      }}
-                    >
-                      <Input
-                        size={ctlSize}
-                        placeholder="e.g., 23XXXXUTR123"
-                        allowClear
-                        disabled={false}
-                        style={{ textTransform: 'uppercase' }}
-                      />
-                    </Form.Item>
-                  ) : (
-                    <div />
-                  );
-                }}
-              </Form.Item>
-            </Col>
-          </React.Fragment>
-        ))}
-        <Col xs={24} md={8}>
-          <Form.Item label="Total Booking Amount (₹)">
-            <InputNumber
-              size={ctlSize}
-              style={{ width: "100%" }}
-              value={bookingTotal}
-              disabled
-            />
-          </Form.Item>
-        </Col>
-      </Row>
-
       {/* Charges & DP */}
       {(purchaseType === "loan" || purchaseType === "nohp") && (
         <Row gutter={[16, 0]}>
@@ -1857,6 +1767,96 @@ export default function BookingForm({
           </Col>
         </Row>
       )}
+
+      {/* Booking Amount (3 partial payments) — moved below Balanced DP/Amount */}
+      <Row gutter={[16, 0]}>
+        <Col xs={24}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Booking Payments
+          </div>
+        </Col>
+        {[1, 2, 3].map((idx) => (
+          <React.Fragment key={`p-${idx}`}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label={`Amount ${idx} (₹)`}
+                name={`bookingAmount${idx}`}
+              >
+                <InputNumber
+                  size={ctlSize}
+                  style={{ width: "100%" }}
+                  min={0}
+                  step={500}
+                  prefix={<CreditCardOutlined />}
+                  placeholder={`Amount ${idx}`}
+                  disabled={false}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                label={`Mode ${idx}`}
+                name={`paymentMode${idx}`}
+                initialValue="cash"
+              >
+                <Select
+                  size={ctlSize}
+                  placeholder="Select mode"
+                  allowClear
+                  options={[
+                    { value: "cash", label: "Cash" },
+                    { value: "online", label: "Online" },
+                  ]}
+                  disabled={false}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item shouldUpdate noStyle>
+                {() => {
+                  const mode = form.getFieldValue(`paymentMode${idx}`);
+                  return mode === "online" ? (
+                    <Form.Item
+                      label={`UTR / Ref ${idx}`}
+                      name={`paymentReference${idx}`}
+                      rules={[
+                        {
+                          required: true,
+                          message: "Enter UTR / reference number",
+                        },
+                      ]}
+                      getValueFromEvent={(e) => {
+                        const v = e && e.target ? e.target.value : e;
+                        return typeof v === 'string' ? v.toUpperCase() : v;
+                      }}
+                    >
+                      <Input
+                        size={ctlSize}
+                        placeholder="e.g., 23XXXXUTR123"
+                        allowClear
+                        disabled={false}
+                        style={{ textTransform: 'uppercase' }}
+                      />
+                    </Form.Item>
+                  ) : (
+                    <div />
+                  );
+                }}
+              </Form.Item>
+            </Col>
+          </React.Fragment>
+        ))}
+        <Col xs={24} md={8}>
+          <Form.Item label="Total Booking Amount (₹)">
+            <InputNumber
+              size={ctlSize}
+              style={{ width: "100%" }}
+              value={bookingTotal}
+              disabled
+            />
+          </Form.Item>
+        </Col>
+      </Row>
 
       {/* Submit + Print */}
       <Form.Item style={{ marginTop: 8, marginBottom: 0 }}>
