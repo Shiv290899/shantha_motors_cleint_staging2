@@ -111,7 +111,14 @@ export default function AdminDailyCollections() {
     { title:'Mode', dataIndex:'paymentMode', key:'mode' },
     { title:'Cash Pending', dataIndex:'cashPending', key:'cp', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
     { title:'Online Pending', dataIndex:'onlinePending', key:'op', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
-    { title:'UTR / Ref', dataIndex:'utr', key:'utr' },
+    { title:'UTR / Ref', dataIndex:'utr', key:'utr', render:(v, r) => {
+      // Hide undefined/null or cash-mode references
+      const mode = String(r?.paymentMode || '').toLowerCase();
+      if (mode === 'cash') return '';
+      const s = String(v ?? '').trim();
+      if (!s || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
+      return s;
+    } },
     { title:'Action', key:'act', render:(_,r)=> {
       const canCash = Number(r.cashPending||0) > 0;
       const canOn = Number(r.onlinePending||0) > 0;
@@ -171,13 +178,20 @@ export default function AdminDailyCollections() {
   const ledgerRowsFiltered = useMemo(() => {
     const wantBranches = new Set((branchFilter||[]).map(lc));
     const wantStaffs = new Set((staffFilter||[]).map(lc));
-    return (ledgerRows||[]).filter(r => {
+    const out = (ledgerRows||[]).filter(r => {
       const b = lc(r.branch);
       const s = lc(r.staff);
       if (wantBranches.size && !wantBranches.has(b)) return false;
       if (wantStaffs.size && !wantStaffs.has(s)) return false;
       return true;
     });
+    const ts = (r) => {
+      const raw = r?.dateTimeIso || r?.date;
+      const n = Number(new Date(String(raw)));
+      return Number.isFinite(n) ? n : 0;
+    };
+    out.sort((a,b) => ts(b) - ts(a)); // latest first
+    return out;
   }, [ledgerRows, branchFilter, staffFilter]);
 
   const selected = useMemo(() => {
