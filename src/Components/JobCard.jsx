@@ -25,7 +25,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec";
+  "https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
@@ -174,7 +174,7 @@ function buildWelcomeMsg(vals, totals) {
   // Always use logged-in user's phone; ignore any legacy mappings
   const execPhone = getLoggedInPhone();
   const branch = vals?.branch || "—";
-  const name = vals?.custName || "Customer";
+  const name = (vals?.custName ? String(vals.custName).trim() : "") || "Customer";
   const jc = vals?.jcNo || "—";
   const reg = vals?.regNo || "—";
   const estimate = inr(totals?.grand ?? 0);
@@ -222,6 +222,110 @@ function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
       window.location.href = smsUrl;
     }
   }, 1000);
+}
+
+// Build a detailed post-service invoice WhatsApp/SMS message (Delivery Invoice)
+function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
+  const jc = vals?.jcNo || "—";
+  const reg = vals?.regNo || "—";
+  const model = vals?.model || "";
+  const colour = vals?.colour ? String(vals.colour).trim() : '';
+  const kmStr = vals?.km ? String(vals.km).replace(/\D/g, '') : '';
+  const branch = vals?.branch || "—";
+  const exec = vals?.executive || "Team";
+  const execPhone = getLoggedInPhone();
+
+  const now = dayjs().format('DD/MM/YYYY');
+  const line = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  const money = (n) => inr(Math.round(Number(n || 0)));
+
+  // Items
+  const items = (labourRows || []).map((r, idx) => {
+    const qty = Number(r?.qty || 0);
+    const rate = Number(r?.rate || 0);
+    const amt = qty * rate;
+    const desc = String(r?.desc || '').trim() || 'Item';
+    return `${idx + 1}. ${line(desc)} — ${qty} × ${money(rate)} = ${money(amt)}`;
+  });
+
+  // Totals
+  const sub = money(totals?.labourSub || 0);
+  const discValRaw = Math.max(0, Math.round(Number(totals?.labourDisc || 0)));
+  const disc = money(discValRaw);
+  const grand = money(totals?.grand || 0);
+
+  // Payments
+  const p = paymentsSummary || {};
+  const paid = money(p?.collectedAmount || 0);
+  const cashStr = p?.cashCollected ? money(p.cashCollected) : '';
+  const onlineStr = p?.onlineCollected ? money(p.onlineCollected) : '';
+  const utr = Array.isArray(p?.payments)
+    ? p.payments
+        .filter(x => String(x.mode).toLowerCase() === 'online' && x.utr)
+        .map(x => String(x.utr).trim())
+        .filter(Boolean)
+        .join(' / ')
+    : '';
+  const payMode = p?.paymentMode ? String(p.paymentMode).toUpperCase() : '';
+  // Compute next service due km (simple km+2000 rule when KM available)
+  let nextServiceKm = '';
+  const kmNum = Number(kmStr || '');
+  if (Number.isFinite(kmNum) && kmNum > 0) {
+    nextServiceKm = String(kmNum + 2000);
+  }
+  const discountLine = discValRaw > 0 ? `Discount: ${disc}` : '';
+
+  // Payment block
+  const payHeader = `💳 *Mode Of Payment (${payMode || 'NA'})*`;
+  const payLines = [];
+  if (cashStr) payLines.push(`• Cash: ${cashStr}`);
+  if (onlineStr) payLines.push(`• Online: ${onlineStr}${utr ? ` (UTR: ${utr})` : ''}`);
+  if (!payLines.length) {
+    payLines.push(`• Total Paid: ${paid}`);
+  } else {
+    payLines.push(`• Total Paid: ${paid}`);
+  }
+  const payBlock = [
+    payHeader,
+    ...payLines,
+  ];
+
+  // Final WhatsApp message following the requested template
+  const lines = [
+    `⭐️ *Shantha Motors* — ಶಾಂತ ಮೋಟರ್ಸ್`,
+    `Multi Brand Two Wheeler Sales & Service`,
+    `────────────────────────`,
+    `*✔️ Service Invoice*`,
+    ``,
+    `📅 Date: ${now}`,
+    `🧾 JC No: ${jc}`,
+    ``,
+    `🏍️ *Vehicle Details*`,
+    `• Vehicle: ${reg}${model ? ` (${model})` : ''}${colour ? ` • ${colour}` : ''}`,
+    ...(kmStr ? [`• Odometer Reading: ${kmStr} km`] : []),
+    ...(nextServiceKm ? [`• *Next Service Due:* ${nextServiceKm} km`] : []),
+    ``,
+    `────────────────────────`,
+    ``,
+    `🛠️ *Service Details*`,
+    ...(items.length ? items.map((s) => `• ${s}`) : ['• —']),
+    ``,
+    `Subtotal: ${sub}`,
+    ...(discountLine ? [discountLine] : []),
+    `💰 *Final Bill Amount:* ${grand}`,
+    ``,
+    `────────────────────────`,
+    ``,
+    ...payBlock,
+    ``,
+    `────────────────────────`,
+    ``,
+    `🙏 Thank you for choosing *Shantha Motors*!`,
+    `ಧನ್ಯವಾದಗಳು ❤️`,
+    `— ${exec}, ${branch}${execPhone ? ` (☎️ ${execPhone})` : ''}`,
+  ];
+
+  return lines.join('\n');
 }
 
 /* =========================
@@ -429,6 +533,7 @@ export default function JobCard({ initialValues = null } = {}) {
   useEffect(() => {
     (async () => {
       try {
+        const toCaps = (s) => String(s || '').trim().toUpperCase();
         const readLocalUser = () => {
           try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
         };
@@ -447,7 +552,8 @@ export default function JobCard({ initialValues = null } = {}) {
           }
         }
         if (user) {
-          const staffName = user?.formDefaults?.staffName || user?.name || undefined;
+          const staffNameRaw = user?.formDefaults?.staffName || user?.name || undefined;
+          const staffName = staffNameRaw ? toCaps(staffNameRaw) : undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
           // who can switch branches
           const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
@@ -460,7 +566,11 @@ export default function JobCard({ initialValues = null } = {}) {
               try {
                 const res = await listBranchesPublic({ limit: 500 });
                 if (res?.success && Array.isArray(res?.data?.items)) {
-                  const all = res.data.items.map((b) => ({ id: String(b.id || b._id || ''), name: b.name, code: b.code ? String(b.code).toUpperCase() : '' }));
+                  const all = res.data.items.map((b) => ({
+                    id: String(b.id || b._id || ''),
+                    name: toCaps(b.name),
+                    code: b.code ? String(b.code).toUpperCase() : '',
+                  }));
                   setAllowedBranches(all);
                 }
               } catch { /* ignore */ }
@@ -477,7 +587,8 @@ export default function JobCard({ initialValues = null } = {}) {
               const push = (b) => {
                 if (!b) return;
                 const id = (b && (b._id || b.id || b.$oid || b)) || '';
-                const name = typeof b === 'string' ? '' : (b?.name || '');
+                const nameRaw = typeof b === 'string' ? '' : (b?.name || '');
+                const name = toCaps(nameRaw);
                 const code = typeof b === 'string' ? '' : (b?.code || '');
                 if (!id || !name) return;
                 list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
@@ -490,7 +601,7 @@ export default function JobCard({ initialValues = null } = {}) {
               setAllowedBranches(uniq);
             }
           } catch { /* ignore */ }
-          let branchName = user?.formDefaults?.branchName;
+          let branchName = user?.formDefaults?.branchName ? toCaps(user.formDefaults.branchName) : undefined;
           const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
           if (codeFromUser) { setBranchCode(codeFromUser); try { form.setFieldsValue({ branchCode: codeFromUser }); } catch {
             //gef
@@ -714,7 +825,7 @@ export default function JobCard({ initialValues = null } = {}) {
           km: kmOnlyDigits || "",
           fuelLevel: vals.fuelLevel || "",
           
-          custName: vals.custName || "",
+          custName: String(vals.custName || "").trim(),
           custMobile: String(vals.custMobile || ""),
           obs: obsOneLine,
           vehicleType: vals.vehicleType || "",
@@ -750,7 +861,7 @@ export default function JobCard({ initialValues = null } = {}) {
   };
 
   // ---- Post-service: update existing row by mobile, with payment mode ----
-  const handlePostServiceFlow = async (shouldPrint) => {
+  const handlePostServiceFlow = async (mode) => {
     try {
       setPostSaving(true);
       // Ensure spinner paints before heavy work
@@ -904,9 +1015,40 @@ export default function JobCard({ initialValues = null } = {}) {
         }
       }, 0);
 
-      if (shouldPrint) {
+      if (mode === true || mode === 'print') {
         await new Promise((r) => setTimeout(r, 50));
         await handlePrint('post');
+      } else if (mode === 'whatsapp') {
+        try {
+          const mobileE164 = normalizeINPhone(valsNow.custMobile);
+          if (!mobileE164) {
+            message.error('Enter a valid 10-digit mobile number (India).');
+          } else {
+            const paymentsSummary = {
+              payments,
+              collectedAmount,
+              cashCollected,
+              onlineCollected,
+              paymentMode,
+            };
+            const msg = buildPostServiceMsg(valsNow, totals, labourRows, paymentsSummary);
+            message.loading({ key: 'postshare', content: 'Preparing WhatsApp message…' });
+            openWhatsAppOrSMS({
+              mobileE164,
+              text: msg,
+              onFailToWhatsApp: () => {
+                message.info({
+                  key: 'postshare',
+                  content: 'WhatsApp may not be available. Falling back to SMS composer…',
+                  duration: 2,
+                });
+              },
+            });
+            setTimeout(() => {
+              message.success({ key: 'postshare', content: 'Ready to send.', duration: 2 });
+            }, 800);
+          }
+        } catch { /* ignore share errors */ }
       }
       setPostOpen(false);
       setPostPay1Amt('');
@@ -1191,7 +1333,7 @@ export default function JobCard({ initialValues = null } = {}) {
                 <Form.Item 
                   label="Customer Name" 
                   name="custName" 
-                  rules={[{ required: true }]}
+                  rules={[{ required: true, whitespace: true, message: 'Please enter customer name' }]}
                   getValueFromEvent={(e) => {
                     const v = e?.target?.value ?? e; 
                     return typeof v === 'string' ? v.toUpperCase() : v;
@@ -1491,8 +1633,10 @@ export default function JobCard({ initialValues = null } = {}) {
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={() => setPostOpen(false)} disabled={postSaving}>Cancel</Button>
-          <Button onClick={() => handlePostServiceFlow(false)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save Only</Button>
-          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save & Print</Button>
+          <Button onClick={() => handlePostServiceFlow(false)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save</Button>
+          <Button icon={<FaWhatsapp style={{ color: '#25D366' }} />} onClick={() => handlePostServiceFlow('whatsapp')} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>WhatsApp</Button>
+          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Print</Button>
+          
         </div>
       </Modal>
 

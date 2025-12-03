@@ -358,61 +358,144 @@ export default function MinorSales() {
     }
   }
 
+  function handleClear() {
+    try { form.resetFields(); } catch { /* ignore */ }
+    setCart([]);
+    setOrderId(genOrderId());
+  }
+
   return (
-    <Card title="Minor Sales (Quick)" bodyStyle={{ padding: 16 }}>
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={initValues}
-      >
+    <Card
+      title={
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <Typography.Text strong style={{ fontSize: 16 }}>Minor Sales (Quick)</Typography.Text>
+            <div style={{ fontSize: 11, color: "#888" }}>
+              {userMeta.branchName || ""} · {userMeta.staffName || ""}
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1 }}>Order ID</div>
+            <div style={{ fontWeight: 700 }}>{orderId}</div>
+          </div>
+        </div>
+      }
+      bodyStyle={{ padding: 16 }}
+      style={{ borderRadius: 10, boxShadow: "0 3px 10px rgba(0,0,0,0.06)" }}
+      extra={
+        <div style={{ textAlign: "right" }}>
+          <Typography.Text style={{ fontSize: 12, color: "#888" }}>Cart Total</Typography.Text>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>{inr(cartTotal)}</div>
+        </div>
+      }
+    >
+      <Form form={form} layout="vertical" initialValues={initValues}>
+        {/* Item & Qty */}
         <Row gutter={[12, 12]}>
           <Col xs={24} md={10}>
-            <Form.Item name="item" label="Item" rules={[{ required: true, message: "Select item" }]}>
-              <Select options={ITEM_OPTIONS} placeholder="Choose item" showSearch optionFilterProp="label" allowClear />
+            <Form.Item
+              name="item"
+              label="Item"
+              rules={[{ required: true, message: "Select item" }]}
+            >
+              <Select
+                options={ITEM_OPTIONS}
+                placeholder="Choose item"
+                showSearch
+                optionFilterProp="label"
+                allowClear
+              />
             </Form.Item>
           </Col>
           <Col xs={24} md={8}>
-            {selectedKey === 'others' ? (
-              <Form.Item name="price" label="Price (₹)" rules={[{ required: true, message: "Enter price" }]}>
-                <InputNumber style={{ width: '100%' }} min={1} step={1} placeholder="Enter price" />
+            {selectedKey === "others" ? (
+              <Form.Item
+                name="price"
+                label="Price (₹)"
+                rules={[{ required: true, message: "Enter price" }]}
+              >
+                <InputNumber
+                  style={{ width: "100%" }}
+                  min={1}
+                  step={1}
+                  placeholder="Enter price"
+                />
               </Form.Item>
             ) : (
-              <Form.Item name="price" label="Price (₹)" rules={[{ required: true, message: "Select price" }]}>
+              <Form.Item
+                name="price"
+                label="Price (₹)"
+                rules={[{ required: true, message: "Select price" }]}
+              >
                 <Select
                   placeholder="Select price"
                   disabled={!selectedDef}
-                  options={(selectedDef?.prices || []).map(p => ({ label: `₹${p}`, value: p }))}
+                  options={(selectedDef?.prices || []).map((p) => ({
+                    label: `₹${p}`,
+                    value: p,
+                  }))}
                 />
               </Form.Item>
             )}
           </Col>
           <Col xs={24} md={6}>
-            {selectedKey === 'others' ? (
-              <Form.Item name="customQty" label="Quantity" rules={[{ required: true, message: "Enter quantity" }]}>
-                <InputNumber style={{ width: '100%' }} min={1} step={1} />
+            {selectedKey === "others" ? (
+              <Form.Item
+                name="customQty"
+                label="Quantity"
+                rules={[{ required: true, message: "Enter quantity" }]}
+              >
+                <InputNumber
+                  style={{ width: "100%" }}
+                  min={1}
+                  step={1}
+                />
               </Form.Item>
             ) : (
-              <Form.Item name="qty" label="Quantity" rules={[{ required: true, message: "Enter quantity" }]}>
-                <InputNumber style={{ width: '100%' }} min={1} step={1} />
+              <Form.Item
+                name="qty"
+                label="Quantity"
+                rules={[{ required: true, message: "Enter quantity" }]}
+              >
+                <InputNumber
+                  style={{ width: "100%" }}
+                  min={1}
+                  step={1}
+                />
               </Form.Item>
             )}
           </Col>
         </Row>
-        {selectedKey === 'others' && (
-          <Row gutter={[12,12]}>
+
+        {selectedKey === "others" && (
+          <Row gutter={[12, 12]}>
             <Col xs={24} md={16}>
-              <Form.Item name="customItemName" label="Item Name (Others)" rules={[{ required: true, message: 'Enter item name' }]} getValueFromEvent={(e) => (e && e.target ? e.target.value.toUpperCase() : e)}>
+              <Form.Item
+                name="customItemName"
+                label="Item Name (Others)"
+                rules={[{ required: true, message: "Enter item name" }]}
+                getValueFromEvent={(e) =>
+                  e && e.target ? e.target.value.toUpperCase() : e
+                }
+              >
                 <Input placeholder="TYPE ITEM NAME" />
               </Form.Item>
             </Col>
           </Row>
         )}
+
         <Row>
           <Col span={24}>
-            <Button onClick={addToCart} disabled={selectedKey === 'others'
-              ? !(customItemName && selectedPrice)
-              : !(selectedDef && selectedPrice)
-            }>
+            <Button
+              onClick={addToCart}
+              type="primary"
+              ghost
+              disabled={
+                selectedKey === "others"
+                  ? !(customItemName && selectedPrice)
+                  : !(selectedDef && selectedPrice)
+              }
+            >
               Add to cart
             </Button>
           </Col>
@@ -420,40 +503,69 @@ export default function MinorSales() {
 
         <Divider style={{ margin: "12px 0" }} />
 
-        <Row justify="space-between" align="middle">
-          <Col>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>Order: {orderId}</div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>Cart Total: {inr(cartTotal)}</div>
-          </Col>
-        </Row>
-
-        <Card size="small" style={{ marginTop: 12 }} title="Cart">
+        {/* Cart */}
+        <Card
+          size="small"
+          title="Cart"
+          style={{ marginBottom: 12 }}
+          bodyStyle={{ padding: 8 }}
+          extra={
+            <Typography.Text strong>Items: {cart.length}</Typography.Text>
+          }
+        >
           <Table
             dataSource={cart.map((it, idx) => ({ key: idx, ...it }))}
             pagination={false}
             size="small"
+            locale={{ emptyText: "No items added yet" }}
             columns={[
-              { title: 'Item', dataIndex: 'item' },
-              { title: 'Qty', dataIndex: 'qty', render: (val, _record, index) => (
-                  <InputNumber min={1} value={val} onChange={(v) => updateCartQty(index, v)} />
-                )
+              { title: "Item", dataIndex: "item" },
+              {
+                title: "Qty",
+                dataIndex: "qty",
+                render: (val, _record, index) => (
+                  <InputNumber
+                    min={1}
+                    value={val}
+                    onChange={(v) => updateCartQty(index, v)}
+                  />
+                ),
               },
-              { title: 'Unit (₹)', dataIndex: 'unitPrice' },
-              { title: 'Amount (₹)', dataIndex: 'amount' },
-              { title: 'Action', render: (_val, _record, index) => (
-                  <Popconfirm title="Remove this item?" onConfirm={() => removeCartItem(index)}>
-                    <Button danger size="small">Remove</Button>
+              { title: "Unit (₹)", dataIndex: "unitPrice" },
+              { title: "Amount (₹)", dataIndex: "amount" },
+              {
+                title: "Action",
+                render: (_val, _record, index) => (
+                  <Popconfirm
+                    title="Remove this item?"
+                    onConfirm={() => removeCartItem(index)}
+                  >
+                    <Button danger size="small">
+                      Remove
+                    </Button>
                   </Popconfirm>
-                )
+                ),
               },
             ]}
           />
         </Card>
 
-        <Card size="small" style={{ marginTop: 12 }} title="Customer Details">
+        {/* Customer Details */}
+        <Card
+          size="small"
+          title="Customer Details"
+          bodyStyle={{ padding: 8 }}
+        >
           <Row gutter={12}>
             <Col xs={24} md={8}>
-              <Form.Item name="custName" label="Name" rules={[{ required: true, message: "Name is required" }]} getValueFromEvent={(e) => (e && e.target ? e.target.value.toUpperCase() : e)}>
+              <Form.Item
+                name="custName"
+                label="Name"
+                rules={[{ required: true, message: "Name is required" }]}
+                getValueFromEvent={(e) =>
+                  e && e.target ? e.target.value.toUpperCase() : e
+                }
+              >
                 <Input placeholder="CUSTOMER NAME" />
               </Form.Item>
             </Col>
@@ -463,7 +575,11 @@ export default function MinorSales() {
               </Form.Item>
             </Col>
             <Col xs={24} md={8}>
-              <Form.Item name="paymentMode" label="Payment Mode" rules={[{ required: true, message: "Select payment mode" }]}>
+              <Form.Item
+                name="paymentMode"
+                label="Payment Mode"
+                rules={[{ required: true, message: "Select payment mode" }]}
+              >
                 <Select options={PAYMENT_MODES} placeholder="Select" allowClear />
               </Form.Item>
             </Col>
@@ -471,33 +587,63 @@ export default function MinorSales() {
           <Row gutter={12}>
             <Col xs={24} md={8}>
               <Form.Item shouldUpdate noStyle>
-                {() => (String(form.getFieldValue('paymentMode')||'').toLowerCase()==='online' ? (
-                  <Form.Item
-                    name="utr"
-                    label="UTR / Reference"
-                    rules={[{ required: true, message: 'Enter UTR/Reference for online payments' }]}
-                    getValueFromEvent={(e) => {
-                      const v = e && e.target ? e.target.value : e;
-                      return typeof v === 'string' ? v.toUpperCase() : v;
-                    }}
-                  > 
-                    <Input placeholder="e.g., 23XXXXUTR123" style={{ textTransform: 'uppercase' }} />
-                  </Form.Item>
-                ) : null)}
+                {() =>
+                  String(form.getFieldValue("paymentMode") || "").toLowerCase() ===
+                  "online" ? (
+                    <Form.Item
+                      name="utr"
+                      label="UTR / Reference"
+                      rules={[
+                        {
+                          required: true,
+                          message: "Enter UTR/Reference for online payments",
+                        },
+                      ]}
+                      getValueFromEvent={(e) => {
+                        const v = e && e.target ? e.target.value : e;
+                        return typeof v === "string" ? v.toUpperCase() : v;
+                      }}
+                    >
+                      <Input
+                        placeholder="e.g., 23XXXXUTR123"
+                        style={{ textTransform: "uppercase" }}
+                      />
+                    </Form.Item>
+                  ) : null
+                }
               </Form.Item>
             </Col>
           </Row>
         </Card>
 
-        <Row justify="space-between" align="middle" style={{ marginTop: 8 }}>
+        {/* Footer actions */}
+        <Row justify="space-between" align="middle" style={{ marginTop: 12 }}>
           <Col>
-            <Button type="primary" onClick={printAndSaveSlip} disabled={!cart.length || printing} loading={printing}>Print</Button>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              Net Payable
+            </Typography.Text>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{inr(cartTotal)}</div>
           </Col>
-          <Col />
+          <Col>
+            <Space>
+              <Button onClick={handleClear} disabled={printing}>
+                Clear
+              </Button>
+              <Button
+                type="primary"
+                onClick={printAndSaveSlip}
+                disabled={!cart.length || printing}
+                loading={printing}
+              >
+                Print &amp; Save
+              </Button>
+            </Space>
+          </Col>
         </Row>
       </Form>
+
       {/* Hidden print host */}
-      <div style={{ display: 'none' }}>
+      <div style={{ display: "none" }}>
         <MinorSalesPrintSheet ref={printRef} active={printing} vals={printVals || {}} />
       </div>
     </Card>

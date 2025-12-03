@@ -46,6 +46,8 @@ const FINANCIERS = [
   "INDUSIND BANK",
   "AXIS BANK",
   "HINDHUJA FINANCE",
+  "BAJAJ FINANCE",
+  "OTHER"
 ];
 
 const phoneRule = [
@@ -176,23 +178,29 @@ export default function BookingForm({
     }
   }, []);
   const executiveDefault = useMemo(
-    () =>
-      currentUser?.name ||
-      currentUser?.displayName ||
-      currentUser?.email ||
-      "",
+    () => {
+      const toCaps = (s) => String(s || "").trim().toUpperCase();
+      const raw =
+        currentUser?.formDefaults?.staffName ||
+        currentUser?.name ||
+        currentUser?.displayName ||
+        currentUser?.email ||
+        "";
+      return toCaps(raw);
+    },
     [currentUser]
   );
   const branchDefault = useMemo(() => {
+    const toCaps = (s) => String(s || "").trim().toUpperCase();
     const firstBranch = Array.isArray(currentUser?.branches)
       ? currentUser.branches[0]?.name || currentUser.branches[0]
       : undefined;
-    return (
+    const raw =
       currentUser?.formDefaults?.branchName ||
       currentUser?.primaryBranch?.name ||
       firstBranch ||
-      ""
-    );
+      "";
+    return toCaps(raw);
   }, [currentUser]);
 
   const [selectedCompany, setSelectedCompany] = useState("");

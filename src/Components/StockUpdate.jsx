@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import dayjs from 'dayjs';
-import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip } from "antd";
+import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip, Popconfirm } from "antd";
 // Stock updates now use MongoDB backend only
-import { listStocks, listCurrentStocks, createStock, updateStock } from "../apiCalls/stocks";
+import { listStocks, listCurrentStocks, createStock, updateStock, listPendingTransfers, admitTransfer, rejectTransfer } from "../apiCalls/stocks";
 import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
 
@@ -92,6 +92,10 @@ export default function StockUpdate() {
   const [actionFilter, setActionFilter] = useState('all'); // add|transfer|return|invoice|all
   const [qText, setQText] = useState('');
   const [q, setQ] = useState('');
+  const [pendingTransfers, setPendingTransfers] = useState([]);
+  const [loadingPending, setLoadingPending] = useState(false);
+  const [actingTransferId, setActingTransferId] = useState(null);
+  const [actingMode, setActingMode] = useState(null);
   const dealerOptions = useMemo(() => {
     const name = String(company || '').toLowerCase();
     if (!name) return [];
@@ -117,6 +121,13 @@ export default function StockUpdate() {
   const lockSourceBranch = useMemo(() => ['staff','mechanic','employees'].includes(myRole), [myRole]);
   const isAdminOwner = useMemo(() => ['admin'].includes(myRole), [myRole]);
   const isOwner = useMemo(() => myRole === 'owner', [myRole]);
+  const pendingBranch = useMemo(() => {
+    if (isPriv) {
+      if (branchFilter === 'all') return 'all';
+      return branchFilter || myBranch || '';
+    }
+    return myBranch || '';
+  }, [isPriv, branchFilter, myBranch]);
 
   useEffect(() => {
     (async () => {
@@ -198,6 +209,36 @@ export default function StockUpdate() {
   const onModel = (v) => { setModel(v); setVariant(""); form.setFieldsValue({ variant: undefined, color: undefined }); };
   const onVariant = (v) => { setVariant(v); form.setFieldsValue({ color: undefined }); };
 
+  const fetchPendingTransfers = useCallback(async () => {
+    setLoadingPending(true);
+    try {
+      const resp = await listPendingTransfers({ branch: pendingBranch || undefined });
+      if (!resp?.success && resp?.message) {
+        message.warning(resp.message === 'Token Invalid' ? 'Session expired. Please log in again to admit/reject transfers.' : resp.message);
+      }
+      const list = Array.isArray(resp?.data) ? resp.data : [];
+      const rows = list.map((r, idx) => ({
+        key: r.movementId || idx + 1,
+        movementId: r.movementId || '',
+        chassis: r.chassisNo || '',
+        company: r.company || '',
+        model: r.model || '',
+        variant: r.variant || '',
+        color: r.color || '',
+        sourceBranch: r.sourceBranch || '',
+        targetBranch: r.targetBranch || '',
+        notes: r.notes || '',
+        createdByName: r.createdByName || '',
+        ts: r.timestamp || r.createdAt || '',
+      }));
+      setPendingTransfers(rows);
+    } catch {
+      setPendingTransfers([]);
+    } finally {
+      setLoadingPending(false);
+    }
+  }, [pendingBranch]);
+
   const onSubmit = async () => {
     try {
       const values = await form.validateFields();
@@ -226,14 +267,22 @@ export default function StockUpdate() {
         if (resp?.success) message.success("Stock movement updated.");
         else message.error(resp?.message || "Update failed");
       } else {
-        await createStock({ data: row, createdBy: user?.name || user?.email || 'user' });
-        message.success("Stock movement saved.");
+        const resp = await createStock({ data: row, createdBy: user?.name || user?.email || 'user' });
+        if (resp?.success) {
+          const msg = action === 'transfer'
+            ? 'Transfer recorded and waiting for admit by the target branch.'
+            : 'Stock movement saved.';
+          message.success(msg);
+        } else {
+          message.error(resp?.message || "Save failed");
+        }
       }
       form.resetFields(["chassis", "notes", "targetBranch", "returnTo", "customerName", "franchise"]);
       setModalOpen(false);
       setEditingMovementId(null);
       setAllowedActions(null);
       fetchList();
+      if (action === 'transfer') fetchPendingTransfers();
     } catch (err) {
       if (err?.errorFields) return; // antd validation
       message.error("Failed to save. Check configuration or network.");
@@ -274,6 +323,9 @@ export default function StockUpdate() {
           lastSourceBranch: r.lastSourceBranch || '',
           notes: r.notes || '',
           movementId: r.movementId || '',
+          transferStatus: r.transferStatus || '',
+          resolvedByName: r.resolvedByName || '',
+          resolvedAt: r.resolvedAt || '',
         }));
         setItems(rows);
     } catch {
@@ -283,9 +335,44 @@ export default function StockUpdate() {
     }
   };
 
+  const admitPendingTransfer = async (movementId) => {
+    setActingTransferId(movementId);
+    setActingMode('admit');
+    try {
+      const resp = await admitTransfer(movementId);
+      if (!resp?.success) throw new Error(resp?.message || 'Admit failed');
+      message.success('Transfer admitted to this branch.');
+      await fetchList();
+    } catch (err) {
+      message.error(err?.message || 'Failed to admit transfer.');
+    } finally {
+      setActingTransferId(null);
+      setActingMode(null);
+      await fetchPendingTransfers();
+    }
+  };
+
+  const rejectPendingTransfer = async (movementId) => {
+    setActingTransferId(movementId);
+    setActingMode('reject');
+    try {
+      const resp = await rejectTransfer(movementId);
+      if (!resp?.success) throw new Error(resp?.message || 'Reject failed');
+      message.success('Transfer rejected; stock stays in source branch.');
+      await fetchList();
+    } catch (err) {
+      message.error(err?.message || 'Failed to reject transfer.');
+    } finally {
+      setActingTransferId(null);
+      setActingMode(null);
+      await fetchPendingTransfers();
+    }
+  };
+
   useEffect(() => { fetchList(); }, [myBranch]);
   // Refetch when admin/owner changes branch filter
   useEffect(() => { if (isPriv) fetchList(); }, [isPriv, branchFilter]);
+  useEffect(() => { fetchPendingTransfers(); }, [fetchPendingTransfers]);
 
   // When opening the modal, prefill and lock Source Branch for staff-like roles
   useEffect(() => {
@@ -382,10 +469,16 @@ export default function StockUpdate() {
     { title: "Model", dataIndex: "model", key: "model", width: 20, ellipsis: false },
     { title: "Variant", dataIndex: "variant", key: "variant", width: 20, ellipsis: false },
     { title: "Color", dataIndex: "color", key: "color", width: 10, ellipsis: false },
-    { title: "Action", dataIndex: "action", key: "action", width: 20, render: (v) => {
+    { title: "Action", dataIndex: "action", key: "action", width: 20, render: (v, row) => {
       const t = String(v || "").toLowerCase();
-      const color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
-      const display = t === 'invoice' ? 'Book' : (v || '-');
+      const status = String(row?.transferStatus || '').toLowerCase();
+      let color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
+      let display = t === 'invoice' ? 'Book' : (v || '-');
+      if (t === 'transfer') {
+        if (status === 'pending') { color = 'orange'; display = 'Transfer (Pending)'; }
+        else if (status === 'rejected') { color = 'red'; display = 'Transfer (Rejected)'; }
+        else if (status === 'admitted') { color = 'green'; display = 'Transfer (Admitted)'; }
+      }
       return <Tag color={color}>{display}</Tag>;
     } },
   ];
@@ -493,6 +586,80 @@ export default function StockUpdate() {
             New Movement
           </Button>
         </Space>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 12, border: '1px solid #f97316', background: '#fff7ed', borderRadius: 10, boxShadow: '0 1px 0 rgba(0,0,0,0.04)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>Notifications / Pending Transfers</div>
+            <div style={{ fontSize: 12, color: '#92400e' }}>
+              {pendingBranch === 'all' && isPriv
+                ? 'Showing pending transfers across all branches'
+                : `Transfers awaiting admit for ${pendingBranch || myBranch || 'your branch'}`}
+            </div>
+          </div>
+          <Space size="small">
+            <Tag color={pendingTransfers.length ? 'orange' : 'green'} style={{ margin: 0 }}>
+              {pendingTransfers.length} pending
+            </Tag>
+            <Button size="small" loading={loadingPending} onClick={fetchPendingTransfers}>Refresh alerts</Button>
+          </Space>
+        </div>
+        {pendingTransfers.length === 0 ? (
+          <div style={{ marginTop: 8, color: '#92400e', fontSize: 12 }}>
+            {loadingPending ? 'Checking pending transfers...' : 'No pending transfers for this branch.'}
+          </div>
+        ) : (
+          <Space direction="vertical" style={{ width: '100%', marginTop: 12 }} size="small">
+            {pendingTransfers.map((p) => (
+              <div key={p.movementId || p.key} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: 12, borderRadius: 8, border: '1px dashed #f97316', background: '#fff' }}>
+                <div style={{ flex: '1 1 260px', minWidth: 220 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontWeight: 700 }}>Chassis:</span>
+                    <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{p.chassis || '-'}</span>
+                    <Tag color="geekblue" style={{ marginLeft: 4 }}>
+                      {[p.company, p.model, p.variant].filter(Boolean).join(' ')}
+                    </Tag>
+                  </div>
+                  <div style={{ marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap', color: '#111827' }}>
+                    <span style={{ fontWeight: 600 }}>{p.sourceBranch || 'Source ?'}</span>
+                    <span style={{ color: '#6b7280' }}>→</span>
+                    <span style={{ fontWeight: 600 }}>{p.targetBranch || 'Target ?'}</span>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: '#4b5563' }}>
+                    Requested by {p.createdByName || 'user'}{p.ts ? ` on ${dayjs(p.ts).format('DD MMM, HH:mm')}` : ''}
+                  </div>
+                  {p.notes && <div style={{ marginTop: 4, fontSize: 12, color: '#92400e' }}>Notes: {p.notes}</div>}
+                </div>
+                <Space size="small" align="start">
+                  <Button
+                    type="primary"
+                    size="small"
+                    loading={actingTransferId === p.movementId && actingMode === 'admit'}
+                    onClick={() => admitPendingTransfer(p.movementId)}
+                  >
+                    Admit
+                  </Button>
+                  <Popconfirm
+                    title="Reject this transfer?"
+                    description={`Keep chassis ${p.chassis || ''} in ${p.sourceBranch || 'source branch'} and clear this alert.`}
+                    okText="Reject"
+                    okType="danger"
+                    onConfirm={() => rejectPendingTransfer(p.movementId)}
+                  >
+                    <Button
+                      danger
+                      size="small"
+                      loading={actingTransferId === p.movementId && actingMode === 'reject'}
+                    >
+                      Reject
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              </div>
+            ))}
+          </Space>
+        )}
       </div>
 
       <Table

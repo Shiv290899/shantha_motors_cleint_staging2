@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Table, Space, Button, Select, message, Segmented, Grid } from 'antd';
+import { Table, Space, Button, Select, message, Segmented, Grid, Modal, Form, Input, InputNumber, Divider, Typography } from 'antd';
 
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
+import { listUsersPublic } from '../apiCalls/adminUsers';
+
+const { Text } = Typography;
 
 export default function AdminDailyCollections() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
+  const readUser = () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } };
+  const me = useMemo(() => readUser(), []);
+  const ownerName = me?.name || me?.displayName || me?.email || me?.username || 'OWNER';
 
   // DailyCollections (date-based) removed; only StaffLedger is used
   const [viewMode, setViewMode] = useState('summary'); // 'summary' | 'transactions'
@@ -25,6 +31,14 @@ export default function AdminDailyCollections() {
   // Per-row/bulk action spinners
   const [rowBusy, setRowBusy] = useState({});
   const [bulkBusyMode, setBulkBusyMode] = useState(''); // '' | 'cash' | 'online'
+  // Previous due modal state
+  const [prevDueOpen, setPrevDueOpen] = useState(false);
+  const [prevDueList, setPrevDueList] = useState([]);
+  const [prevDueLoading, setPrevDueLoading] = useState(false);
+  const [prevDueSaving, setPrevDueSaving] = useState(false);
+  const [prevDueForm] = Form.useForm();
+  const [staffOptions, setStaffOptions] = useState([]);
+  const [staffOptionsLoading, setStaffOptionsLoading] = useState(false);
   
 
   // (Removed legacy DailyCollections date-based fetch)
@@ -69,6 +83,91 @@ export default function AdminDailyCollections() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, JSON.stringify(branchFilter), JSON.stringify(staffFilter), ledgerStatus, GAS_URL]);
 
+  const fetchPrevDue = async () => {
+    if (!GAS_URL) return;
+    setPrevDueLoading(true);
+    try {
+      const payload = SECRET ? { action: 'owner_prev_due_list', secret: SECRET } : { action: 'owner_prev_due_list' };
+      const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+      const js = resp?.data || resp || {};
+      const rows = Array.isArray(js.rows) ? js.rows.slice() : [];
+      const toTs = (raw) => {
+        const n = Number(new Date(String(raw || '')));
+        return Number.isFinite(n) ? n : 0;
+      };
+      rows.sort((a, b) => toTs(b?.updatedAt) - toTs(a?.updatedAt));
+      setPrevDueList(rows);
+    } catch {
+      message.error('Could not load previous due entries');
+    } finally {
+      setPrevDueLoading(false);
+    }
+  };
+
+  const loadStaffOptions = async () => {
+    setStaffOptionsLoading(true);
+    try {
+      const res = await listUsersPublic({ role: 'staff', status: 'active', limit: 100000 });
+      const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+      const opts = items.map((u) => {
+        const staffName = u?.formDefaults?.staffName || u?.name || '';
+        const branchName =
+          u?.formDefaults?.branchName ||
+          (u?.primaryBranch && (u.primaryBranch.name || u.primaryBranch.branchName)) ||
+          '';
+        const labelPieces = [staffName || '(No name)'];
+        if (branchName) labelPieces.push(`· ${branchName}`);
+        return {
+          value: staffName,
+          label: labelPieces.join(' '),
+          branchName,
+        };
+      }).filter((o) => o.value);
+      setStaffOptions(opts);
+    } catch {
+      message.error('Could not load staff list');
+    } finally {
+      setStaffOptionsLoading(false);
+    }
+  };
+
+  const onPrevDueFinish = async (values) => {
+    if (!GAS_URL) return;
+    setPrevDueSaving(true);
+    try {
+      const payload = {
+        action: 'owner_prev_due_set',
+        branch: String(values.branch || '').trim(),
+        staff: String(values.staff || '').trim(),
+        amount: values.amount,
+        note: values.note || '',
+        updatedBy: ownerName,
+      };
+      if (SECRET) payload.secret = SECRET;
+      const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload });
+      const result = resp?.data || resp || {};
+      if (result.success === false) throw new Error(result.message || 'Failed');
+      message.success('Previous due updated');
+      fetchPrevDue();
+    } catch (err) {
+      message.error(err?.message || 'Could not update previous due');
+    } finally {
+      setPrevDueSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!prevDueOpen) return;
+    prevDueForm.resetFields();
+    const defaults = {};
+    if ((branchFilter || []).length === 1) defaults.branch = branchFilter[0];
+    if ((staffFilter || []).length === 1) defaults.staff = staffFilter[0];
+    if (Object.keys(defaults).length) prevDueForm.setFieldsValue(defaults);
+    loadStaffOptions();
+    fetchPrevDue();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prevDueOpen]);
+
   // Clear row selections when filters change so totals reflect visible rows
   useEffect(() => { setSelectedKeys([]); }, [JSON.stringify(branchFilter), JSON.stringify(staffFilter)]);
 
@@ -76,7 +175,7 @@ export default function AdminDailyCollections() {
   // useEffect(() => { fetchRows(); }, []);
 
   // Build staff + branch lists for filters (dynamic from data)
-  const staffOptions = Array.from(new Set(ledgerRows.map(r => (r.staff || '').toString()))).map(s => ({ value: s, label: s || '(Unknown)' }));
+  const staffFilterOptions = Array.from(new Set(ledgerRows.map(r => (r.staff || '').toString()))).map(s => ({ value: s, label: s || '(Unknown)' }));
   const branchOptions = Array.from(new Set(ledgerRows.map(r => (r.branch || '').toString()))).map(b => ({ value: b, label: b || '(Unknown)' }));
 
   // (Removed DailyCollections date-based summary calculations)
@@ -136,6 +235,15 @@ export default function AdminDailyCollections() {
         </Space>
       );
     } },
+  ];
+
+  const prevDueCols = [
+    { title:'Branch', dataIndex:'branch', key:'branch' },
+    { title:'Staff', dataIndex:'staff', key:'staff' },
+    { title:'Amount', dataIndex:'amount', key:'amount', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
+    { title:'Note', dataIndex:'note', key:'note', ellipsis:true },
+    { title:'Updated By', dataIndex:'updatedBy', key:'updatedBy' },
+    { title:'Updated At', dataIndex:'updatedAt', key:'updatedAt', render:(v)=> fmtLocalShort(v) },
   ];
 
   // Staff-wise aggregation from ledger (client-side filters for multi-select)
@@ -240,11 +348,12 @@ export default function AdminDailyCollections() {
             value={staffFilter}
             onChange={setStaffFilter}
             style={{ minWidth: isMobile ? 140 : 220 }}
-            options={staffOptions}
+            options={staffFilterOptions}
           />
         </Space>
         <Space>
           <Button onClick={fetchLedger} loading={ledgerLoading}>Refresh</Button>
+          <Button type='primary' ghost onClick={()=>setPrevDueOpen(true)}>Assign Previous Due</Button>
         </Space>
       </Space>
       {viewMode==='summary' ? (
@@ -308,6 +417,60 @@ export default function AdminDailyCollections() {
       )}
 
       {/* No DailyCollections modal in ledger-only mode */}
+
+      <Modal
+        open={prevDueOpen}
+        title='Assign Previous Due'
+        onCancel={()=>setPrevDueOpen(false)}
+        width={isMobile ? Math.min((typeof window !== 'undefined' ? window.innerWidth : 360) - 24, 720) : 720}
+        footer={[
+          <Button key='close' onClick={()=>setPrevDueOpen(false)}>Close</Button>,
+          <Button key='save' type='primary' loading={prevDueSaving} onClick={()=>prevDueForm.submit()}>Save</Button>
+        ]}
+        destroyOnClose
+      >
+        <Form layout='vertical' form={prevDueForm} onFinish={onPrevDueFinish}>
+          <Form.Item label='Staff' name='staff' rules={[{ required:true, message:'Staff is required' }]}>
+            <Select
+              showSearch
+              placeholder='Select staff'
+              optionFilterProp='label'
+              loading={staffOptionsLoading}
+              options={staffOptions}
+              onChange={(val) => {
+                try {
+                  const found = staffOptions.find((o) => o.value === val);
+                  if (found?.branchName) {
+                    prevDueForm.setFieldsValue({ branch: found.branchName });
+                  }
+                } catch {
+                  // ignore
+                }
+              }}
+            />
+          </Form.Item>
+          <Form.Item label='Branch' name='branch' rules={[{ required:true, message:'Branch is required' }]}>
+            <Input placeholder='Auto-filled from staff primary branch' autoComplete='off' disabled />
+          </Form.Item>
+          <Form.Item label='Amount (₹)' name='amount' rules={[{ required:true, message:'Amount is required' }]}>
+            <InputNumber min={0} step={100} style={{ width: '100%' }} placeholder='Enter amount' />
+          </Form.Item>
+          <Form.Item label='Owner Note' name='note'>
+            <Input.TextArea rows={2} maxLength={240} placeholder='Optional note shown to staff' />
+          </Form.Item>
+        </Form>
+        <Divider orientation='left' plain>Assigned amounts</Divider>
+        <Table
+          rowKey={(r)=>r.id || `${r.branch}-${r.staff}`}
+          dataSource={prevDueList}
+          columns={prevDueCols}
+          loading={prevDueLoading}
+          size={isMobile ? 'small' : 'middle'}
+          pagination={{ pageSize: isMobile ? 5 : 8, size: isMobile ? 'small' : 'default' }}
+          scroll={{ x: 'max-content' }}
+        />
+        <Text type='secondary' style={{ fontSize: 12 }}>Amounts assigned here appear as Previous Due on the staff dashboard without inflating the cash/online pending cards.</Text>
+      </Modal>
     </div>
   );
 }

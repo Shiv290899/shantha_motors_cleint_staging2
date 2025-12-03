@@ -219,10 +219,32 @@ export default function Quotations() {
   }, [rows]);
 
   const filtered = useMemo(() => {
-    if (USE_SERVER_PAG) {
-      return rows.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-    }
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
+    // When using server pagination, still enforce branch scope and client-side date filter as a fallback
+    if (USE_SERVER_PAG) {
+      const scoped = rows.filter((r) => {
+        if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
+          if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        }
+        if (branchFilter !== "all" && r.branch !== branchFilter) return false;
+        if (modeFilter !== "all" && String(r.mode||'').toLowerCase() !== modeFilter) return false;
+        if (statusFilter !== 'all' && String(r.status||'').toLowerCase() !== statusFilter) return false;
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          const start = dateRange[0].startOf('day').valueOf();
+          const end = dateRange[1].endOf('day').valueOf();
+          const t = r.tsMs ?? parseTsMs(r.ts);
+          if (!t || t < start || t > end) return false;
+        }
+        if (debouncedQ) {
+          const s = debouncedQ.toLowerCase();
+          if (![
+            r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive, r.status
+          ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
+        }
+        return true;
+      });
+      return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
+    }
     const list = rows.filter((r) => {
       if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
         if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;

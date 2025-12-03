@@ -366,6 +366,7 @@ export default function Quotation() {
     (async () => {
       // Prefill executive + branch from logged-in user (staff)
       try {
+        const toCaps = (s) => String(s || '').trim().toUpperCase();
         const readLocalUser = () => {
           try { const raw = localStorage.getItem('user'); return raw ? JSON.parse(raw) : null; } catch { return null; }
         };
@@ -386,7 +387,8 @@ export default function Quotation() {
           }
         }
         if (user) {
-          const staffName = user?.formDefaults?.staffName || user?.name || undefined;
+          const staffNameRaw = user?.formDefaults?.staffName || user?.name || undefined;
+          const staffName = staffNameRaw ? toCaps(staffNameRaw) : undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
           // who can switch branches
           const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
@@ -398,7 +400,11 @@ export default function Quotation() {
               // Owners/Admins: all branches from server
               const res = await listBranchesPublic({ limit: 500 });
               if (res?.success && Array.isArray(res?.data?.items)) {
-                const all = res.data.items.map((b) => ({ id: String(b.id || b._id || ''), name: b.name, code: b.code ? String(b.code).toUpperCase() : '' }));
+                const all = res.data.items.map((b) => ({
+                  id: String(b.id || b._id || ''),
+                  name: toCaps(b.name),
+                  code: b.code ? String(b.code).toUpperCase() : '',
+                }));
                 setAllowedBranches(all);
               }
               // Also load staff list for Executive dropdown
@@ -415,7 +421,8 @@ export default function Quotation() {
               const push = (b) => {
                 if (!b) return;
                 const id = (b && (b._id || b.id || b.$oid || b)) || '';
-                const name = typeof b === 'string' ? '' : (b?.name || '');
+                const nameRaw = typeof b === 'string' ? '' : (b?.name || '');
+                const name = toCaps(nameRaw);
                 const code = typeof b === 'string' ? '' : (b?.code || '');
                 if (!id || !name) return;
                 list.push({ id: String(id), name: String(name), code: code ? String(code).toUpperCase() : '' });
@@ -428,7 +435,7 @@ export default function Quotation() {
               setAllowedBranches(uniq);
             }
           } catch { /* ignore */ }
-          let branchName = user?.formDefaults?.branchName;
+          let branchName = user?.formDefaults?.branchName ? toCaps(user.formDefaults.branchName) : undefined;
           const codeFromUser = (user?.formDefaults?.branchCode && String(user.formDefaults.branchCode).toUpperCase()) || '';
           if (codeFromUser) { setBranchCode(codeFromUser); try { form.setFieldsValue({ branchCode: codeFromUser }); } catch {
             //iuf

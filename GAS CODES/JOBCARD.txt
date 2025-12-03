@@ -185,6 +185,23 @@ function handle_(e){
       return json_({ success:true, updatedCount: rv.updatedCount||0 });
     }
 
+    if (action === 'owner_prev_due_list') {
+      const p = e && e.parameter ? e.parameter : {};
+      const branch = p.branch || body.branch || '';
+      const staff = p.staff || body.staff || '';
+      return json_(ownerPrevDueList_({ branch, staff }));
+    }
+
+    if (action === 'owner_prev_due_set') {
+      const p = e && e.parameter ? e.parameter : {};
+      const branch = p.branch || body.branch || '';
+      const staff = p.staff || body.staff || '';
+      const amount = (p.amount != null ? p.amount : (body.amount != null ? body.amount : undefined));
+      const note = p.note != null ? p.note : body.note;
+      const updatedBy = p.updatedBy || body.updatedBy || 'OWNER';
+      return json_(ownerPrevDueSet_(branch, staff, amount, note, updatedBy));
+    }
+
     return json_({
       ok:true,
       hint:'actions: list, nextSerial, search, save, postService, followups, updateFollowup, remark, collections, update_collection, settle_collection, staff_collection_summary, dc_test'
@@ -1517,6 +1534,11 @@ const STAFF_LEDGER_HEADERS = [
   'Settled Flag','Settled At','Settled By','Raw Payload'
 ];
 
+const STAFF_PREV_DUE_SHEET = 'StaffPrevDue';
+const STAFF_PREV_DUE_HEADERS = [
+  'Branch','Staff','Amount','Note','Updated By','Updated At','Created At'
+];
+
 function slNowIsoIndia_(){
   const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
   return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
@@ -1685,7 +1707,20 @@ function staffLedgerSummary_(branch, staff){
     const sat = r[I.SAt];
     if (sat) { const t = (sat instanceof Date) ? sat.getTime() : (new Date(String(sat))).getTime(); if (isFinite(t)) lastSettledAt = String(sat); }
   }
-  return { success:true, data: { branch, staff, cashPending:c, onlinePending:o, totalPending:(c+o), lastSettledAt } };
+  const prevDueRow = staffPrevDueFetch_(branch, staff);
+  const prevDueAmt = dcToNum_(prevDueRow && prevDueRow.amount);
+  return { success:true, data: {
+    branch,
+    staff,
+    cashPending:c,
+    onlinePending:o,
+    totalPending:(c+o),
+    lastSettledAt,
+    prevDueAssigned: prevDueAmt,
+    prevDueNote: prevDueRow && prevDueRow.note ? String(prevDueRow.note) : '',
+    prevDueUpdatedAt: prevDueRow && prevDueRow.updatedAt ? String(prevDueRow.updatedAt) : '',
+    prevDueUpdatedBy: prevDueRow && prevDueRow.updatedBy ? String(prevDueRow.updatedBy) : ''
+  } };
 }
 
 function staffLedgerTransactions_(branch, staff, mode){
@@ -1827,4 +1862,140 @@ function staffLedgerSettleRows_(ids, mode, settledBy, scope){
     updated++;
   }
   return { updatedCount: updated };
+}
+
+/* ============================
+   Staff Previous Due assignments (owner managed)
+============================ */
+function staffPrevDueGetSheet_(){
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string' ? DC_MASTER_SPREADSHEET_ID : '';
+  const ss = masterId ? SpreadsheetApp.openById(masterId) : (SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet());
+  let sh = ss.getSheetByName(STAFF_PREV_DUE_SHEET);
+  if (!sh) sh = ss.insertSheet(STAFF_PREV_DUE_SHEET);
+  const width = Math.max(sh.getLastColumn(), STAFF_PREV_DUE_HEADERS.length);
+  const first = width ? sh.getRange(1,1,1,width).getValues()[0] : [];
+  const hasAny = first.some(v => String(v||'').trim().length);
+  if (!hasAny) sh.getRange(1,1,1,STAFF_PREV_DUE_HEADERS.length).setValues([STAFF_PREV_DUE_HEADERS]);
+  return sh;
+}
+
+function staffPrevDueIdx_(headers){
+  const norm = (s) => String(s||'').trim().toLowerCase();
+  const H = headers.map(norm);
+  const find = (name) => H.indexOf(norm(name));
+  return {
+    Branch: find('branch'),
+    Staff: find('staff'),
+    Amount: find('amount'),
+    Note: find('note'),
+    UpdatedBy: find('updated by'),
+    UpdatedAt: find('updated at'),
+    CreatedAt: find('created at'),
+    width: headers.length
+  };
+}
+
+function ownerPrevDueList_(opts){
+  const sh = staffPrevDueGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_PREV_DUE_HEADERS.length)).getValues()[0];
+  const I = staffPrevDueIdx_(headers);
+  const last = sh.getLastRow();
+  const wantBranch = String(opts && opts.branch || '').trim().toLowerCase();
+  const wantStaff = String(opts && opts.staff || '').trim().toLowerCase();
+  const rows = (last>1) ? sh.getRange(2,1,last-1,I.width).getValues() : [];
+  const list = [];
+  rows.forEach((r, idx) => {
+    const branch = String(r[I.Branch]||'').trim();
+    const staff = String(r[I.Staff]||'').trim();
+    if (wantBranch && branch.toLowerCase() !== wantBranch) return;
+    if (wantStaff && staff.toLowerCase() !== wantStaff) return;
+    list.push({
+      id: idx + 2,
+      branch,
+      staff,
+      amount: dcToNum_(r[I.Amount]),
+      note: r[I.Note] || '',
+      updatedBy: r[I.UpdatedBy] || '',
+      updatedAt: r[I.UpdatedAt] || '',
+      createdAt: r[I.CreatedAt] || ''
+    });
+  });
+  list.sort((a,b) => String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
+  return { success:true, rows: list };
+}
+
+function ownerPrevDueSet_(branch, staff, amount, note, updatedBy){
+  const b = String(branch||'').trim();
+  const s = String(staff||'').trim();
+  if (!b || !s) return { success:false, message:'branch and staff required' };
+  const amountProvided = !(amount == null || (typeof amount === 'string' && String(amount).trim() === ''));
+  if (!amountProvided) return { success:false, message:'amount is required' };
+  const amt = Math.max(0, dcToNum_(amount));
+  const sh = staffPrevDueGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_PREV_DUE_HEADERS.length)).getValues()[0];
+  const I = staffPrevDueIdx_(headers);
+  const last = sh.getLastRow();
+  const wantBranch = b.toLowerCase();
+  const wantStaff = s.toLowerCase();
+  let hit = -1;
+  if (last > 1){
+    const rows = sh.getRange(2,1,last-1,I.width).getValues();
+    for (let i=rows.length-1;i>=0;i--){
+      const r = rows[i];
+      if (String(r[I.Branch]||'').trim().toLowerCase() !== wantBranch) continue;
+      if (String(r[I.Staff]||'').trim().toLowerCase() !== wantStaff) continue;
+      hit = i + 2;
+      break;
+    }
+  }
+  const nowIso = dcTsIndia_();
+  if (hit > 0){
+    const row = sh.getRange(hit,1,1,I.width).getValues()[0];
+    if (I.Branch>=0) row[I.Branch] = b;
+    if (I.Staff>=0) row[I.Staff] = s;
+    if (I.Amount>=0) row[I.Amount] = amt;
+    if (I.Note>=0) row[I.Note] = note || '';
+    if (I.UpdatedBy>=0) row[I.UpdatedBy] = updatedBy || '';
+    if (I.UpdatedAt>=0) row[I.UpdatedAt] = nowIso;
+    sh.getRange(hit,1,1,I.width).setValues([row]);
+    return { success:true, updated:true, row: hit, branch:b, staff:s, amount: amt };
+  }
+  const row = new Array(I.width).fill('');
+  if (I.Branch>=0) row[I.Branch] = b;
+  if (I.Staff>=0) row[I.Staff] = s;
+  if (I.Amount>=0) row[I.Amount] = amt;
+  if (I.Note>=0) row[I.Note] = note || '';
+  if (I.UpdatedBy>=0) row[I.UpdatedBy] = updatedBy || '';
+  if (I.UpdatedAt>=0) row[I.UpdatedAt] = nowIso;
+  if (I.CreatedAt>=0) row[I.CreatedAt] = nowIso;
+  sh.appendRow(row);
+  return { success:true, created:true, row: sh.getLastRow(), branch:b, staff:s, amount: amt };
+}
+
+function staffPrevDueFetch_(branch, staff){
+  const b = String(branch||'').trim().toLowerCase();
+  const s = String(staff||'').trim().toLowerCase();
+  if (!b || !s) return { branch: branch||'', staff: staff||'', amount:0 };
+  const sh = staffPrevDueGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_PREV_DUE_HEADERS.length)).getValues()[0];
+  const I = staffPrevDueIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return { branch: branch||'', staff: staff||'', amount:0 };
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (String(r[I.Branch]||'').trim().toLowerCase() !== b) continue;
+    if (String(r[I.Staff]||'').trim().toLowerCase() !== s) continue;
+    return {
+      branch: r[I.Branch] || '',
+      staff: r[I.Staff] || '',
+      amount: dcToNum_(r[I.Amount]),
+      note: r[I.Note] || '',
+      updatedBy: r[I.UpdatedBy] || '',
+      updatedAt: r[I.UpdatedAt] || '',
+      createdAt: r[I.CreatedAt] || '',
+      row: i + 2
+    };
+  }
+  return { branch: branch||'', staff: staff||'', amount:0 };
 }

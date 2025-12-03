@@ -7,7 +7,7 @@ import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import { useNavigate } from "react-router-dom";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -171,7 +171,7 @@ export default function Jobcards() {
             key: idx,
             ts: pick(obj, HEAD.ts),
             tsMs: parseTsMs(pick(obj, HEAD.ts)),
-            name: fv.custName || pick(obj, HEAD.name),
+            name: (String(fv.custName || pick(obj, HEAD.name) || '').trim()),
             mobile: fv.custMobile || pick(obj, HEAD.mobile),
             branch: fv.branch || pick(obj, HEAD.branch),
             executive: fv.executive || pick(obj, HEAD.executive),
@@ -231,6 +231,20 @@ export default function Jobcards() {
       const scoped = rows.filter((r)=>{
         if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
           if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        }
+        if (branchFilter !== "all" && r.branch !== branchFilter) return false;
+        if (serviceFilter !== "all" && String(r.serviceType||'').toLowerCase() !== serviceFilter) return false;
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          const start = dateRange[0].startOf('day').valueOf();
+          const end = dateRange[1].endOf('day').valueOf();
+          const t = r.tsMs ?? parseTsMs(r.ts);
+          if (!t || t < start || t > end) return false;
+        }
+        if (debouncedQ) {
+          const s = debouncedQ.toLowerCase();
+          if (![
+            r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode, r.status
+          ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
         }
         return true;
       });

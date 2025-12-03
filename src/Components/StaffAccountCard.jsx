@@ -7,11 +7,11 @@ const { Text } = Typography;
 export default function StaffAccountCard() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwsL1cOyLa_Rpf-YvlGxWG9v6dNt6-YqeX_-L2IZpmKoy6bQT5LrEeTmDrR5XYjVVb1Mg/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
-  const [data, setData] = useState({ bookingAmountPending:0, jcAmountPending:0, minorSalesAmountPending:0, totalPending:0 });
+  const [data, setData] = useState({ bookingAmountPending:0, jcAmountPending:0, minorSalesAmountPending:0, totalPending:0, prevDueAssigned:0 });
   const [loading, setLoading] = useState(false);
   const [txOpen, setTxOpen] = useState(false);
   const [txMode, setTxMode] = useState('cash'); // 'cash' | 'online'
@@ -57,6 +57,9 @@ export default function StaffAccountCard() {
       const payloadData = js?.data && typeof js.data === 'object' ? js.data : js;
 
       // Only use ledger summary for totals (single source of truth)
+      const prevDueAssigned = Number(
+        payloadData.prevDueAssigned ?? payloadData.openingBalance ?? payloadData.opening ?? 0
+      ) || 0;
       const base = {
         bookingAmountPending: 0,
         jcAmountPending: 0,
@@ -69,6 +72,10 @@ export default function StaffAccountCard() {
         onlineAmount: Number(payloadData.onlinePending||0) || 0,
         settlementDone: false,
         lastSettledAt: payloadData.lastSettledAt || undefined,
+        prevDueAssigned,
+        prevDueNote: payloadData.prevDueNote || '',
+        prevDueUpdatedAt: payloadData.prevDueUpdatedAt || payloadData.prevDueAssignedAt || '',
+        prevDueUpdatedBy: payloadData.prevDueUpdatedBy || '',
       };
       // Paint immediately and cache
       setData(base);
@@ -155,7 +162,10 @@ export default function StaffAccountCard() {
     const minor = num(data.minorSalesAmountPending ?? data.minorSalesAmount ?? 0);
     const jcSales = num(data.jcAmountPending ?? data.jcAmount ?? 0);
     const salesSum = booking + minor + jcSales; // S (today's sales)
-    const opening = num(data.openingBalance ?? data.opening ?? 0); // carry forward (previous unsettled)
+    const opening = num(
+      data.prevDueAssigned ?? data.prevDue ?? data.openingBalance ?? data.opening ?? 0
+    ); // carry forward (owner-assigned)
+    const breakdownTotal = opening + salesSum;
     // Prefer explicit JC collected fields if API provides them
     const jcCash = num(data.jcCashPending ?? data.jcCash ?? 0);
     const jcOnline = num(data.jcOnlinePending ?? data.jcOnline ?? 0);
@@ -170,16 +180,22 @@ export default function StaffAccountCard() {
     if (!pending) pending = Math.max(0, salesSum - total); // only today's pending
     const pendingAll = Math.max(0, opening + salesSum - total); // include previous unsettled
     const cashToHandOver = cash; // physical handover is only cash
+    const totalCollected = cashToHandOver + online;
     const base = {
-      total, // C
+      total, // pending/collected from ledger
       cash: cashToHandOver,
       online,
+      totalCollected,
       // Breakdowns (prefer collected JC; others already represent collected amounts)
       // Use category totals from ledger for breakdown
       jc: jcSales,
       booking,
       minor,
       prevDue: opening,
+      breakdownTotal,
+      prevDueNote: data.prevDueNote || '',
+      prevDueUpdatedAt: data.prevDueUpdatedAt || undefined,
+      prevDueUpdatedBy: data.prevDueUpdatedBy || '',
       settlementDone: Boolean(data.settlementDone),
       lastSettledAt: data.lastSettledAt || data.lastSettlementAt || undefined,
       pending,
@@ -192,10 +208,15 @@ export default function StaffAccountCard() {
         total: 0,
         cash: 0,
         online: 0,
+        totalCollected: 0,
         jc: 0,
         booking: 0,
         minor: 0,
         prevDue: 0,
+        breakdownTotal: 0,
+        prevDueNote: '',
+        prevDueUpdatedAt: undefined,
+        prevDueUpdatedBy: '',
         settlementDone: true,
         lastSettledAt: base.lastSettledAt,
         pending: 0,
@@ -205,6 +226,18 @@ export default function StaffAccountCard() {
     }
     return base;
   }, [data]);
+
+  const prevDueMetaLine = useMemo(() => {
+    const bits = [];
+    if (data.prevDueNote) bits.push(`Note: ${data.prevDueNote}`);
+    if (data.prevDueUpdatedBy || data.prevDueUpdatedAt) {
+      const when = data.prevDueUpdatedAt ? formatShortDate(data.prevDueUpdatedAt) : '';
+      const who = data.prevDueUpdatedBy ? `by ${data.prevDueUpdatedBy}` : '';
+      const chunk = ['Assigned', who.trim(), when ? `on ${when}` : ''].filter(Boolean).join(' ');
+      if (chunk.trim()) bits.push(chunk.trim());
+    }
+    return bits.join(' • ');
+  }, [data.prevDueNote, data.prevDueUpdatedAt, data.prevDueUpdatedBy]);
 
   const Item = ({ label, value, subtle }) => (
     <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap: 6, opacity: subtle ? 0.9 : 1 }}>
@@ -293,22 +326,29 @@ export default function StaffAccountCard() {
         </div>
 
         <div style={{ paddingTop: 6 }}>
-          <Text strong>Total’s Sales</Text>
+          <Text strong>Total Sales</Text>
           <div style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center', gap:12 }}>
             <Progress percent={
-              (() => { const base = (totals.sales || 0) + (totals.prevDue || 0); return base ? Math.round(((totals.total || 0) / base) * 100) : 0; })()
+              (() => {
+                const baseVal = totals.totalCollected || 0;
+                return baseVal ? 100 : 0;
+              })()
             } showInfo={false} strokeColor={{ from: '#52c41a', to: '#2f54eb' }} />
-            <Text style={{ fontSize: 18, fontWeight: 700 }}>₹ {formatINR(totals.sales)}</Text>
+            <Text style={{ fontSize: 18, fontWeight: 700 }}>₹ {formatINR(totals.totalCollected)}</Text>
           </div>
-         
+          <Text type='secondary' style={{ fontSize: 12 }}>Cash to hand over + Online collected</Text>
         </div>
 
         <Divider style={{ margin: '8px 0' }} />
         <Text type='secondary' style={{ fontSize: 12 }}>Breakdown</Text>
         <Item label='Previous Due (carry forward)' value={totals.prevDue} subtle />
+        {prevDueMetaLine ? (
+          <Text type='secondary' style={{ fontSize: 11, marginTop: -6, marginBottom: 4 }}>{prevDueMetaLine}</Text>
+        ) : null}
         <Item label='From Job Cards' value={totals.jc} subtle />
         <Item label='From Bookings' value={totals.booking} subtle />
         <Item label='From Minor Sales' value={totals.minor} subtle />
+        <Item label='Total Pending Payments' value={totals.breakdownTotal} />
 
         <Divider style={{ margin: '8px 0' }} />
         <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
@@ -342,7 +382,15 @@ export default function StaffAccountCard() {
             { title:'Mobile', dataIndex:'customerMobile', key:'mobile' },
             { title:'Source', key:'src', render:(_,r)=> `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}` },
             { title:'Amount', key:'amt', align:'right', render:(_,r)=> (txMode==='cash' ? r.cashPending : r.onlinePending).toLocaleString('en-IN') },
-            { title:'UTR', dataIndex:'utr', key:'utr' },
+            { title:'UTR', key:'utr', render:(_,r)=> {
+              // For cash transactions, UTR is not applicable → show blank
+              const mode = String(r?.paymentMode || (txMode||'')).toLowerCase();
+              if (mode === 'cash') return '';
+              const v = r?.utr ?? r?.utrNo ?? r?.reference ?? r?.ref;
+              const s = String(v ?? '').trim();
+              if (!s || s.toLowerCase()==='undefined' || s.toLowerCase()==='null') return '';
+              return s;
+            } },
           ]}
           pagination={{ pageSize: isMobile ? 6 : 10, size: isMobile ? 'small' : 'default' }}
           scroll={{ x: 'max-content' }}

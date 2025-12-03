@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography, Modal, Upload } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography, Modal, Upload, DatePicker } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from 'dayjs';
@@ -36,6 +36,8 @@ export default function Bookings() {
   const [loading, setLoading] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
+  const [quickKey, setQuickKey] = useState(null); // 'today' | 'yesterday' | null
   const [, setUpdating] = useState(null);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
   const [detailModal, setDetailModal] = useState({ open: false, row: null });
@@ -86,7 +88,11 @@ export default function Bookings() {
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
-  const cacheKey = (() => `Bookings:list:${JSON.stringify({ branchFilter, statusFilter, q: debouncedQ||'', page, pageSize, USE_SERVER_PAG })}`)();
+  const cacheKey = (() => {
+    const start = dateRange && dateRange[0] ? dateRange[0].startOf('day').valueOf() : '';
+    const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
+    return `Bookings:list:${JSON.stringify({ branchFilter, statusFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
+  })();
 
   useEffect(() => {
     try {
@@ -122,6 +128,10 @@ export default function Bookings() {
           branch: branchFilter !== 'all' ? branchFilter : '',
           status: statusFilter !== 'all' ? statusFilter : '',
         };
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          filters.start = dateRange[0].startOf('day').valueOf();
+          filters.end = dateRange[1].endOf('day').valueOf();
+        }
         const payload = USE_SERVER_PAG
           ? { ...base, page, pageSize, ...filters, ...(SECRET ? { secret: SECRET } : {}) }
           : (SECRET ? { ...base, secret: SECRET } : base);
@@ -194,16 +204,42 @@ export default function Bookings() {
   }, [rows]);
 
   const filtered = useMemo(() => {
+    const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     if (USE_SERVER_PAG) {
-      return rows.slice().sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
+      const scoped = rows.filter((r) => {
+        if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+          if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        }
+        if (branchFilter !== "all" && r.branch !== branchFilter) return false;
+        if (statusFilter !== "all" && (String(r.status || "").toLowerCase() !== statusFilter)) return false;
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          const start = dateRange[0].startOf('day').valueOf();
+          const end = dateRange[1].endOf('day').valueOf();
+          const t = r.tsMs ?? parseTsMs(r.ts);
+          if (!t || t < start || t > end) return false;
+        }
+        if (debouncedQ) {
+          const s = debouncedQ.toLowerCase();
+          if (![
+            r.bookingId, r.name, r.mobile, r.company, r.model, r.variant, r.chassis, r.branch,
+          ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
+        }
+        return true;
+      });
+      return scoped.slice().sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
     }
     const list = rows.filter((r) => {
-      const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
       if (allowedSet.size && !["owner","admin"].includes(userRole)) {
         if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
       }
       if (branchFilter !== "all" && r.branch !== branchFilter) return false;
       if (statusFilter !== "all" && (String(r.status || "").toLowerCase() !== statusFilter)) return false;
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        const start = dateRange[0].startOf('day').valueOf();
+        const end = dateRange[1].endOf('day').valueOf();
+        const t = r.tsMs ?? parseTsMs(r.ts);
+        if (!t || t < start || t > end) return false;
+      }
       if (debouncedQ) {
         const s = debouncedQ.toLowerCase();
         if (![
@@ -213,13 +249,13 @@ export default function Bookings() {
       return true;
     });
     return list.sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
-  }, [rows, branchFilter, statusFilter, debouncedQ, userRole, allowedBranches, USE_SERVER_PAG]);
+  }, [rows, branchFilter, statusFilter, debouncedQ, dateRange, userRole, allowedBranches, USE_SERVER_PAG]);
 
   // Reset page when filters/search change
   useEffect(() => {
     setPage(1);
     setLoadedCount(pageSize);
-  }, [branchFilter, statusFilter, debouncedQ]);
+  }, [branchFilter, statusFilter, debouncedQ, dateRange]);
 
   useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
 
@@ -519,6 +555,14 @@ export default function Bookings() {
           />
           <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 160 }}
                   options={statuses.map(s => ({ value: s, label: s === 'all' ? 'All Statuses' : s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, ' ') }))} />
+          <DatePicker.RangePicker
+            value={dateRange}
+            onChange={(v)=>{ setDateRange(v); setQuickKey(null); }}
+            allowClear
+          />
+          <Button size='small' type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
+          <Button size='small' type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>
+          <Button size='small' onClick={()=>{ setDateRange(null); setQuickKey(null); }}>Clear</Button>
           <Input placeholder="Search name/mobile/booking" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 220 }} />
         </Space>
         <div style={{ flex: 1 }} />
