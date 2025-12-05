@@ -577,7 +577,7 @@ export default function Bookings() {
             options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
             style={{ width: 130 }}
           />)}
-          <Button onClick={() => {
+          <Button loading={loading} onClick={() => {
             // re-run the loader without full page refresh
             const ev = new Event('reload-bookings');
             window.dispatchEvent(ev);

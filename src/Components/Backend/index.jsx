@@ -4,7 +4,6 @@ import InStockUpdate from '../InStockUpdate'
 import StockUpdate from '../StockUpdate'
 import Bookings from '../Bookings'
 import Quotations from '../Quotations'
-import Quotation from '../Quotation'
 import Jobcards from '../Jobcards'
 import Branches from '../Admin/Branches'
 import Announcements from '../Announcements'
@@ -36,7 +35,6 @@ export default function Backend() {
   ) : null
   const items = [
     // 1) Quotation (form), 2) Quotations (list), 3) Job Cards, 4) Bookings
-    { key: 'quotation', label: 'Quotation', children: <Quotation /> },
     { key: 'quotations', label: 'Quotations', children: <Quotations /> },
     { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },

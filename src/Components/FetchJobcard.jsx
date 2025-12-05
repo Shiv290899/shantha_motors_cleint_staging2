@@ -31,6 +31,7 @@ export default function FetchJobcard({
   setFollowUpEnabled,
   setFollowUpAt,
   setFollowUpNotes,
+  setPostServiceLock,
 }) {
   const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
   const [open, setOpen] = useState(false);
@@ -120,6 +121,43 @@ export default function FetchJobcard({
     return d.isValid() ? d : dayjs(0);
   };
 
+  const buildPostLockState = (payloadMaybe, valuesMaybe) => {
+    const p = (payloadMaybe && payloadMaybe.payload) ? payloadMaybe.payload : (payloadMaybe || {});
+    const v = valuesMaybe || payloadMaybe?._values || payloadMaybe?.values || {};
+    const postAt =
+      p?.postServiceAt ||
+      p?.postService_at ||
+      p?.formValues?.postServiceAt ||
+      p?.formValues?.postService_at ||
+      v?.Post_Service_At ||
+      v?.Post_Service_at ||
+      v?.Post_Service ||
+      "";
+    const mobileFromPayload =
+      p?.formValues?.custMobile ||
+      p?.custMobile ||
+      v?.Mobile ||
+      v?.["Mobile Number"] ||
+      v?.Phone ||
+      v?.["Phone Number"] ||
+      "";
+    const mobile10 = tenDigits(mobileFromPayload);
+    const locked = Boolean(p?.postServiceLogged) || Boolean(postAt);
+    return {
+      locked,
+      at: postAt || null,
+      mobile: mobile10 || null,
+      amount: p?.postServiceAmount ?? null,
+      mode: p?.postServiceMode || p?.paymentMode || null,
+    };
+  };
+
+  const updatePostLock = (payloadMaybe, valuesMaybe) => {
+    if (!setPostServiceLock) return;
+    const info = buildPostLockState(payloadMaybe, valuesMaybe);
+    setPostServiceLock(info);
+  };
+
   // smarter match: exact → startsWith → contains; ignore case/spaces
   const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, "");
   const chooseBest = (list, val) => {
@@ -185,6 +223,7 @@ export default function FetchJobcard({
         // Normalize rows: merge sheet values into payload.formValues so all fields reflect
         const norm = rows.map((r) => {
           const v = r && r.values ? r.values : {};
+          const postAtFromValues = String(v.Post_Service_At || v.Post_Service_at || v.Post_Service || '').trim();
           const fvFromValues = {
             jcNo: String(v['JC No.'] || ''),
             branch: String(v.Branch || ''),
@@ -204,9 +243,26 @@ export default function FetchJobcard({
             // Prefer payload values (they represent what the app saved),
             // fill only missing keys from the sheet values
             const merged = { ...fvFromValues, ...(p.formValues || {}) };
-            return { payload: { ...p, formValues: merged } };
+            return {
+              payload: {
+                ...p,
+                formValues: merged,
+                postServiceAt: p.postServiceAt || p.postService_at || postAtFromValues || undefined,
+                postServiceLogged: p.postServiceLogged || Boolean(p.postServiceAt || p.postService_at || postAtFromValues),
+                _values: v,
+              }
+            };
           }
-          return { payload: { formValues: fvFromValues, labourRows: [], totals: {} } };
+          return {
+            payload: {
+              formValues: fvFromValues,
+              labourRows: [],
+              totals: {},
+              postServiceAt: postAtFromValues || undefined,
+              postServiceLogged: Boolean(postAtFromValues),
+              _values: v,
+            }
+          };
         });
         return { mode: 'webhook', rows: norm };
       } catch (e) {
@@ -298,6 +354,8 @@ export default function FetchJobcard({
       });
     }
 
+    updatePostLock(row);
+
     message.success("Details filled from sheet.");
     setOpen(false);
     setMatches([]);
@@ -355,6 +413,7 @@ export default function FetchJobcard({
           if (typeof fu.notes !== 'undefined') setFollowUpNotes?.(String(fu.notes || ''));
         } catch { /* noop */ }
       }
+      updatePostLock(p);
       message.success('Details filled from saved Job Card.');
       setOpen(false); setMatches([]); setQuery('');
     } catch (e) {

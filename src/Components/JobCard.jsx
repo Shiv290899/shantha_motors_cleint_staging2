@@ -1,8 +1,22 @@
 // JobCard.jsx
 import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
-  Card, Col, DatePicker, Form, Input,
-  InputNumber, Row, Typography, message, Select, Button, Segmented, Checkbox, Tooltip, Modal
+  Alert,
+  Card,
+  Col,
+  DatePicker,
+  Form,
+  Input,
+  InputNumber,
+  Row,
+  Typography,
+  message,
+  Select,
+  Button,
+  Segmented,
+  Checkbox,
+  Tooltip,
+  Modal,
 } from "antd";
 import dayjs from "dayjs";
 import { handleSmartPrint } from "../utils/printUtils";
@@ -130,6 +144,8 @@ function buildRows(serviceType, vehicleType) {
 const inr = (n) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 })
     .format(Math.max(0, Math.round(Number(n || 0))));
+
+const POST_LOCK_EMPTY = { locked: false, at: null, mobile: null, amount: null, mode: null };
 
 /** Save JobCard via Apps Script Webhook (proxy through backend to avoid CORS).
  * Optional: if not configured, act as offline success so UI continues (print, etc.).
@@ -370,6 +386,7 @@ export default function JobCard({ initialValues = null } = {}) {
   const [postPay2Mode, setPostPay2Mode] = useState('online'); // default Online
   const [postPay2Amt, setPostPay2Amt] = useState('');
   const [postPay2Utr, setPostPay2Utr] = useState('');
+  const [postServiceLock, setPostServiceLock] = useState(POST_LOCK_EMPTY);
   const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
   const startActionCooldown = (ms = 6000) => {
     const until = Date.now() + ms;
@@ -703,6 +720,15 @@ export default function JobCard({ initialValues = null } = {}) {
     return { labourSub, labourGST, labourDisc, grand };
   }, [labourRows, gstLabour, discounts]);
 
+  const postLockTimeLabel = useMemo(() => {
+    const raw = postServiceLock.at;
+    if (!raw) return "";
+    const d = dayjs(raw);
+    if (d.isValid()) return d.format("DD/MM/YYYY HH:mm");
+    return String(raw);
+  }, [postServiceLock.at]);
+  const isPostLocked = !!postServiceLock.locked;
+
   // --- Post-service live summary (Payable / Collected / Due) ---
   const postCollectedPreview = useMemo(() => {
     const a1 = Number(postPay1Amt || 0) || 0;
@@ -718,6 +744,9 @@ export default function JobCard({ initialValues = null } = {}) {
     const val = e.target.value;
     if (!/^\d*$/.test(val)) return;
     if (val.length > 10) return;
+    if (postServiceLock.locked && postServiceLock.mobile && postServiceLock.mobile !== val) {
+      setPostServiceLock(POST_LOCK_EMPTY);
+    }
     form.setFieldsValue({ custMobile: val });
   };
 
@@ -1078,6 +1107,7 @@ export default function JobCard({ initialValues = null } = {}) {
         setFollowUpEnabled(false);
         setFollowUpAt(null);
         setFollowUpNotes('');
+        setPostServiceLock(POST_LOCK_EMPTY);
         // Recompute button enablement for new form
         recomputeReady();
         message.success('Ready for the next Job Card');
@@ -1189,6 +1219,7 @@ export default function JobCard({ initialValues = null } = {}) {
                 setFollowUpEnabled={setFollowUpEnabled}
                 setFollowUpAt={setFollowUpAt}
                 setFollowUpNotes={setFollowUpNotes}
+                setPostServiceLock={setPostServiceLock}
               />
             </div>
           </div>
@@ -1381,6 +1412,16 @@ export default function JobCard({ initialValues = null } = {}) {
             </Row>
           </Card>
 
+          {isPostLocked && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginTop: 12 }}
+              message="Post-service already completed"
+              description={`Service & labour editing is locked${postLockTimeLabel ? ` (completed on ${postLockTimeLabel})` : ""}. Enter a different mobile number to start a new job card.`}
+            />
+          )}
+
           {/* Service */}
           <Card size="small" bordered style={{ marginTop: 12 }} title="Service">
             <Row gutter={[12, 8]}>
@@ -1394,6 +1435,7 @@ export default function JobCard({ initialValues = null } = {}) {
                     options={serviceOptions}
                     value={serviceTypeLocal ? [serviceTypeLocal] : []}
                     onChange={handleServiceCheckbox}
+                    disabled={isPostLocked}
                   />
                 </Form.Item>
               </Col>
@@ -1410,6 +1452,7 @@ export default function JobCard({ initialValues = null } = {}) {
                       block
                       options={VEHICLE_TYPES}
                       value={vehicleTypeLocal || undefined}
+                      disabled={isPostLocked}
                       onChange={(val) => {
                         setVehicleTypeLocal(val);
                         form.setFieldsValue({ vehicleType: val });
@@ -1440,6 +1483,7 @@ export default function JobCard({ initialValues = null } = {}) {
                       className="blue-segmented"
                       block
                       options={["No", "Yes"]}
+                      disabled={isPostLocked}
                       onChange={(val) => {
                         form.setFieldsValue({ floorMat: val });
                         recomputeReady(); // ★
@@ -1451,7 +1495,7 @@ export default function JobCard({ initialValues = null } = {}) {
 
               <Col xs={24} md={8}>
                 <Form.Item label="Fuel Level" name="fuelLevel">
-                  <Segmented className="blue-segmented" block options={FUEL_LEVELS} />
+                  <Segmented className="blue-segmented" block options={FUEL_LEVELS} disabled={isPostLocked} />
                 </Form.Item>
               </Col>
             </Row>
@@ -1476,7 +1520,7 @@ export default function JobCard({ initialValues = null } = {}) {
                       <Row key={key} gutter={8} align="middle" style={{ marginBottom: 6 }}>
                         <Col span={12}>
                           <Form.Item {...rest} name={[name, "desc"]} rules={[{ required: true }]}>
-                            <Input placeholder="Labour description" />
+                            <Input placeholder="Labour description" disabled={isPostLocked} />
                           </Form.Item>
                         </Col>
                         <Col span={4}>
@@ -1486,17 +1530,17 @@ export default function JobCard({ initialValues = null } = {}) {
                             initialValue={1}
                             rules={[{ required: true }]}
                           >
-                            <InputNumber min={1} style={{ width: "100%" }} />
+                            <InputNumber min={1} style={{ width: "100%" }} disabled={isPostLocked} />
                           </Form.Item>
                         </Col>
                         <Col span={4}>
                           <Form.Item {...rest} name={[name, "rate"]} rules={[{ required: true }]}>
-                            <InputNumber min={0} style={{ width: "100%" }} />
+                            <InputNumber min={0} style={{ width: "100%" }} disabled={isPostLocked} />
                           </Form.Item>
                         </Col>
                         <Col span={4} style={{ textAlign: "right" }}>
                           <Text>{inr(amt)}</Text>
-                          <Button type="link" danger onClick={() => remove(name)} style={{ paddingLeft: 8 }}>
+                          <Button type="link" danger onClick={() => remove(name)} style={{ paddingLeft: 8 }} disabled={isPostLocked}>
                             Remove
                           </Button>
                         </Col>
@@ -1504,7 +1548,7 @@ export default function JobCard({ initialValues = null } = {}) {
                     );
                   })}
 
-                  <Button onClick={() => add({ qty: 1 })}>Add labour</Button>
+                  <Button onClick={() => add({ qty: 1 })} disabled={isPostLocked}>Add labour</Button>
                 </>
               )}
             </Form.List>
@@ -1517,13 +1561,13 @@ export default function JobCard({ initialValues = null } = {}) {
               <div style={{ textAlign: "right" }}>{inr(totals.labourSub)}</div>
 
               <Form.Item label="GST % on Labour" name="gstLabour" style={{ marginBottom: 0 }}>
-                <InputNumber min={0} max={28} />
+                <InputNumber min={0} max={28} disabled={isPostLocked} />
               </Form.Item>
               <div style={{ textAlign: "right" }}>{inr(totals.labourGST)}</div>
 
               <div>Discount (Labour)</div>
               <Form.Item name={["discounts", "labour"]} style={{ marginBottom: 0 }}>
-                <InputNumber min={0} />
+                <InputNumber min={0} disabled={isPostLocked} />
               </Form.Item>
 
               <div style={{ fontWeight: 700 }}>Grand Total</div>

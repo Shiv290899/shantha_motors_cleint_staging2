@@ -369,7 +369,7 @@ export default function Jobcards() {
             options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
             style={{ width: 130 }}
           />)}
-          <Button onClick={() => {
+          <Button loading={loading} onClick={() => {
             const ev = new Event('reload-jobcards');
             window.dispatchEvent(ev);
           }}>Refresh</Button>

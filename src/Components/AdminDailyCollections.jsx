@@ -180,10 +180,33 @@ export default function AdminDailyCollections() {
 
   // (Removed DailyCollections date-based summary calculations)
 
-  
+
   // (Removed DailyCollections edit/settle helpers)
 
   // (No DailyCollections columns in ledger-only mode)
+
+  const num0 = (v) => Number(v || 0) || 0;
+  const deriveAmounts = (row) => {
+    const cashPending = num0(row?.cashPending);
+    const onlinePending = num0(row?.onlinePending);
+    const cashAmount = num0(row?.cashAmount ?? row?.cashPending);
+    const onlineAmount = num0(row?.onlineAmount ?? row?.onlinePending);
+    const cashSettled = Math.max(0, cashAmount - cashPending);
+    const onlineSettled = Math.max(0, onlineAmount - onlinePending);
+    return { cashPending, onlinePending, cashAmount, onlineAmount, cashSettled, onlineSettled };
+  };
+
+  const getDisplayAmounts = (row) => {
+    const a = deriveAmounts(row);
+    return {
+      cash: a.cashAmount,
+      online: a.onlineAmount,
+    };
+  };
+
+  const cashLabel = 'Cash';
+  const onlineLabel = 'Online';
+  const totalLabel = 'Total Amount';
 
   // Ledger table setup
   const fmtLocalShort = (raw) => {
@@ -208,8 +231,8 @@ export default function AdminDailyCollections() {
     { title:'Customer', dataIndex:'customerName', key:'cust' },
     { title:'Mobile', dataIndex:'customerMobile', key:'mob' },
     { title:'Mode', dataIndex:'paymentMode', key:'mode' },
-    { title:'Cash Pending', dataIndex:'cashPending', key:'cp', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
-    { title:'Online Pending', dataIndex:'onlinePending', key:'op', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
+    { title:cashLabel, dataIndex:'cashPending', key:'cp', align:'right', render:(_,r)=> (getDisplayAmounts(r).cash).toLocaleString('en-IN') },
+    { title:onlineLabel, dataIndex:'onlinePending', key:'op', align:'right', render:(_,r)=> (getDisplayAmounts(r).online).toLocaleString('en-IN') },
     { title:'UTR / Ref', dataIndex:'utr', key:'utr', render:(v, r) => {
       // Hide undefined/null or cash-mode references
       const mode = String(r?.paymentMode || '').toLowerCase();
@@ -259,8 +282,9 @@ export default function AdminDailyCollections() {
       if (wantStaffs.size && !wantStaffs.has(lc(s))) return;
       const key = `${lc(b)}|${lc(s)}`;
       const g = groups.get(key) || { branch: b, staff: s, cash:0, online:0 };
-      g.cash += Number(r.cashPending||0)||0;
-      g.online += Number(r.onlinePending||0)||0;
+      const display = getDisplayAmounts(r);
+      g.cash += display.cash;
+      g.online += display.online;
       groups.set(key, g);
     });
     return Array.from(groups.values()).map(g => ({ ...g, total: g.cash + g.online }));
@@ -269,9 +293,9 @@ export default function AdminDailyCollections() {
   const staffAggCols = [
     { title:'Branch', dataIndex:'branch', key:'branch' },
     { title:'Staff', dataIndex:'staff', key:'staff' },
-    { title:'Cash Pending', dataIndex:'cash', key:'cash', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
-    { title:'Online Pending', dataIndex:'online', key:'online', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
-    { title:'Total Pending', dataIndex:'total', key:'total', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
+    { title:cashLabel, dataIndex:'cash', key:'cash', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
+    { title:onlineLabel, dataIndex:'online', key:'online', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
+    { title:totalLabel, dataIndex:'total', key:'total', align:'right', render:(v)=> (Number(v||0)).toLocaleString('en-IN') },
   ];
 
   const staffAggTotals = useMemo(() => staffAgg.reduce((a,r)=>{
@@ -305,8 +329,16 @@ export default function AdminDailyCollections() {
   const selected = useMemo(() => {
     const set = new Set(selectedKeys);
     const rows = ledgerRowsFiltered.filter(r => set.has(r.id));
-    const cash = rows.reduce((a,r)=>a+(Number(r.cashPending||0)||0), 0);
-    const on = rows.reduce((a,r)=>a+(Number(r.onlinePending||0)||0), 0);
+    const cash = rows.reduce((a,r)=>a+(getDisplayAmounts(r).cash||0), 0);
+    const on = rows.reduce((a,r)=>a+(getDisplayAmounts(r).online||0), 0);
+    return { cash, online: on };
+  }, [selectedKeys, ledgerRowsFiltered]);
+
+  const selectedPending = useMemo(() => {
+    const set = new Set(selectedKeys);
+    const rows = ledgerRowsFiltered.filter(r => set.has(r.id));
+    const cash = rows.reduce((a,r)=>a+(deriveAmounts(r).cashPending||0), 0);
+    const on = rows.reduce((a,r)=>a+(deriveAmounts(r).onlinePending||0), 0);
     return { cash, online: on };
   }, [selectedKeys, ledgerRowsFiltered]);
 
@@ -365,15 +397,15 @@ export default function AdminDailyCollections() {
           <div style={{fontSize:22,fontWeight:800}}>{(staffAggTotals.count||0)}</div>
         </div>
         <div style={{padding:12,borderRadius:10,background:'linear-gradient(135deg,#e8f5e9,#c8e6c9)'}}>
-          <div style={{fontSize:12,opacity:0.8}}>Cash Pending</div>
+          <div style={{fontSize:12,opacity:0.8}}>{cashLabel}</div>
           <div style={{fontSize:22,fontWeight:800}}>{(Number(staffAggTotals.cash||0)).toLocaleString('en-IN')}</div>
         </div>
         <div style={{padding:12,borderRadius:10,background:'linear-gradient(135deg,#e3f2fd,#bbdefb)'}}>
-          <div style={{fontSize:12,opacity:0.8}}>Online Pending</div>
+          <div style={{fontSize:12,opacity:0.8}}>{onlineLabel}</div>
           <div style={{fontSize:22,fontWeight:800}}>{(Number(staffAggTotals.online||0)).toLocaleString('en-IN')}</div>
         </div>
         <div style={{padding:12,borderRadius:10,background:'linear-gradient(135deg,#fff3e0,#ffe0b2)'}}>
-          <div style={{fontSize:12,opacity:0.8}}>Total Pending</div>
+          <div style={{fontSize:12,opacity:0.8}}>{totalLabel}</div>
           <div style={{fontSize:22,fontWeight:800}}>{(Number(staffAggTotals.total||0)).toLocaleString('en-IN')}</div>
         </div>
       </div>
@@ -392,12 +424,12 @@ export default function AdminDailyCollections() {
       <>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12, flexWrap:'wrap', gap:8 }}>
           <div style={{ display:'flex', gap:16, alignItems:'center' }}>
-            <div><strong>Selected Cash:</strong> {selected.cash.toLocaleString('en-IN')}</div>
-            <div><strong>Selected Online:</strong> {selected.online.toLocaleString('en-IN')}</div>
+            <div><strong>Selected {cashLabel}:</strong> {selected.cash.toLocaleString('en-IN')}</div>
+            <div><strong>Selected {onlineLabel}:</strong> {selected.online.toLocaleString('en-IN')}</div>
           </div>
           <Space>
-            <Button type='primary' disabled={selected.cash<=0 || !!bulkBusyMode} loading={bulkBusyMode==='cash'} onClick={async ()=>{ setBulkBusyMode('cash'); try { await settleRows(['cash'], selectedKeys); } finally { setBulkBusyMode(''); } }}>Collect Cash</Button>
-            <Button type='primary' disabled={selected.online<=0 || !!bulkBusyMode} loading={bulkBusyMode==='online'} onClick={async ()=>{ setBulkBusyMode('online'); try { await settleRows(['online'], selectedKeys); } finally { setBulkBusyMode(''); } }}>Verify Online</Button>
+            <Button type='primary' disabled={selectedPending.cash<=0 || !!bulkBusyMode} loading={bulkBusyMode==='cash'} onClick={async ()=>{ setBulkBusyMode('cash'); try { await settleRows(['cash'], selectedKeys); } finally { setBulkBusyMode(''); } }}>Collect Cash</Button>
+            <Button type='primary' disabled={selectedPending.online<=0 || !!bulkBusyMode} loading={bulkBusyMode==='online'} onClick={async ()=>{ setBulkBusyMode('online'); try { await settleRows(['online'], selectedKeys); } finally { setBulkBusyMode(''); } }}>Verify Online</Button>
           </Space>
         </div>
         <Table

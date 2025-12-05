@@ -512,6 +512,7 @@ export default function BookingForm({
   // Auto-fill Affidavit Charges by company
   useEffect(() => {
     try {
+      if (paymentsOnlyMode) return; // preserve fetched values in payments-only edit mode
       if (addressProofMode !== "additional") return;
       const comp = String(
         selectedCompany || form.getFieldValue("company") || ""
@@ -527,7 +528,7 @@ export default function BookingForm({
     } catch {
       // ignore
     }
-  }, [addressProofMode, selectedCompany, form]);
+  }, [addressProofMode, selectedCompany, paymentsOnlyMode, form]);
 
   // Clear payment references when the corresponding mode is not online
   useEffect(() => {

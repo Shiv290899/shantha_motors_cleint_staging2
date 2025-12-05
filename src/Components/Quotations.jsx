@@ -356,7 +356,7 @@ export default function Quotations() {
             options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
             style={{ width: 130 }}
           />)}
-          <Button onClick={() => {
+          <Button loading={loading} onClick={() => {
             const ev = new Event('reload-quotations');
             window.dispatchEvent(ev);
           }}>Refresh</Button>
