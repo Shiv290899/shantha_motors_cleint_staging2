@@ -19,7 +19,37 @@ const DEFAULT_HEADERS = [
   'Expected_Delivery_Date',
   'Payload',
   'Payment_Mode',
-  'JC No.'
+  'JC No.',
+  'RemarkLevel',
+  'RemarkText'
+];
+
+// Append-only service history (separate sheet; jcNo is idempotency key)
+const SERVICE_HISTORY_SHEET = 'ServiceHistory';
+const SERVICE_HISTORY_HEADERS = [
+  'Created At',
+  'Post Service At',
+  'JC No',
+  'Reg No',
+  'Mobile',
+  'Customer Name',
+  'Branch',
+  'Service Type',
+  'Vehicle Type',
+  'Model',
+  'Colour',
+  'Mechanic',
+  'Executive',
+  'Service No',
+  'KM',
+  'Fuel Level',
+  'Payment Mode',
+  'Collected Amount',
+  'Totals Grand',
+  'Work Done',
+  'Remarks',
+  'Payments JSON',
+  'Payload JSON'
 ];
 
 /* ============== DAILY COLLECTIONS (MASTER) CONFIG ============== */
@@ -73,6 +103,11 @@ function handle_(e){
       const mode = ((e && e.parameter && e.parameter.mode) || body.mode || 'jc').toLowerCase();
       const query = String(((e && e.parameter && e.parameter.query) || body.query || ''));
       return json_( { success:true, rows: search_(mode, query) } );
+    }
+
+    if (action === 'getservicehistory') {
+      const params = Object.assign({}, e && e.parameter ? e.parameter : {}, body);
+      return json_(getServiceHistory_(params));
     }
 
     if (action === 'save') {
@@ -230,6 +265,7 @@ function sh_(){
 }
 
 function norm_(s){ return String(s || '').trim().toLowerCase(); }
+function normReg_(s){ return String(s || '').toUpperCase().replace(/\s+/g,''); }
 
 function headerIx_(s){
   const width = Math.max(s.getLastColumn(), DEFAULT_HEADERS.length);
@@ -265,6 +301,19 @@ function headerIx_(s){
     idxPostAt: pos(/^(post[\s_]*service[\s_]*at|post[\s_]serviced[\s_]at)$/i),
     idxUTR: pos(/^(utr(\sno|\snumber)?)/i),
   };
+}
+
+function ensureRemarkCols_(s, info){
+  let ix = info || headerIx_(s);
+  if (ix.idxRemarkLevel < 0) {
+    s.getRange(1, ix.headers.length + 1).setValue('RemarkLevel');
+    ix = headerIx_(s);
+  }
+  if (ix.idxRemarkText < 0) {
+    s.getRange(1, ix.headers.length + 1).setValue('RemarkText');
+    ix = headerIx_(s);
+  }
+  return ix;
 }
 
 function ensureCol_(s, name){
@@ -343,6 +392,273 @@ function computeMode_(d){
     if (d.formValues && d.formValues.paymentMode) return String(d.formValues.paymentMode).toLowerCase();
     return '';
   }catch(_){ return ''; }
+}
+
+/* ============ Service History (append-only; keyed by jcNo) ============ */
+function serviceHistorySheet_(){
+  const ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(SERVICE_HISTORY_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(SERVICE_HISTORY_SHEET);
+    sh.appendRow(SERVICE_HISTORY_HEADERS);
+  }
+  const width = Math.max(sh.getLastColumn(), SERVICE_HISTORY_HEADERS.length);
+  const first = sh.getRange(1,1,1,width).getValues()[0];
+  const hasAny = first.some(v => String(v||'').trim());
+  if (!hasAny) {
+    sh.getRange(1,1,1,SERVICE_HISTORY_HEADERS.length).setValues([SERVICE_HISTORY_HEADERS]);
+  }
+  return sh;
+}
+
+function serviceHistoryIx_(headers){
+  const norm = (s) => String(s||'').trim().toLowerCase();
+  const H = headers.map(norm);
+  const find = (name) => H.indexOf(norm(name));
+  return {
+    CreatedAt: find('created at'),
+    PostAt: find('post service at'),
+    JCNo: find('jc no'),
+    RegNo: find('reg no'),
+    Mobile: find('mobile'),
+    CustName: find('customer name'),
+    Branch: find('branch'),
+    ServiceType: find('service type'),
+    VehicleType: find('vehicle type'),
+    Model: find('model'),
+    Colour: find('colour'),
+    Mechanic: find('mechanic'),
+    Executive: find('executive'),
+    ServiceNo: find('service no'),
+    KM: find('km'),
+    Fuel: find('fuel level'),
+    PaymentMode: find('payment mode'),
+    CollectedAmount: find('collected amount'),
+    TotalsGrand: find('totals grand'),
+    WorkDone: find('work done'),
+    Remarks: find('remarks'),
+    CustObs: find('customer observation'),
+    PaymentsJson: find('payments json'),
+    PayloadJson: find('payload json'),
+    width: headers.length
+  };
+}
+
+function ensureServiceHistoryCol_(sh, name){
+  const width = Math.max(sh.getLastColumn(), SERVICE_HISTORY_HEADERS.length);
+  const headers = sh.getRange(1,1,1,width).getValues()[0];
+  if (headers.indexOf(name) >= 0) return;
+  sh.getRange(1, headers.length + 1).setValue(name);
+}
+
+function upsertServiceHistory_(d){
+  try{
+    const jcNo = String(d?.jcNo || d?.formValues?.jcNo || d?.payload?.formValues?.jcNo || '').trim();
+    if (!jcNo) return { success:false, message:'jcNo missing' };
+    const sh = serviceHistorySheet_();
+    ensureServiceHistoryCol_(sh, 'Customer Observation');
+    const width = Math.max(sh.getLastColumn(), SERVICE_HISTORY_HEADERS.length);
+    const headers = sh.getRange(1,1,1,width).getValues()[0];
+    const I = serviceHistoryIx_(headers);
+    const last = sh.getLastRow();
+    const rows = (last > 1) ? sh.getRange(2,1,last-1,I.width).getValues() : [];
+
+    const regNo = normReg_(d?.regNo || d?.formValues?.regNo || d?.payload?.formValues?.regNo || d?.payload?.regNo || '');
+    const mobile = ten_(d?.mobile || d?.formValues?.custMobile || d?.payload?.formValues?.custMobile || d?.payload?.mobile || '');
+    const custName = d?.custName || d?.formValues?.custName || d?.payload?.formValues?.custName || '';
+    const branch = d?.branch || d?.formValues?.branch || d?.payload?.formValues?.branch || '';
+    const serviceType = d?.serviceType || d?.formValues?.serviceType || d?.payload?.formValues?.serviceType || '';
+    const vehicleType = d?.vehicleType || d?.formValues?.vehicleType || d?.payload?.formValues?.vehicleType || '';
+    const model = d?.model || d?.formValues?.model || d?.payload?.formValues?.model || '';
+    const colour = d?.colour || d?.color || d?.formValues?.colour || d?.formValues?.color || d?.payload?.formValues?.colour || d?.payload?.formValues?.color || '';
+    const mechanic = d?.mechanic || d?.formValues?.mechanic || d?.payload?.formValues?.mechanic || '';
+    const executive = d?.executive || d?.formValues?.executive || d?.payload?.formValues?.executive || '';
+    const km = d?.km || d?.formValues?.km || d?.payload?.formValues?.km || '';
+    const fuelLevel = d?.fuelLevel || d?.formValues?.fuelLevel || d?.payload?.formValues?.fuelLevel || '';
+    const paymentMode = computeMode_(d) || d?.paymentMode || d?.formValues?.paymentMode || d?.payload?.formValues?.paymentMode || '';
+    const amount = computeAmount_(d) || d?.collectedAmount || d?.formValues?.amount || d?.payload?.collectedAmount || d?.payload?.totals?.grand || '';
+    const totalsGrand = d?.totals?.grand || d?.payload?.totals?.grand || amount || '';
+    const postServiceAt = d?.postServiceAt || d?.payload?.postServiceAt || '';
+    const createdAt = d?.createdAt || d?.timestamp || d?.ts || d?.payload?.createdAt || postServiceAt || new Date().toISOString();
+  const remarkText =
+    d?.remark ||
+    d?.remarks ||
+    d?.formValues?.remarks ||
+    d?.payload?.remarks ||
+    (d?.payload?.remark && d.payload.remark.text) ||
+    d?.payload?.formValues?.remarks ||
+    '';
+    const custObs =
+      d?.obs ||
+      d?.formValues?.obs ||
+      d?.payload?.obs ||
+      d?.payload?.formValues?.obs ||
+      '';
+    
+    const paymentsJson = JSON.stringify(d?.payments || d?.payload?.payments || []);
+    const payloadJson = JSON.stringify(d || {});
+    const workDone = Array.isArray(d?.labourRows || d?.payload?.labourRows)
+      ? (d.labourRows || d.payload.labourRows)
+          .map(r => r?.item || r?.Item || r?.Description || r?.desc || '')
+          .filter(Boolean)
+          .join(', ')
+      : '';
+
+    let existing = null;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const jc = String(rows[i][I.JCNo] || '').trim();
+      if (jc && jc.toUpperCase() === jcNo.toUpperCase()) {
+        existing = { row: i + 2, values: rows[i] };
+        break;
+      }
+    }
+    const regCount = regNo ? rows.filter(r => normReg_(r[I.RegNo]) === regNo).length : 0;
+    const serviceNo = existing
+      ? (Number(rows[existing.row - 2][I.ServiceNo]) || regCount || 1)
+      : (regCount + 1);
+
+    const row = new Array(I.width).fill('');
+    const put = (idx, val) => { if (idx >= 0) row[idx] = (val === undefined || val === null) ? '' : val; };
+    put(I.CreatedAt, createdAt);
+    put(I.PostAt, postServiceAt || createdAt);
+    put(I.JCNo, jcNo);
+    put(I.RegNo, regNo);
+    put(I.Mobile, mobile);
+    put(I.CustName, custName);
+    put(I.Branch, branch);
+    put(I.ServiceType, serviceType);
+    put(I.VehicleType, vehicleType);
+    put(I.Model, model);
+    put(I.Colour, colour);
+    put(I.Mechanic, mechanic);
+    put(I.Executive, executive);
+    put(I.ServiceNo, serviceNo);
+    put(I.KM, km);
+    put(I.Fuel, fuelLevel);
+    put(I.PaymentMode, paymentMode);
+    put(I.CollectedAmount, amount);
+    put(I.TotalsGrand, totalsGrand);
+    put(I.WorkDone, workDone);
+    put(I.Remarks, remarkText);
+    put(I.CustObs, custObs);
+    put(I.PaymentsJson, paymentsJson);
+    put(I.PayloadJson, payloadJson);
+
+    if (existing) {
+      sh.getRange(existing.row,1,1,row.length).setValues([row]);
+      return { success:true, updated:true, serviceNo };
+    }
+    sh.appendRow(row);
+    return { success:true, inserted:true, serviceNo };
+  }catch(err){
+    return { success:false, message:String(err) };
+  }
+}
+
+function serviceHistoryRowToObj_(r, I){
+  const payloadRaw = safeJson_(r[I.PayloadJson]) || {};
+  const payments = safeJson_(r[I.PaymentsJson]) || [];
+  const regNo = r[I.RegNo] || '';
+  const jcNo = r[I.JCNo] || '';
+  const mobile = r[I.Mobile] || '';
+  const serviceType = r[I.ServiceType] || '';
+  const model = r[I.Model] || '';
+  const colour = r[I.Colour] || '';
+  const branch = r[I.Branch] || '';
+  const mechanic = r[I.Mechanic] || '';
+  const executive = r[I.Executive] || '';
+  const serviceNo = Number(r[I.ServiceNo] || '') || null;
+  const createdAt = r[I.PostAt] || r[I.CreatedAt] || '';
+  const remarks = r[I.Remarks] || '';
+  const amount = r[I.CollectedAmount] || r[I.TotalsGrand] || '';
+  const paymentMode = r[I.PaymentMode] || '';
+
+  const totals = payloadRaw.totals || {};
+  if (!totals.grand && amount) totals.grand = Number(amount) || amount;
+  payloadRaw.totals = totals;
+  payloadRaw.payments = payloadRaw.payments || payments;
+  const fv = payloadRaw.formValues || {};
+  payloadRaw.formValues = Object.assign({}, fv, {
+    regNo,
+    jcNo,
+    serviceType,
+    model,
+    colour,
+    branch,
+    mechanic,
+    executive,
+    paymentMode,
+    custMobile: mobile,
+    createdAt,
+    serviceNo
+  });
+  payloadRaw.serviceNo = serviceNo;
+
+  return {
+    jcNo,
+    regNo,
+    mobile,
+    serviceType,
+    model,
+    colour,
+    branch,
+    mechanic,
+    executive,
+    amount,
+    paymentMode,
+    serviceNo,
+    createdAt,
+    remarks,
+    totals,
+    payments,
+    payload: payloadRaw,
+    values: {
+      'JC No': jcNo,
+      'Vehicle No': regNo,
+      'Registration Number': regNo,
+      'Service Type': serviceType,
+      'Model': model,
+      'Colour': colour,
+      'Branch': branch,
+      'Mechanic': mechanic,
+      'Executive': executive,
+      'Payment Mode': paymentMode,
+      'Collected Amount': amount,
+      'Created At': createdAt,
+      'Remark Text': remarks,
+      'Service No': serviceNo,
+    }
+  };
+}
+
+function getServiceHistory_(params){
+  const q = String(params && (params.query || params.regNo || params.vehicle || params.mobile || params.number) || '').trim();
+  if (!q) return { success:false, message:'query (vehicle or mobile) is required' };
+  const regQ = normReg_(q);
+  const mobileQ = ten_(q);
+  const sh = serviceHistorySheet_();
+  const width = Math.max(sh.getLastColumn(), SERVICE_HISTORY_HEADERS.length);
+  const headers = sh.getRange(1,1,1,width).getValues()[0];
+  const I = serviceHistoryIx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return { success:true, rows: [] };
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  const matches = rows
+    .filter(r => {
+      const regMatch = regQ ? normReg_(r[I.RegNo]) === regQ : false;
+      const mobileMatch = mobileQ ? ten_(r[I.Mobile]) === mobileQ : false;
+      return regMatch || mobileMatch;
+    })
+    .map(r => serviceHistoryRowToObj_(r, I))
+    .sort((a,b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (ta !== tb) return ta - tb;
+      const sa = Number(a.serviceNo || 0);
+      const sb = Number(b.serviceNo || 0);
+      return sa - sb;
+    });
+  return { success:true, rows: matches };
 }
 
 /** Upsert by mobile (latest row). */
@@ -587,6 +903,18 @@ function postService_(d){
     payload: payload0
   });
 
+  // 1b) Append to ServiceHistory (jcNo idempotent)
+  try {
+    upsertServiceHistory_({
+      ...d,
+      formValues: fv,
+      payload: payload0,
+      totals: { ...(d.totals || {}), grand: amount },
+      collectedAmount: amount,
+      postServiceAt: payload0.postServiceAt || nowIso
+    });
+  } catch (_){}
+
   // 2) Update DailyCollections for this JC amount (with split)
   try {
     const b = String(fv.branch || '').trim();
@@ -674,22 +1002,36 @@ function toRowObject_(row, ix){
 
 // Search by JC or Mobile
 function search_(mode, query){
-  const s = sh_(), ix = headerIx_(s);
+  const s = sh_();
+  const ix = ensureRemarkCols_(s, headerIx_(s));
   const last = s.getLastRow();
   if (last <= 1) return [];
 
   const rows = s.getRange(2,1,last-1,ix.width).getValues();
   const q = String(query || '').trim();
   const q10 = ten_(q);
+  const qReg = normReg_(q);
 
   const out = [];
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
+    const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
 
     let match = false;
     if (mode === 'mobile') {
       const m = ten_(r[ix.idxMobile]);
       match = q10 ? (q10.length < 10 ? m.endsWith(q10) : (m === q10)) : false;
+    } else if (mode === 'reg' || mode === 'vehicle') {
+      const regSheet = ix.idxReg >= 0 ? normReg_(r[ix.idxReg]) : '';
+      const regPayload = normReg_(payload && (
+        payload.regNo ||
+        payload.vehicleNo ||
+        (payload.formValues && payload.formValues.regNo) ||
+        (payload.formValues && payload.formValues.vehicleNo) ||
+        (payload.vehicle && payload.vehicle.regNo) ||
+        (payload.vehicle && payload.vehicle.registrationNumber)
+      ));
+      match = qReg ? (regSheet === qReg || regPayload === qReg) : false;
     } else {
       match = String(r[ix.idxJC] || '').trim() === q;
     }
@@ -838,7 +1180,7 @@ function updateFollowup_(serialNo, patch){
 
 function list_(opts) {
   const s = sh_();
-  const ix = headerIx_(s);
+  let ix = ensureRemarkCols_(s, headerIx_(s));
   const last = s.getLastRow();
   if (last <= 1) return compat_({ ok: true, data: [], total: 0 });
   const rows = s.getRange(2,1,last-1,ix.width).getValues();
@@ -929,7 +1271,8 @@ function list_(opts) {
     slice = filtered;
   }
 
-  const data = slice.map(x => toRowObject_(x.raw, headerIx_(s)));
+  ix = headerIx_(s); // refresh in case columns were added above
+  const data = slice.map(x => toRowObject_(x.raw, ix));
   return compat_({ ok: true, data, rows: data, total });
 }
 
@@ -975,28 +1318,15 @@ function updateRemark_(jcNo, level, text, by) {
   };
   row[ix.idxPayloads[0]] = JSON.stringify(payload);
 
-  var info = headerIx_(s);
-  var headers = info.headers;
+  var info = ensureRemarkCols_(s, headerIx_(s));
   var rl = info.idxRemarkLevel;
   var rt = info.idxRemarkText;
-  if (rl < 0) {
-    rl = headers.length;
-    s.getRange(1, rl + 1).setValue('RemarkLevel');
-    headers = headerIx_(s).headers;
-    rl = headerIx_(s).idxRemarkLevel;
-  }
-  if (rt < 0) {
-    headers = headerIx_(s).headers;
-    rt = headers.length;
-    s.getRange(1, rt + 1).setValue('RemarkText');
-    headers = headerIx_(s).headers;
-    rt = headerIx_(s).idxRemarkText;
-  }
 
   if (rl >= 0) row[rl] = lv.toUpperCase();
   if (rt >= 0) row[rt] = String(text || '').slice(0, 240);
 
-  s.getRange(hit,1,1,Math.max(headerIx_(s).width, row.length)).setValues([row]);
+  var width = Math.max(info.width, row.length);
+  s.getRange(hit,1,1,width).setValues([row]);
 
   return { success:true, updated:true, row: hit, jcNo: jcNo, level: lv, text: String(text || '') };
 }

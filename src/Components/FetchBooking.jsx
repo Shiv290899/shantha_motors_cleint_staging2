@@ -1,6 +1,7 @@
 // FetchBooking.jsx
 import React, { useState } from "react";
 import {
+  Alert,
   Button,
   Modal,
   Input,
@@ -32,20 +33,110 @@ export default function FetchBooking({
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
+  const [notFoundText, setNotFoundText] = useState("");
 
   const tenDigits = (x) =>
     String(x || "").replace(/\D/g, "").slice(-10);
+  const cleanBookingId = (x) =>
+    String(x || "").toUpperCase().replace(/\s+/g, "");
+  const normalizeReg = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const VEH_RX = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
+  const isVehiclePartial = (val) => {
+    const v = normalizeReg(val);
+    if (v.length > 10) return false;
+    if (!/^[A-Z0-9]*$/.test(v)) return false;
+    const stages = [
+      /^[A-Z]{0,2}$/,
+      /^[A-Z]{2}\d{0,2}$/,
+      /^[A-Z]{2}\d{2}[A-Z]{0,2}$/,
+      /^[A-Z]{2}\d{2}[A-Z]{2}\d{0,4}$/,
+    ];
+    return stages.some((rx) => rx.test(v));
+  };
 
-  const fetchRows = async () => {
+  const showNotFoundModal = () => {
+    const pretty =
+      mode === "mobile"
+        ? tenDigits(query) || String(query || "").trim()
+        : String(query || "").trim();
+    const txt =
+      pretty
+        ? `The ${
+            mode === "mobile"
+              ? "mobile number"
+              : mode === "vehicle"
+              ? "vehicle number"
+              : "booking ID"
+          } "${pretty}" is not in our records.`
+        : "No matching booking found in our records.";
+    setNotFoundText(txt);
+    Modal.warning({
+      centered: true,
+      title: "No booking found",
+      content: txt,
+      okText: "Got it",
+    });
+  };
+
+  const fetchRows = async (queryOverride) => {
     if (!webhookUrl) throw new Error("Booking webhook URL not configured");
-    const payload = { action: "search", mode, query: String(query || "") };
-    const resp = await saveBookingViaWebhook({
+    const qStr = String(queryOverride ?? query ?? "");
+    const payloadBase = { action: "search", mode, query: qStr };
+    const primary = await saveBookingViaWebhook({
       webhookUrl,
       method: "GET",
-      payload,
+      payload: payloadBase,
     });
-    const j = resp?.data || resp;
-    const rows = Array.isArray(j?.rows) ? j.rows : [];
+    let rows = Array.isArray((primary?.data || primary)?.rows) ? (primary?.data || primary).rows : [];
+    // Try alternate mode for vehicle (some scripts expect 'reg')
+    if (!rows.length && mode === "vehicle") {
+      const alt = await saveBookingViaWebhook({
+        webhookUrl,
+        method: "GET",
+        payload: { ...payloadBase, mode: "reg" },
+      }).catch(() => null);
+      const altRows = Array.isArray((alt?.data || alt)?.rows) ? (alt?.data || alt).rows : [];
+      rows = altRows;
+    }
+    // Final fallback: list and filter by vehicle when searching by vehicle
+    if (!rows.length && mode === "vehicle") {
+      try {
+        const listResp = await saveBookingViaWebhook({
+          webhookUrl,
+          method: "GET",
+          payload: { action: "list" },
+        });
+        const lj = listResp?.data || listResp;
+        const dataArr = Array.isArray(lj?.rows) ? lj.rows : Array.isArray(lj?.data) ? lj.data : [];
+        const qreg = normalizeReg(qStr);
+        const filtered = dataArr.filter((r) => {
+          const vals = r?.values || {};
+          const payload = r?.payload || r || {};
+          const regFromVals = normalizeReg(
+            vals["Vehicle No"] ||
+              vals.Vehicle_No ||
+              vals.RegNo ||
+              vals["Reg No"] ||
+              vals["Registration Number"] ||
+              vals["Vehicle Number"] ||
+              ""
+          );
+          const regFromPayload =
+            normalizeReg(payload.vehicle?.regNo || payload.vehicle?.registrationNumber || payload.vehicleNo || payload.regNo || payload.registrationNumber || "");
+          const regFromRaw = normalizeReg(
+            typeof payload.rawPayload === "string" ? payload.rawPayload : ""
+          );
+          return (
+            (qreg && regFromVals === qreg) ||
+            (qreg && regFromPayload === qreg) ||
+            (qreg && regFromRaw.includes(qreg))
+          );
+        });
+        rows = filtered;
+      } catch {
+        // ignore list failure
+      }
+    }
     return rows;
   };
 
@@ -164,19 +255,45 @@ export default function FetchBooking({
   };
 
   const runSearch = async () => {
-    const q = String(query || "").trim();
-    if (!q) {
+    const raw = String(query || "").trim();
+    if (!raw) {
       message.warning(
-        mode === "mobile" ? "Enter Mobile" : "Enter Booking ID"
+        mode === "mobile"
+          ? "Enter 10-digit Mobile"
+          : mode === "vehicle"
+          ? "Enter vehicle no. (KA03AB1234)"
+          : "Enter Booking ID"
       );
       return;
     }
+    let qNorm = raw;
+    if (mode === "mobile") {
+      const digits = tenDigits(raw);
+      if (digits.length !== 10) {
+        message.error("Enter a valid 10-digit mobile number.");
+        return;
+      }
+      qNorm = digits;
+      setQuery(digits);
+    } else if (mode === "vehicle") {
+      const reg = normalizeReg(raw);
+      if (!VEH_RX.test(reg)) {
+        message.error("Enter vehicle as KA03AB1234.");
+        return;
+      }
+      qNorm = reg;
+      setQuery(reg);
+    } else {
+      qNorm = cleanBookingId(raw);
+      setQuery(qNorm);
+    }
+    setNotFoundText("");
     setLoading(true);
     try {
-      const rows = await fetchRows();
+      const rows = await fetchRows(qNorm);
       const items = rows.map((r) => ({ payload: payloadFromRow(r) }));
       if (!items.length) {
-        message.warning("No matching booking found.");
+        showNotFoundModal();
         setMatches([]);
         return;
       }
@@ -246,7 +363,10 @@ export default function FetchBooking({
   return (
     <>
       <Button
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setNotFoundText("");
+          setOpen(true);
+        }}
         style={{
           background: "#2ECC71",
           borderColor: "#2ECC71",
@@ -261,6 +381,7 @@ export default function FetchBooking({
         onCancel={() => {
           setOpen(false);
           setMatches([]);
+          setNotFoundText("");
         }}
         footer={[
           <Button
@@ -268,6 +389,7 @@ export default function FetchBooking({
             onClick={() => {
               setOpen(false);
               setMatches([]);
+              setNotFoundText("");
             }}
           >
             Close
@@ -285,22 +407,48 @@ export default function FetchBooking({
         <Space direction="vertical" style={{ width: "100%" }}>
           <Radio.Group
             value={mode}
-            onChange={(e) => setMode(e.target.value)}
+            onChange={(e) => {
+              setMode(e.target.value);
+              setQuery("");
+            }}
           >
             <Radio.Button value="mobile">By Mobile</Radio.Button>
             <Radio.Button value="booking">By Booking ID</Radio.Button>
+            <Radio.Button value="vehicle">By Vehicle</Radio.Button>
           </Radio.Group>
           <Input
             placeholder={
               mode === "mobile"
                 ? "Enter 10-digit Mobile"
+                : mode === "vehicle"
+                ? "Enter Vehicle No (KA03AB1234)"
                 : "Enter Booking ID"
             }
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onPressEnter={runSearch}
-            allowClear
-          />
+            inputMode={mode === "mobile" ? "numeric" : "text"}
+            onChange={(e) => {
+              const val = e.target.value || "";
+              if (mode === "mobile") {
+                const digits = val.replace(/\D/g, "").slice(0, 10);
+                setQuery(digits);
+              } else if (mode === "vehicle") {
+                const reg = val.toUpperCase().replace(/[^A-Z0-9]/g, "");
+                if (!isVehiclePartial(reg)) return;
+                setQuery(reg);
+              } else {
+                setQuery(cleanBookingId(val));
+              }
+            }}
+          onPressEnter={runSearch}
+          allowClear
+        />
+          {notFoundText && (
+            <Alert
+              type="warning"
+              showIcon
+              message={notFoundText}
+            />
+          )}
           {loading && <Spin />}
           {matches.length > 1 && (
             <List

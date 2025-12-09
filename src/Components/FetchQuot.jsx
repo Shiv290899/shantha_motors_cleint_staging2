@@ -2,7 +2,7 @@
 import React, { useState } from "react";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
-import { Button, Modal, Input, List, Space, Spin, message } from "antd";
+import { Alert, Button, Modal, Input, List, Space, Spin, message } from "antd";
 
 /**
  * Props:
@@ -40,10 +40,25 @@ export default function FetchQuot({
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
+  const [notFoundText, setNotFoundText] = useState("");
 
   // ---------------- helpers ----------------
   const tenDigits = (x) =>
     String(x || "").replace(/\D/g, "").replace(/^0+/, "").slice(-10);
+
+  const showNotFoundModal = () => {
+    const pretty = tenDigits(query) || String(query || "").trim();
+    const txt = pretty
+      ? `The mobile number "${pretty}" is not in our quotation records.`
+      : "No matching record found in our quotation records.";
+    setNotFoundText(txt);
+    Modal.warning({
+      centered: true,
+      title: "No quotation found",
+      content: txt,
+      okText: "Got it",
+    });
+  };
 
   // CSV parsing helpers are removed; webhook is the only source
 
@@ -197,9 +212,12 @@ export default function FetchQuot({
 
   // ---------------- search ----------------
   const runSearch = async () => {
-    const q = String(query || "").trim();
-    if (!q) { message.warning("Enter a mobile number."); return; }
+    const raw = String(query || "").trim();
+    const digits = tenDigits(raw);
+    if (!digits || digits.length !== 10) { message.warning("Enter a valid 10-digit mobile number."); return; }
+    setQuery(digits);
 
+    setNotFoundText("");
     setLoading(true);
     try {
       const result = await fetchRows();
@@ -207,7 +225,7 @@ export default function FetchQuot({
 
       const rows = (result.rows || []).map(r => ({ payload: payloadFromWebhook(r) }));
       if (!rows.length) {
-        message.warning("No matching record found.");
+        showNotFoundModal();
         setMatches([]);
         return;
       }
@@ -261,7 +279,13 @@ export default function FetchQuot({
 
   return (
     <>
-      <Button {...buttonProps} onClick={() => setOpen(true)}>
+      <Button
+        {...buttonProps}
+        onClick={() => {
+          setNotFoundText("");
+          setOpen(true);
+        }}
+      >
         {buttonText}
       </Button>
 
@@ -271,6 +295,7 @@ export default function FetchQuot({
         onCancel={() => {
           setOpen(false);
           setMatches([]);
+          setNotFoundText("");
         }}
         footer={[
           <Button
@@ -278,6 +303,7 @@ export default function FetchQuot({
             onClick={() => {
               setOpen(false);
               setMatches([]);
+              setNotFoundText("");
             }}
           >
             Close
@@ -291,10 +317,19 @@ export default function FetchQuot({
           <Input
             placeholder={"Enter Mobile (10-digit or last few digits)"}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onPressEnter={runSearch}
-            allowClear
-          />
+          inputMode="numeric"
+          onChange={(e) => setQuery(tenDigits(e.target.value))}
+          onPressEnter={runSearch}
+          allowClear
+        />
+
+          {notFoundText && (
+            <Alert
+              type="warning"
+              showIcon
+              message={notFoundText}
+            />
+          )}
 
           {loading && <Spin />}
 

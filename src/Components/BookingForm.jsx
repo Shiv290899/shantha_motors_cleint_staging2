@@ -23,6 +23,8 @@ import {
 import { InboxOutlined, CreditCardOutlined, PrinterOutlined } from "@ant-design/icons";
 import { listCurrentStocksPublic } from "../apiCalls/stocks";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
+import { listBranchesPublic } from "../apiCalls/branches";
+import { listUsersPublic } from "../apiCalls/adminUsers";
 import BookingPrintSheet from "./BookingPrintSheet";
 import FetchBooking from "./FetchBooking";
 import { handleSmartPrint } from "../utils/printUtils";
@@ -32,6 +34,9 @@ const { Title, Text } = Typography;
 const { Dragger } = Upload;
 const { useBreakpoint } = Grid;
 const { Option } = Select;
+
+// Normalize to uppercase for consistent sheet writes/searches
+const toCaps = (s) => String(s || "").trim().toUpperCase();
 
 // Whether to keep a draft between refreshes
 const ENABLE_DRAFT = false;
@@ -62,7 +67,7 @@ const SHEET_CSV_URL =
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
+  "https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
 
 const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 
@@ -155,6 +160,12 @@ export default function BookingForm({
   onSuccess,
   startPaymentsOnly = false,
   editRefDefault = null,
+  allowBranchSelect = false,
+  allowExecutiveSelect = false,
+  branchOptions = [],
+  executiveOptions = [],
+  branchOptionsLoading = false,
+  executiveOptionsLoading = false,
 } = {}) {
   const printRef = useRef(null);
   const screens = useBreakpoint();
@@ -168,6 +179,9 @@ export default function BookingForm({
   // Payments-only update mode (after Fetch Details)
   const [paymentsOnlyMode, setPaymentsOnlyMode] = useState(Boolean(startPaymentsOnly));
   const [editRef, setEditRef] = useState(() => editRefDefault || ({ bookingId: null, mobile: null }));
+  const [dynamicBranches, setDynamicBranches] = useState([]);
+  const [dynamicExecutives, setDynamicExecutives] = useState([]);
+  const [dynamicLoading, setDynamicLoading] = useState(false);
 
   // User context for auto-filling Executive and Branch
   const currentUser = useMemo(() => {
@@ -179,7 +193,6 @@ export default function BookingForm({
   }, []);
   const executiveDefault = useMemo(
     () => {
-      const toCaps = (s) => String(s || "").trim().toUpperCase();
       const raw =
         currentUser?.formDefaults?.staffName ||
         currentUser?.name ||
@@ -191,7 +204,6 @@ export default function BookingForm({
     [currentUser]
   );
   const branchDefault = useMemo(() => {
-    const toCaps = (s) => String(s || "").trim().toUpperCase();
     const firstBranch = Array.isArray(currentUser?.branches)
       ? currentUser.branches[0]?.name || currentUser.branches[0]
       : undefined;
@@ -227,6 +239,36 @@ export default function BookingForm({
   const wRtoOffice = Form.useWatch("rtoOffice", form);
   const wFinancier = Form.useWatch("financier", form);
   const wNohpFinancier = Form.useWatch("nohpFinancier", form);
+
+  // Backend override dropdowns (executive/branch)
+  const branchSelectOptions = useMemo(() => {
+    const merged = [...branchOptions, ...dynamicBranches];
+    const set = new Set();
+    const add = (v) => {
+      if (!v) return;
+      const val = typeof v === "string" ? toCaps(v) : toCaps(v?.name || v?.label || v?.value);
+      if (val) set.add(val);
+    };
+    if (branchDefault) add(branchDefault);
+    (merged || []).forEach(add);
+    return Array.from(set).map((name) => ({ label: name, value: name }));
+  }, [branchOptions, dynamicBranches, branchDefault]);
+
+  const executiveSelectOptions = useMemo(() => {
+    const merged = [...executiveOptions, ...dynamicExecutives];
+    const set = new Set();
+    const add = (v) => {
+      if (!v) return;
+      const val = typeof v === "string" ? toCaps(v) : toCaps(v?.name || v?.label || v?.value);
+      if (val) set.add(val);
+    };
+    if (executiveDefault) add(executiveDefault);
+    (merged || []).forEach(add);
+    return Array.from(set).map((name) => ({ label: name, value: name }));
+  }, [executiveOptions, dynamicExecutives, executiveDefault]);
+
+  const branchSelectActive = allowBranchSelect && branchSelectOptions.length > 0;
+  const executiveSelectActive = allowExecutiveSelect && executiveSelectOptions.length > 0;
 
   // Total booking amount
   const bookingTotal = useMemo(() => {
@@ -529,6 +571,44 @@ export default function BookingForm({
       // ignore
     }
   }, [addressProofMode, selectedCompany, paymentsOnlyMode, form]);
+
+  // Load branch/executive options automatically when allowed but not provided
+  useEffect(() => {
+    const needsBranches = allowBranchSelect && !branchOptions.length;
+    const needsExecs = allowExecutiveSelect && !executiveOptions.length;
+    if (!needsBranches && !needsExecs) return;
+    let cancelled = false;
+    const load = async () => {
+      setDynamicLoading(true);
+      try {
+        const res = await Promise.allSettled([
+          needsBranches ? listBranchesPublic({ status: "active", limit: 500 }) : Promise.resolve(null),
+          needsExecs ? listUsersPublic({ role: "staff", status: "active", limit: 100000 }) : Promise.resolve(null),
+        ]);
+        if (!cancelled) {
+          const [bRes, uRes] = res;
+          if (needsBranches && bRes.status === "fulfilled" && bRes.value?.success) {
+            const activeBranches = (bRes.value.data?.items || []).filter((b) => String(b?.status || "").toLowerCase() === "active");
+            setDynamicBranches(activeBranches.map((b) => b.name).filter(Boolean));
+          }
+          if (needsExecs && uRes.status === "fulfilled" && uRes.value?.success) {
+            setDynamicExecutives(
+              (uRes.value.data?.items || [])
+                .filter((u) => String(u.role || "").toLowerCase() === "staff")
+                .map((u) => u.name || u.email || "")
+                .filter(Boolean)
+            );
+          }
+        }
+      } catch {
+        if (!cancelled) message.error("Could not load dropdown options");
+      } finally {
+        if (!cancelled) setDynamicLoading(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [allowBranchSelect, allowExecutiveSelect, branchOptions.length, executiveOptions.length]);
 
   // Clear payment references when the corresponding mode is not online
   useEffect(() => {
@@ -1099,6 +1179,14 @@ export default function BookingForm({
     }
   };
 
+  const upperFromEvent = (e) => {
+    if (typeof e === "string") return e.toUpperCase();
+    if (e && typeof e === "object" && typeof e.target?.value === "string") {
+      return e.target.value.toUpperCase();
+    }
+    return e;
+  };
+
   const headerBadge = (
     <div
       style={{
@@ -1145,13 +1233,29 @@ export default function BookingForm({
             label="Executive"
             name="executive"
             rules={[{ required: true, message: "Executive is required" }]}
+            getValueFromEvent={upperFromEvent}
           >
-            <Input
-              size={ctlSize}
-              placeholder="Executive name"
-              readOnly={!!executiveDefault}
-              disabled={paymentsOnlyMode}
-            />
+            {executiveSelectActive ? (
+              <Select
+                size={ctlSize}
+                showSearch
+                optionFilterProp="label"
+                placeholder="Select executive"
+                disabled={paymentsOnlyMode}
+                loading={executiveOptionsLoading || dynamicLoading}
+                options={executiveSelectOptions}
+                allowClear={!executiveDefault}
+                style={{ textTransform: "uppercase" }}
+              />
+            ) : (
+              <Input
+                size={ctlSize}
+                placeholder="Executive name"
+                readOnly={!!executiveDefault}
+                disabled={paymentsOnlyMode}
+                style={{ textTransform: "uppercase" }}
+              />
+            )}
           </Form.Item>
         </Col>
         <Col xs={24} md={12}>
@@ -1159,13 +1263,29 @@ export default function BookingForm({
             label="Branch"
             name="branch"
             rules={[{ required: true, message: "Branch is required" }]}
+            getValueFromEvent={upperFromEvent}
           >
-            <Input
-              size={ctlSize}
-              placeholder="Branch name"
-              readOnly={!!branchDefault}
-              disabled={paymentsOnlyMode}
-            />
+            {branchSelectActive ? (
+              <Select
+                size={ctlSize}
+                showSearch
+                optionFilterProp="label"
+                placeholder="Select branch"
+                disabled={paymentsOnlyMode}
+                loading={branchOptionsLoading || dynamicLoading}
+                options={branchSelectOptions}
+                allowClear={!branchDefault}
+                style={{ textTransform: "uppercase" }}
+              />
+            ) : (
+              <Input
+                size={ctlSize}
+                placeholder="Branch name"
+                readOnly={!!branchDefault}
+                disabled={paymentsOnlyMode}
+                style={{ textTransform: "uppercase" }}
+              />
+            )}
           </Form.Item>
         </Col>
       </Row>
@@ -1199,6 +1319,7 @@ export default function BookingForm({
             normalize={(v) =>
               v ? v.replace(/\D/g, "").slice(0, 10) : v
             }
+            getValueFromEvent={(e) => e?.target?.value?.toUpperCase?.()}
           >
             <Input
               size={ctlSize}
@@ -1207,6 +1328,7 @@ export default function BookingForm({
               inputMode="numeric"
               allowClear
               disabled={paymentsOnlyMode}
+              style={{ textTransform: "uppercase" }}
             />
           </Form.Item>
         </Col>
@@ -1224,8 +1346,8 @@ export default function BookingForm({
               size={ctlSize}
               placeholder="Select Company"
               disabled={paymentsOnlyMode}
-              onChange={(value) => {
-                setSelectedCompany(value);
+              onChange={(v) => {
+                setSelectedCompany(v);
                 setSelectedModel("");
                 form.setFieldsValue({
                   bikeModel: undefined,
@@ -1233,7 +1355,10 @@ export default function BookingForm({
                   color: undefined,
                   chassisNo: undefined,
                 });
+                form.setFieldsValue({ company: String(v).toUpperCase() });
               }}
+              style={{ textTransform: "uppercase" }}
+              dropdownRender={undefined}
             >
               {companies.map((c, i) => (
                 <Option key={i} value={c}>
@@ -1254,14 +1379,17 @@ export default function BookingForm({
               size={ctlSize}
               placeholder="Select Model"
               disabled={paymentsOnlyMode || !selectedCompany}
-              onChange={(value) => {
-                setSelectedModel(value);
+              onChange={(v) => {
+                setSelectedModel(v);
                 form.setFieldsValue({
                   variant: undefined,
                   color: undefined,
                   chassisNo: undefined,
                 });
+                form.setFieldsValue({ bikeModel: String(v).toUpperCase() });
               }}
+              style={{ textTransform: "uppercase" }}
+              dropdownRender={undefined}
             >
               {models.map((m, i) => (
                 <Option key={i} value={m}>
@@ -1282,9 +1410,12 @@ export default function BookingForm({
               size={ctlSize}
               placeholder="Select Variant"
               disabled={paymentsOnlyMode || !selectedModel}
-              onChange={() => {
+              onChange={(v) => {
                 form.setFieldsValue({ color: undefined, chassisNo: undefined });
+                form.setFieldsValue({ variant: String(v).toUpperCase() });
               }}
+              style={{ textTransform: "uppercase" }}
+              dropdownRender={undefined}
             >
               {variants.map((v, i) => (
                 <Option key={i} value={v}>
@@ -1303,6 +1434,7 @@ export default function BookingForm({
             label="Color"
             name="color"
             rules={[{ required: true, message: "Select color" }]}
+            getValueFromEvent={(e) => e?.target?.value?.toUpperCase?.() || (typeof e === 'string' ? e.toUpperCase() : e)}
           >
             <AutoComplete
               size={ctlSize}
@@ -1317,6 +1449,7 @@ export default function BookingForm({
                   .includes(String(inputValue || "").toLowerCase())
               }
               onChange={() => form.setFieldsValue({ chassisNo: undefined })}
+              style={{ textTransform: "uppercase" }}
             />
           </Form.Item>
         </Col>
@@ -1353,10 +1486,12 @@ export default function BookingForm({
               showSearch
               optionFilterProp="children"
               onChange={(v) => {
-                form.setFieldsValue({ chassisNo: v });
+                form.setFieldsValue({ chassisNo: String(v).toUpperCase() });
                 checkChassis(v);
               }}
               allowClear
+              style={{ textTransform: "uppercase" }}
+              dropdownRender={undefined}
             >
               {availableChassis.map((ch) => (
                 <Option key={ch} value={ch}>
@@ -1419,12 +1554,14 @@ export default function BookingForm({
                 .slice(0, 2);
               return digits ? `KA${digits}` : "KA";
             }}
+            getValueFromEvent={(e) => e?.target?.value?.toUpperCase?.()}
           >
             <Input
               size={ctlSize}
               placeholder="e.g., KA02"
               maxLength={4}
               disabled={paymentsOnlyMode}
+              style={{ textTransform: "uppercase" }}
             />
           </Form.Item>
         </Col>
@@ -1462,6 +1599,9 @@ export default function BookingForm({
                 showSearch
                 optionFilterProp="children"
                 disabled={paymentsOnlyMode}
+                onChange={(v) => form.setFieldsValue({ financier: String(v).toUpperCase() })}
+                style={{ textTransform: "uppercase" }}
+                dropdownRender={undefined}
               >
                 {FINANCIERS.map((f) => (
                   <Option key={f} value={f}>
@@ -1482,7 +1622,14 @@ export default function BookingForm({
               name="nohpFinancier"
               rules={[{ required: true, message: "Select option" }]}
             >
-              <Select size={ctlSize} placeholder="Select" disabled={paymentsOnlyMode}>
+              <Select
+                size={ctlSize}
+                placeholder="Select"
+                disabled={paymentsOnlyMode}
+                onChange={(v) => form.setFieldsValue({ nohpFinancier: String(v).toUpperCase() })}
+                style={{ textTransform: "uppercase" }}
+                dropdownRender={undefined}
+              >
                 <Option value="IDFC">IDFC</Option>
                 <Option value="L&T">L&T FINANCE LIMITED</Option>
               </Select>
@@ -1615,12 +1762,14 @@ export default function BookingForm({
             label="Address"
             name="address"
             rules={[{ required: true, message: "Please enter address" }]}
+            getValueFromEvent={(e) => e?.target?.value?.toUpperCase?.()}
           >
             <Input.TextArea
               rows={3}
               placeholder="House No, Street, Area, City, PIN"
               allowClear
               disabled={paymentsOnlyMode}
+              style={{ textTransform: "uppercase" }}
             />
           </Form.Item>
         </Col>
@@ -1642,6 +1791,7 @@ export default function BookingForm({
                 step={500}
                 prefix={<CreditCardOutlined />}
                 placeholder="Enter amount"
+                disabled={paymentsOnlyMode}
               />
             </Form.Item>
           </Col>
@@ -1658,6 +1808,7 @@ export default function BookingForm({
                 step={100}
                 prefix={<CreditCardOutlined />}
                 placeholder="Enter amount"
+                disabled={paymentsOnlyMode}
               />
             </Form.Item>
           </Col>
@@ -1677,6 +1828,7 @@ export default function BookingForm({
                   step={100}
                   prefix={<CreditCardOutlined />}
                   placeholder="Enter amount"
+                  disabled={paymentsOnlyMode}
                 />
               </Form.Item>
             </Col>
@@ -1699,6 +1851,7 @@ export default function BookingForm({
                 step={100}
                 prefix={<CreditCardOutlined />}
                 placeholder="Enter amount"
+                disabled={paymentsOnlyMode}
               />
             </Form.Item>
           </Col>
@@ -1718,6 +1871,7 @@ export default function BookingForm({
                   step={100}
                   prefix={<CreditCardOutlined />}
                   placeholder="Enter amount"
+                  disabled={paymentsOnlyMode}
                 />
               </Form.Item>
             </Col>
@@ -1817,6 +1971,9 @@ export default function BookingForm({
                     { value: "online", label: "Online" },
                   ]}
                   disabled={false}
+                  onChange={(v) => form.setFieldsValue({ [`paymentMode${idx}`]: String(v).toUpperCase() })}
+                  style={{ textTransform: "uppercase" }}
+                  dropdownRender={undefined}
                 />
               </Form.Item>
             </Col>
@@ -1956,7 +2113,6 @@ export default function BookingForm({
                 message.info('Payments-only update mode enabled');
               }}
             />
-            <AttachDocument webhookUrl={BOOKING_GAS_URL} />
           </div>
         }
       >
@@ -2085,7 +2241,7 @@ function AttachDocument({ webhookUrl }) {
         name: f.name,
         url: up.url,
         fileId: up.fileId,
-        append: true,
+        append: false, // replace any previous attachment link
         ts: dayjs().toISOString(),
       };
       const resp = await saveBookingViaWebhook({
@@ -2205,7 +2361,7 @@ function AttachDocument({ webhookUrl }) {
             </p>
           </Dragger>
           <div style={{ fontSize: 12, color: '#64748b' }}>
-            New document will be added; previous links are retained.
+            Saving will replace the previous link in the sheet with this new document.
           </div>
         </Space>
       </Modal>

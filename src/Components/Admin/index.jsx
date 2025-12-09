@@ -45,7 +45,7 @@ export default function Admin() {
     { key: "users", label: "Users", children: <Users /> },
     { key: "announcements", label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
     // 9) Analytics & Reports, 10) Branch-level Sales, 11) Multi-branch Compare, 12) Sales Performance
-    { key: "analytics", label: "Analytics & Reports", children: (
+    /*{ key: "analytics", label: "Analytics & Reports", children: (
         <Placeholder title="Analytics & Reports" desc="KPIs, trends, and printable/exportable reports. (UI coming soon)" />
       ) },
     { key: "branchSales", label: "Branch-level Sales", children: (
@@ -56,7 +56,7 @@ export default function Admin() {
       ) },
     { key: "performance", label: "Sales Performance", children: (
         <Placeholder title="Sales Performance Tracking" desc="Targets vs actuals and leaderboards. (UI coming soon)" />
-      ) },
+      ) },   */
   ];
 
   return (

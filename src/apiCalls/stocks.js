@@ -1,7 +1,31 @@
+import axios from "axios";
 import { axiosInstance } from "./index";
+
+// Optional Google Apps Script endpoint for stocks. Default to backend proxy to avoid browser CORS.
+const GAS_STOCKS_URL = import.meta.env.VITE_STOCKS_GAS_URL || "/api/stocks/gas";
+const useGas = !!GAS_STOCKS_URL;
+
+const gasGet = async (params) => {
+  const res = await axios.get(GAS_STOCKS_URL, { params, validateStatus: () => true });
+  return res?.data || {};
+};
+
+const gasPost = async (payload) => {
+  const res = await axios.post(GAS_STOCKS_URL, payload, { validateStatus: () => true });
+  return res?.data || {};
+};
 
 // Fetch stock movements. Default to a high limit so admin can see all recent records.
 export const listStocks = async ({ branch, mode, limit = 1000, page = 1 } = {}) => {
+  if (useGas) {
+    const data = await gasGet({ action: "list", branch, mode, limit, page });
+    return {
+      success: !!data.ok,
+      data: data.data || [],
+      total: data.total || 0,
+      count: data.count || (data.data ? data.data.length : 0),
+    };
+  }
   const params = {};
   if (branch) params.branch = branch;
   if (mode) params.mode = mode;
@@ -16,6 +40,15 @@ export const listStocks = async ({ branch, mode, limit = 1000, page = 1 } = {}) 
 };
 
 export const listStocksPublic = async ({ branch, mode, limit = 1000, page = 1 } = {}) => {
+  if (useGas) {
+    const data = await gasGet({ action: "list", branch, mode, limit, page });
+    return {
+      success: !!data.ok,
+      data: data.data || [],
+      total: data.total || 0,
+      count: data.count || (data.data ? data.data.length : 0),
+    };
+  }
   const params = {};
   if (branch) params.branch = branch;
   if (mode) params.mode = mode;
@@ -26,6 +59,15 @@ export const listStocksPublic = async ({ branch, mode, limit = 1000, page = 1 } 
 };
 
 export const listCurrentStocks = async ({ branch, limit = 500, page = 1 } = {}) => {
+  if (useGas) {
+    const data = await gasGet({ action: "current", branch, limit, page });
+    return {
+      success: !!data.ok,
+      data: data.data || [],
+      total: data.total || 0,
+      count: data.count || (data.data ? data.data.length : 0),
+    };
+  }
   const params = {};
   if (branch) params.branch = branch;
   params.limit = limit;
@@ -37,6 +79,15 @@ export const listCurrentStocks = async ({ branch, limit = 500, page = 1 } = {}) 
 };
 
 export const listCurrentStocksPublic = async ({ branch, limit = 500, page = 1 } = {}) => {
+  if (useGas) {
+    const data = await gasGet({ action: "current", branch, limit, page });
+    return {
+      success: !!data.ok,
+      data: data.data || [],
+      total: data.total || 0,
+      count: data.count || (data.data ? data.data.length : 0),
+    };
+  }
   const params = {};
   if (branch) params.branch = branch;
   params.limit = limit;
@@ -46,6 +97,10 @@ export const listCurrentStocksPublic = async ({ branch, limit = 500, page = 1 } 
 };
 
 export const listPendingTransfers = async ({ branch, limit = 500 } = {}) => {
+  if (useGas) {
+    const data = await gasGet({ action: "pending", branch, limit });
+    return { success: !!data.ok, data: data.data || [], count: data.count || 0 };
+  }
   const params = {};
   if (branch) params.branch = branch;
   params.limit = limit;
@@ -56,22 +111,40 @@ export const listPendingTransfers = async ({ branch, limit = 500 } = {}) => {
 };
 
 export const createStock = async ({ data: row, createdBy }) => {
+  if (useGas) {
+    const payload = { action: "create", data: row, createdBy };
+    const data = await gasPost(payload);
+    return { success: !!data.ok, data: data.data, message: data.message };
+  }
   const payload = { data: row, createdBy };
   const { data } = await axiosInstance.post("/stocks", payload);
   return data; // { success, data }
 };
 
 export const updateStock = async (movementId, patch) => {
+  if (useGas) {
+    const payload = { action: "update", movementId, ...patch, data: patch };
+    const data = await gasPost(payload);
+    return { success: !!data.ok, data: data.data, message: data.message };
+  }
   const { data } = await axiosInstance.patch(`/stocks/${movementId}`, { data: patch });
   return data; // { success, data }
 };
 
 export const deleteStock = async (movementId) => {
+  if (useGas) {
+    const data = await gasPost({ action: "delete", movementId });
+    return { success: !!data.ok, message: data.message };
+  }
   const res = await axiosInstance.delete(`/stocks/${movementId}`, { validateStatus: () => true });
   return res?.data || { success: false, message: 'Delete failed' };
 };
 
 export const admitTransfer = async (movementId, notes) => {
+  if (useGas) {
+    const data = await gasPost({ action: "admit", movementId, notes });
+    return { success: !!data.ok, data: data.data, message: data.message };
+  }
   const token = localStorage.getItem('token');
   const payload = notes ? { notes } : {};
   if (token) payload.token = token; // fallback for proxies stripping auth header
@@ -80,6 +153,10 @@ export const admitTransfer = async (movementId, notes) => {
 };
 
 export const rejectTransfer = async (movementId, reason) => {
+  if (useGas) {
+    const data = await gasPost({ action: "reject", movementId, reason, notes: reason });
+    return { success: !!data.ok, data: data.data, message: data.message };
+  }
   const token = localStorage.getItem('token');
   const payload = reason ? { reason } : {};
   if (token) payload.token = token;

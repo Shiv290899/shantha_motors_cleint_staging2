@@ -19,6 +19,7 @@ import {
   Modal,
 } from "antd";
 import dayjs from "dayjs";
+import { useLocation } from "react-router-dom";
 import { handleSmartPrint } from "../utils/printUtils";
 import { FaWhatsapp } from "react-icons/fa";
 import PreServiceSheet from "./PreServiceSheet";
@@ -39,7 +40,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec";
+  "https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 
 // Google Form constants removed — now using Apps Script webhook
@@ -73,9 +74,9 @@ const EXECUTIVES = [
   { name: "Kavya", phone: "8073165374" },
 ];
 
-const SERVICE_TYPES = ["Free", "Paid"]; // checkbox UI (single-select enforced)
+const SERVICE_TYPES = ["Free", "Paid", "Minor", "Accidental"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
-const MECHANIC = ["Sonu", "Karthik", "ManMohan", "Mansur", "Irshad", "Dakshat", "Salman"];
+const MECHANIC = ["SONU", "KARTHIK", "MANMOHAN", "MANSUR", "IRSHAD", "DAKSHAT", "SALMAN"];
 
 // Fuel Level (tabs)
 const FUEL_LEVELS = ["Empty", "¼", "½", "¾", "Full"];
@@ -119,24 +120,43 @@ async function reserveNextJobCardSerial(mobile, branchCode, branchId) {
 }
 
 /* Vehicle No. mask - KA05 DB 6000 */
-function formatReg(raw) {
-  const alnum = (raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
-  let out = "";
-  for (let i = 0; i < alnum.length; i++) {
-    out += alnum[i];
-    if (i === 3 || i === 5) out += " ";
-  }
-  return out.slice(0, 12);
+function isVehiclePartial(val) {
+  const v = String(val || "").toUpperCase();
+  if (v.length > 10) return false;
+  if (!/^[A-Z0-9]*$/.test(v)) return false;
+  const stages = [
+    /^[A-Z]{0,2}$/,
+    /^[A-Z]{2}\d{0,2}$/,
+    /^[A-Z]{2}\d{2}[A-Z]{0,2}$/,
+    /^[A-Z]{2}\d{2}[A-Z]{2}\d{0,4}$/,
+  ];
+  return stages.some((rx) => rx.test(v));
 }
-const REGEX_FULL = /^[A-Z]{2}\d{2}\s[A-Z]{2}\s\d{4}$/;
+function formatReg(raw, prev = "") {
+  const up = String(raw || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!isVehiclePartial(up)) return prev || "";
+  return up.slice(0, 10);
+}
+const REGEX_FULL = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
+
+// Normalize text inputs to uppercase for consistent storage/display
+const toUpperSafe = (val) => (typeof val === "string" ? val.toUpperCase() : val);
+const upperFromEvent = (e) => toUpperSafe(e?.target?.value ?? e);
+const normalizeRowDesc = (rows) =>
+  Array.isArray(rows) ? rows.map((r) => ({ ...r, desc: toUpperSafe(r?.desc || "") })) : [];
 
 // Build labour rows from selections
 function buildRows(serviceType, vehicleType) {
   if (!serviceType || !vehicleType) return [];
+  const svc = String(serviceType || "").toLowerCase();
+  const isPaid = svc === "paid";
+  const isFree = svc === "free";
+  if (!isPaid && !isFree) return []; // No presets for Minor/Accidental
+
   const base = PRICE_BOOK[vehicleType]?.base ?? [];
-  const rows = base.map((b) => ({ desc: b.desc, qty: 1, rate: b.rate }));
-  if (serviceType === "Paid") {
-    rows.push(...PRICE_BOOK.paidAddons.map((a) => ({ desc: a.desc, qty: 1, rate: a.rate })));
+  const rows = base.map((b) => ({ desc: toUpperSafe(b.desc), qty: 1, rate: b.rate }));
+  if (isPaid) {
+    rows.push(...PRICE_BOOK.paidAddons.map((a) => ({ desc: toUpperSafe(a.desc), qty: 1, rate: a.rate })));
   }
   return rows;
 }
@@ -349,6 +369,7 @@ function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
    ========================= */
 
 export default function JobCard({ initialValues = null } = {}) {
+  const location = useLocation();
   const [form] = Form.useForm();
   const [, setUserStaffName] = useState();
   const [, setUserRole] = useState();
@@ -386,6 +407,7 @@ export default function JobCard({ initialValues = null } = {}) {
   const [postPay2Mode, setPostPay2Mode] = useState('online'); // default Online
   const [postPay2Amt, setPostPay2Amt] = useState('');
   const [postPay2Utr, setPostPay2Utr] = useState('');
+  const [postRemarks, setPostRemarks] = useState('');
   const [postServiceLock, setPostServiceLock] = useState(POST_LOCK_EMPTY);
   const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
   const startActionCooldown = (ms = 6000) => {
@@ -505,38 +527,74 @@ export default function JobCard({ initialValues = null } = {}) {
     []
   );
 
+  const initialFromQuery = useMemo(() => {
+    try {
+      const search = location?.search || "";
+      if (!search) return null;
+      const params = new URLSearchParams(search);
+      const regNo = formatReg(params.get("regNo") || "", "");
+      const model = toUpperSafe(params.get("model") || "");
+      const colour = toUpperSafe(params.get("colour") || params.get("color") || "");
+      const custName = toUpperSafe(params.get("custName") || params.get("customerName") || "");
+      const custMobile = params.get("custMobile") || params.get("mobile") || "";
+      const hasAny = [regNo, model, colour, custName, custMobile].some((v) => String(v || "").trim());
+      if (!hasAny) return null;
+      return {
+        formValues: {
+          regNo,
+          model,
+          colour,
+          custName,
+          custMobile: String(custMobile || "").replace(/\D/g, "").slice(-10),
+        },
+      };
+    } catch {
+      return null;
+    }
+  }, [location?.search]);
+
   // Apply external initial values (when rendered in a modal)
   useEffect(() => {
-    if (!initialValues) return;
+    const sourceInit = initialValues || initialFromQuery;
+    if (!sourceInit) return;
     try {
-      const fv = initialValues.formValues || initialValues;
+      const fv = sourceInit.formValues || sourceInit;
       const parseDay = (v) => {
         if (!v) return null;
         const d = dayjs(v, ["DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true);
         return d.isValid() ? d : null;
       };
       const kmVal = fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '';
+      const regNo = formatReg(fv.regNo || '', '');
+      const model = toUpperSafe(fv.model || '');
+      const colour = toUpperSafe(fv.colour || '');
+      const custName = toUpperSafe(fv.custName || '');
+      const obsVal = toUpperSafe((fv.obs || '').replace(/\s*#\s*/g, "\n"));
       const fields = {
         jcNo: fv.jcNo || '',
         branch: fv.branch || undefined,
         mechanic: fv.mechanic || undefined,
         executive: fv.executive || undefined,
         expectedDelivery: parseDay(fv.expectedDelivery),
-        regNo: fv.regNo || '',
-        model: fv.model || '',
-        colour: fv.colour || '',
+        regNo,
+        model,
+        colour,
         km: kmVal,
         fuelLevel: fv.fuelLevel || undefined,
         
-        custName: fv.custName || '',
+        custName,
         custMobile: String(fv.custMobile || '').replace(/\D/g,'').slice(-10),
-        obs: (fv.obs || '').replace(/\s*#\s*/g, "\n"),
+        obs: obsVal,
         vehicleType: fv.vehicleType || undefined,
         serviceType: fv.serviceType || undefined,
         floorMat: fv.floorMat === 'Yes' ? 'Yes' : fv.floorMat === 'No' ? 'No' : undefined,
         discounts: { labour: 0 },
         gstLabour: DEFAULT_GST_LABOUR,
-        labourRows: Array.isArray(initialValues?.labourRows) && initialValues.labourRows.length ? initialValues.labourRows : buildRows(fv.serviceType, fv.vehicleType),
+        labourRows: normalizeRowDesc(
+          Array.isArray(initialValues?.labourRows) && initialValues.labourRows.length
+            ? initialValues.labourRows
+            : buildRows(fv.serviceType, fv.vehicleType)
+        ),
       };
       form.setFieldsValue(fields);
       setRegDisplay(fields.regNo || '');
@@ -544,7 +602,7 @@ export default function JobCard({ initialValues = null } = {}) {
       setVehicleTypeLocal(fv.vehicleType || null);
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialValues]);
+  }, [initialValues, initialFromQuery]);
 
   // Prefill executive + branch from logged-in user (staff)
   useEffect(() => {
@@ -581,9 +639,10 @@ export default function JobCard({ initialValues = null } = {}) {
             if (["owner","admin"].includes(roleLc)) {
               // Owners/Admins: load all branches and staff list for executive dropdown
               try {
-                const res = await listBranchesPublic({ limit: 500 });
+                const res = await listBranchesPublic({ status: 'active', limit: 500 });
                 if (res?.success && Array.isArray(res?.data?.items)) {
-                  const all = res.data.items.map((b) => ({
+                  const activeBranches = res.data.items.filter((b) => String(b?.status || '').toLowerCase() === 'active');
+                  const all = activeBranches.map((b) => ({
                     id: String(b.id || b._id || ''),
                     name: toCaps(b.name),
                     code: b.code ? String(b.code).toUpperCase() : '',
@@ -603,6 +662,8 @@ export default function JobCard({ initialValues = null } = {}) {
               const list = [];
               const push = (b) => {
                 if (!b) return;
+                const statusLc = typeof b === 'string' ? '' : String(b?.status || '').toLowerCase();
+                if (statusLc && statusLc !== 'active') return;
                 const id = (b && (b._id || b.id || b.$oid || b)) || '';
                 const nameRaw = typeof b === 'string' ? '' : (b?.name || '');
                 const name = toCaps(nameRaw);
@@ -698,13 +759,13 @@ export default function JobCard({ initialValues = null } = {}) {
   // Watchers (can be used for dynamic behaviors later)
 
   const handleRegChange = (e) => {
-    const next = formatReg(e.target.value);
+    const next = formatReg(e.target.value, regDisplay);
     setRegDisplay(next);
     form.setFieldsValue({ regNo: next });
   };
 
   const labourRowsRaw = Form.useWatch("labourRows", form);
-  const labourRows = useMemo(() => labourRowsRaw || [], [labourRowsRaw]);
+  const labourRows = useMemo(() => normalizeRowDesc(labourRowsRaw || []), [labourRowsRaw]);
   const gstLabour = Form.useWatch("gstLabour", form) ?? DEFAULT_GST_LABOUR;
   const discountsRaw = Form.useWatch("discounts", form);
   const discounts = useMemo(() => discountsRaw || { labour: 0 }, [discountsRaw]);
@@ -751,6 +812,17 @@ export default function JobCard({ initialValues = null } = {}) {
   };
 
   const serviceOptions = SERVICE_TYPES.map((t) => ({ label: t, value: t }));
+
+  const normalizeFormValues = (rawVals = {}) => {
+    const next = { ...rawVals };
+    next.regNo = formatReg(next.regNo || "");
+    next.model = toUpperSafe(next.model || "");
+    next.colour = toUpperSafe(next.colour || "");
+    next.custName = toUpperSafe(next.custName || "");
+    next.obs = toUpperSafe(next.obs || "");
+    next.labourRows = normalizeRowDesc(next.labourRows || []);
+    return next;
+  };
 
   const handleServiceCheckbox = (checkedValues) => {
     let next = null;
@@ -803,7 +875,7 @@ export default function JobCard({ initialValues = null } = {}) {
       // ★ Validate ALL required fields (dynamic-aware)
       await validateAllRequired();
 
-      const vals = form.getFieldsValue(true);
+      const vals = normalizeFormValues(form.getFieldsValue(true));
 
       // 🔢 Ensure a server-issued JC No. with branch code (replace stale numeric)
       let jc = vals.jcNo;
@@ -899,7 +971,7 @@ export default function JobCard({ initialValues = null } = {}) {
       startActionCooldown(6000);
       // Do not auto pre-save here to avoid duplicate rows in sheet.
       // Server-side 'postService' should upsert/update the existing record.
-      const valsNow = form.getFieldsValue(true);
+      const valsNow = normalizeFormValues(form.getFieldsValue(true));
       const mobile10 = String(valsNow.custMobile || '').replace(/\D/g, '').slice(-10);
       if (mobile10.length !== 10) {
         message.error('Enter a valid 10-digit mobile number.');
@@ -926,6 +998,7 @@ export default function JobCard({ initialValues = null } = {}) {
         ? valsNow.floorMat
         : valsNow.floorMat === true ? 'Yes' : valsNow.floorMat === false ? 'No' : 'No';
       const _rawobsOneLine = String(valsNow.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
+      const staffRemark = String(postRemarks || '').trim();
 
       // Build split payments
       const a1 = Number(postPay1Amt || 0) || 0;
@@ -983,6 +1056,7 @@ export default function JobCard({ initialValues = null } = {}) {
           expectedDelivery: valsNow.expectedDelivery ? dayjs(valsNow.expectedDelivery).format('DD/MM/YYYY') : '',
           // Persist observation for later fetch/print (flatten newlines)
           obs: _rawobsOneLine,
+          remarks: staffRemark,
         },
         labourRows: labourRows || [],
         totals,
@@ -1002,7 +1076,8 @@ export default function JobCard({ initialValues = null } = {}) {
         payments,
         utr: joinedUtr || undefined,
         utrNo: joinedUtr || undefined,
-        payload: { ...payload, payments },
+        remarks: staffRemark,
+        payload: { ...payload, payments, remarks: staffRemark },
         // Important: also send minimal formValues so Apps Script can
         // upsert name/mobile into the Job Card sheet and StaffLedger.
         // Without this, rows created via postService (without a prior save)
@@ -1024,6 +1099,7 @@ export default function JobCard({ initialValues = null } = {}) {
           expectedDelivery: expectedDeliveryStr,
           // Write Customer Observation into sheet column
           obs: _rawobsOneLine,
+          remarks: staffRemark,
         },
         source: 'jobcard',
         cashCollected,
@@ -1084,6 +1160,7 @@ export default function JobCard({ initialValues = null } = {}) {
       setPostPay1Utr('');
       setPostPay2Amt('');
       setPostPay2Utr('');
+      setPostRemarks('');
 
       // After a successful post-service action, reset the Job Card form
       try {
@@ -1121,7 +1198,7 @@ export default function JobCard({ initialValues = null } = {}) {
   };
 
   // Pull everything we need for printing
-  const vals = form.getFieldsValue(true);
+  const vals = normalizeFormValues(form.getFieldsValue(true));
 
   // Observation list for print (no prices)
   const observationLines = [
@@ -1136,7 +1213,7 @@ export default function JobCard({ initialValues = null } = {}) {
       startActionCooldown(6000);
       await handleAutoSave(); // will throw if invalid
 
-      const valsNow = form.getFieldsValue(true);
+      const valsNow = normalizeFormValues(form.getFieldsValue(true));
       await form.validateFields(["custName", "custMobile", "branch"]); // already covered, fine as extra guard
 
       const mobileE164 = normalizeINPhone(valsNow.custMobile);
@@ -1305,31 +1382,32 @@ export default function JobCard({ initialValues = null } = {}) {
                     { required: true, message: "Vehicle number is required" },
                     {
                       validator: (_, val) =>
-                        !val || REGEX_FULL.test(val)
+                        !val || REGEX_FULL.test(String(val || '').toUpperCase())
                           ? Promise.resolve()
-                          : Promise.reject(new Error("Format must be KA05 DB 6000 (12 chars incl. spaces)")),
+                          : Promise.reject(new Error("Format must be KA05DB6000 (AA##AA####)")),
                     },
                   ]}
                 >
                   <Input
-                    placeholder="KA05 DB 6000"
+                    placeholder="KA05DB6000"
                     value={regDisplay}
                     onChange={handleRegChange}
-                    maxLength={12}
+                    maxLength={10}
                     inputMode="latin"
+                    style={{ textTransform: "uppercase" }}
                   />
                 </Form.Item>
               </Col>
 
               <Col xs={24} sm={12} md={6}>
-                <Form.Item label="Model" name="model" rules={[{ required: true }]}>
-                  <Input placeholder="e.g., Honda Activa 6G" />
+                <Form.Item label="Model" name="model" rules={[{ required: true }]} getValueFromEvent={upperFromEvent}>
+                  <Input placeholder="e.g., Honda Activa 6G" style={{ textTransform: "uppercase" }} />
                 </Form.Item>
               </Col>
 
               <Col xs={24} sm={12} md={6}>
-                <Form.Item label="Colour" name="colour">
-                  <Input />
+                <Form.Item label="Colour" name="colour" getValueFromEvent={upperFromEvent}>
+                  <Input style={{ textTransform: "uppercase" }} />
                 </Form.Item>
               </Col>
 
@@ -1365,10 +1443,7 @@ export default function JobCard({ initialValues = null } = {}) {
                   label="Customer Name" 
                   name="custName" 
                   rules={[{ required: true, whitespace: true, message: 'Please enter customer name' }]}
-                  getValueFromEvent={(e) => {
-                    const v = e?.target?.value ?? e; 
-                    return typeof v === 'string' ? v.toUpperCase() : v;
-                  }}
+                  getValueFromEvent={upperFromEvent}
                 >
                   <Input placeholder="e.g., RAHUL SHARMA" style={{ textTransform: 'uppercase' }} />
                 </Form.Item>
@@ -1405,8 +1480,8 @@ export default function JobCard({ initialValues = null } = {}) {
               {/* Call Status removed per request */}
 
               <Col xs={24}>
-                <Form.Item label="Customer Observation (additional notes)" name="obs">
-                  <Input.TextArea rows={3} placeholder="Write the customer's observations..." />
+                <Form.Item label="Customer Observation (additional notes)" name="obs" getValueFromEvent={upperFromEvent}>
+                  <Input.TextArea rows={3} placeholder="Write the customer's observations..." style={{ textTransform: 'uppercase' }} />
                 </Form.Item>
               </Col>
             </Row>
@@ -1519,8 +1594,13 @@ export default function JobCard({ initialValues = null } = {}) {
                     return (
                       <Row key={key} gutter={8} align="middle" style={{ marginBottom: 6 }}>
                         <Col span={12}>
-                          <Form.Item {...rest} name={[name, "desc"]} rules={[{ required: true }]}>
-                            <Input placeholder="Labour description" disabled={isPostLocked} />
+                          <Form.Item
+                            {...rest}
+                            name={[name, "desc"]}
+                            rules={[{ required: true }]}
+                            getValueFromEvent={upperFromEvent}
+                          >
+                            <Input placeholder="Labour description" disabled={isPostLocked} style={{ textTransform: 'uppercase' }} />
                           </Form.Item>
                         </Col>
                         <Col span={4}>
@@ -1674,6 +1754,17 @@ export default function JobCard({ initialValues = null } = {}) {
           <strong>Payable:</strong> {inr(postPayablePreview)} &nbsp;|
           &nbsp;<strong>Collected:</strong> {inr(postCollectedPreview)} &nbsp;|
           &nbsp;<strong>{postDuePreview >= 0 ? 'Due' : 'Excess'}:</strong> {inr(Math.abs(postDuePreview))}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={{ marginBottom: 6 }}>Remarks (optional)</div>
+          <Input.TextArea
+            placeholder="Enter any delivery remarks for this service"
+            value={postRemarks}
+            onChange={(e)=>setPostRemarks(toUpperSafe(e.target.value || ''))}
+            style={{ textTransform: 'uppercase' }}
+            autoSize={{ minRows: 2, maxRows: 3 }}
+          />
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={() => setPostOpen(false)} disabled={postSaving}>Cancel</Button>

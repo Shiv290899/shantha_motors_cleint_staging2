@@ -398,9 +398,10 @@ export default function Quotation() {
             const roleLc = String(role || '').toLowerCase();
             if (["owner","admin"].includes(roleLc)) {
               // Owners/Admins: all branches from server
-              const res = await listBranchesPublic({ limit: 500 });
+              const res = await listBranchesPublic({ status: 'active', limit: 500 });
               if (res?.success && Array.isArray(res?.data?.items)) {
-                const all = res.data.items.map((b) => ({
+                const activeBranches = res.data.items.filter((b) => String(b?.status || '').toLowerCase() === 'active');
+                const all = activeBranches.map((b) => ({
                   id: String(b.id || b._id || ''),
                   name: toCaps(b.name),
                   code: b.code ? String(b.code).toUpperCase() : '',
@@ -420,6 +421,8 @@ export default function Quotation() {
               const list = [];
               const push = (b) => {
                 if (!b) return;
+                const statusLc = typeof b === 'string' ? '' : String(b?.status || '').toLowerCase();
+                if (statusLc && statusLc !== 'active') return;
                 const id = (b && (b._id || b.id || b.$oid || b)) || '';
                 const nameRaw = typeof b === 'string' ? '' : (b?.name || '');
                 const name = toCaps(nameRaw);
@@ -814,7 +817,21 @@ export default function Quotation() {
   }, []);
 
   // Keep local state in sync with Form for fields we mirror (onRoadPrice)
-  const onValuesChange = (_, all) => {
+  const onValuesChange = (changed, all) => {
+    // Force all changed string fields to uppercase
+    if (changed && typeof changed === "object") {
+      const patched = {};
+      Object.keys(changed).forEach((key) => {
+        const val = changed[key];
+        patched[key] = typeof val === "string" ? val.toUpperCase() : val;
+      });
+      if (Object.keys(patched).length) {
+        // This will update just the affected fields in the form
+        form.setFieldsValue(patched);
+      }
+    }
+
+    // Existing behaviour for keeping local state in sync
     if (typeof all?.onRoadPrice !== "undefined") {
       setOnRoadPrice(Number(all.onRoadPrice || 0));
       if (downPayment > Number(all.onRoadPrice || 0)) {

@@ -10,6 +10,7 @@ export default function InStockUpdate() {
 
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState([]);
+  const [hasCache, setHasCache] = useState(false);
   const [branchOptions, setBranchOptions] = useState([]);
   const [branch, setBranch] = useState("all");
   const [q, setQ] = useState("");
@@ -26,6 +27,7 @@ export default function InStockUpdate() {
   // Controlled pagination to avoid resets on re-render
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const cacheKey = useMemo(() => `InStock:list:${branch || 'all'}`, [branch]);
 
   // Owner-only Invoice modal state
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
@@ -75,6 +77,23 @@ export default function InStockUpdate() {
     })();
   }, []);
 
+  // Instant paint from cache for current branch scope
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) { setHasCache(false); return; }
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.items)) {
+        setItems(cached.items);
+        setHasCache(true);
+      } else {
+        setHasCache(false);
+      }
+    } catch {
+      setHasCache(false);
+    }
+  }, [cacheKey]);
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -94,8 +113,15 @@ export default function InStockUpdate() {
         lastMovementId: r.lastMovementId || r.movementId || "",
       }));
       setItems(rows);
+      setHasCache(true);
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), items: rows }));
+      } catch {
+        // ignore cache write issues
+      }
     } catch {
-      setItems([]);
+      if (!hasCache) setItems([]);
+      setHasCache(false);
     } finally {
       setLoading(false);
     }
@@ -219,15 +245,7 @@ export default function InStockUpdate() {
 
   // Summary counts (independent of search filter)
   const totalCount = items.length;
-  const countsByBranch = useMemo(() => {
-    const map = new Map();
-    items.forEach((r) => {
-      const b = String(r.branch || "").trim() || "Unassigned";
-      map.set(b, (map.get(b) || 0) + 1);
-    });
-    // Sort desc by count
-    return Array.from(map.entries()).sort((a,b)=>b[1]-a[1]);
-  }, [items]);
+  
 
   const col = (v) => String(v || "").trim();
   const colorDot = (name) => {
@@ -328,10 +346,7 @@ export default function InStockUpdate() {
 
   return (
     <div>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontWeight: 800, fontSize: isMobile ? 16 : 18 }}>Stock Finder</div>
-        <div style={{ fontSize: 12, color: '#666' }}>Search by Company, Model, Variant to find which branch has vehicles in stock.</div>
-      </div>
+     
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <Space size="small" wrap>
           <Select
@@ -386,7 +401,7 @@ export default function InStockUpdate() {
         <div style={{ flex: 1 }} />
         <Space>
           <Button onClick={() => { setSelCompanies([]); setSelModels([]); setSelVariants([]); setSelColors([]); setDateRange([]); setQ(""); }}>Reset Filters</Button>
-          <Button onClick={fetchData}>Refresh</Button>
+          <Button onClick={fetchData} loading={loading}>Refresh</Button>
         </Space>
       </div>
 
@@ -398,15 +413,7 @@ export default function InStockUpdate() {
         <Tag color="geekblue" style={{ fontSize: 12, padding: '4px 10px' }}>
           Showing: {filtered.length}
         </Tag>
-        {branch === 'all' && (
-          <Space size={[6,6]} wrap>
-            {countsByBranch.map(([b,c]) => (
-              <Tag key={b} color="green" style={{ marginInlineEnd: 6 }}>
-                {b}: {c}
-              </Tag>
-            ))}
-          </Space>
-        )}
+        
       </div>
 
       {/* Availability for current filters */}
@@ -424,7 +431,7 @@ export default function InStockUpdate() {
   <Table
         dataSource={filtered}
         columns={columns}
-        loading={loading}
+        loading={loading && !hasCache}
         size={isMobile ? 'small' : 'middle'}
         pagination={{
           current: page,
@@ -539,6 +546,7 @@ export default function InStockUpdate() {
         <BookingForm
           asModal
           initialValues={invoicePrefill || {}}
+          autoUpdateStockOnSave={false}
           onSuccess={async ({ response, payload }) => {
             try {
               const veh = payload?.vehicle || {};

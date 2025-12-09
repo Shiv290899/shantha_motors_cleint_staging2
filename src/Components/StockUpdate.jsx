@@ -83,6 +83,7 @@ export default function StockUpdate() {
   const [invoiceBaseRow, setInvoiceBaseRow] = useState(null);
   const [loadingList, setLoadingList] = useState(false);
   const [items, setItems] = useState([]);
+  const [hasCache, setHasCache] = useState(false);
   // Controlled pagination for the table
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -128,6 +129,15 @@ export default function StockUpdate() {
     }
     return myBranch || '';
   }, [isPriv, branchFilter, myBranch]);
+  const listBranchScope = useMemo(() => {
+    const isStaffLike = ['staff','mechanic','employees'].includes(myRole);
+    if (isStaffLike) return myBranch || 'self';
+    return branchFilter === 'all' ? 'all' : (branchFilter || 'all');
+  }, [myRole, myBranch, branchFilter]);
+  const cacheKey = useMemo(
+    () => `StockMovements:list:${JSON.stringify({ role: myRole || '', branch: listBranchScope })}`,
+    [myRole, listBranchScope]
+  );
 
   useEffect(() => {
     (async () => {
@@ -160,6 +170,23 @@ export default function StockUpdate() {
       }
     })();
   }, []);
+
+  // Instant paint from cache for the current role/branch scope
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) { setHasCache(false); return; }
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.items)) {
+        setItems(cached.items);
+        setHasCache(true);
+      } else {
+        setHasCache(false);
+      }
+    } catch {
+      setHasCache(false);
+    }
+  }, [cacheKey]);
 
   const companies = useMemo(() => [...new Set(catalog.map((r) => r.company))], [catalog]);
   const models = useMemo(() => [...new Set(catalog.filter((r) => r.company === company).map((r) => r.model))], [catalog, company]);
@@ -328,8 +355,15 @@ export default function StockUpdate() {
           resolvedAt: r.resolvedAt || '',
         }));
         setItems(rows);
+        setHasCache(true);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), items: rows }));
+        } catch {
+          // ignore cache write errors
+        }
     } catch {
-      setItems([]);
+      if (!hasCache) setItems([]);
+      setHasCache(false);
     } finally {
       setLoadingList(false);
     }
@@ -568,7 +602,7 @@ export default function StockUpdate() {
           )}
         </div>
         <Space>
-          <Button onClick={fetchList}>Refresh</Button>
+          <Button onClick={fetchList} loading={loadingList}>Refresh</Button>
           <Button
             type="primary"
             onClick={() => {
@@ -665,7 +699,7 @@ export default function StockUpdate() {
       <Table
         dataSource={filteredItems}
         columns={columns}
-        loading={loadingList}
+        loading={loadingList && !hasCache}
         pagination={{
           current: page,
           pageSize,
@@ -891,6 +925,7 @@ export default function StockUpdate() {
         <BookingForm
           asModal
           initialValues={invoicePrefill || {}}
+          autoUpdateStockOnSave={false}
           onSuccess={async ({ response, payload }) => {
             try {
               const veh = payload?.vehicle || {};

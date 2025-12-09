@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from "dayjs";
@@ -7,7 +7,7 @@ import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import { useNavigate } from "react-router-dom";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -58,6 +58,7 @@ export default function Jobcards() {
   
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
 
   useEffect(() => {
@@ -166,6 +167,9 @@ export default function Jobcards() {
             if (hasPaymentMode && hasAmount) return 'completed';
             return 'pending';
           })();
+          const remarkLevelRaw = payload?.remark?.level || obj?.RemarkLevel || obj?.['Remark Level'] || '';
+          const remarkTextRaw = payload?.remark?.text || obj?.RemarkText || obj?.['Remark Text'] || '';
+          const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
 
           return {
             key: idx,
@@ -184,9 +188,11 @@ export default function Jobcards() {
             amount: serviceAmount.trim(),
             paymentMode: payMode.trim(),
             status,
-            // remarks (if present in sheet)
-            RemarkLevel: (obj && (obj.RemarkLevel || obj['Remark Level'])) || '',
-            RemarkText: (obj && (obj.RemarkText || obj['Remark Text'])) || '',
+            // remarks (sheet columns or payload.remark)
+            RemarkLevel: remarkLevelRaw || '',
+            RemarkText: remarkTextRaw || '',
+            _remarkLevel: remarkLevelNorm,
+            _remarkText: remarkTextRaw || '',
           };
         });
         const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
@@ -194,7 +200,13 @@ export default function Jobcards() {
           setRows(filteredRows);
           const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
           setTotalCount(nextTotal);
-          const map = {}; filteredRows.forEach(rr => { if (rr.jcNo) map[rr.jcNo] = { level: String(rr.RemarkLevel||'').toLowerCase(), text: rr.RemarkText||'' }; });
+          const map = {};
+          filteredRows.forEach(rr => {
+            if (!rr.jcNo) return;
+            const lvl = (typeof rr._remarkLevel !== 'undefined' ? rr._remarkLevel : rr.remarkLevel) ?? String(rr.RemarkLevel || '').toLowerCase();
+            const txt = (typeof rr._remarkText !== 'undefined' ? rr._remarkText : rr.remarkText) ?? rr.RemarkText ?? '';
+            map[rr.jcNo] = { level: lvl || '', text: txt || '' };
+          });
           setRemarksMap(map);
           try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
             //skdhj
@@ -322,10 +334,14 @@ export default function Jobcards() {
     }
     columns.push({ title: "Remarks", key: "remarks", width: 60, render: (_, r) => {
         const rem = remarksMap[r.jcNo];
-        const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';
+        const level = String(rem?.level || '').toLowerCase();
+        const color = level === 'alert' ? 'red' : level === 'warning' ? 'gold' : level === 'ok' ? 'green' : 'default';
+        const title = rem?.text ? rem.text : 'No remark yet';
         return (
           <Space size={6}>
-            <Tag color={color}>{rem?.level ? rem.level.toUpperCase() : '—'}</Tag>
+            <Tooltip title={title}>
+              <Tag color={color}>{level ? level.toUpperCase() : '—'}</Tag>
+            </Tooltip>
             <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
           </Space>
         );
@@ -412,19 +428,30 @@ export default function Jobcards() {
       <Modal
         open={remarkModal.open}
         title={`Update Remark: ${remarkModal.refId}`}
-        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        confirmLoading={remarkSaving}
+        maskClosable={!remarkSaving}
+        keyboard={!remarkSaving}
+        closable={!remarkSaving}
+        cancelButtonProps={{ disabled: remarkSaving }}
+        onCancel={()=> {
+          if (remarkSaving) return;
+          setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+          setRemarkSaving(false);
+        }}
         onOk={async ()=>{
+          setRemarkSaving(true);
           try {
             if (!GAS_URL) { message.error('Jobcards GAS URL not configured'); return; }
             const body = GAS_SECRET ? { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET } : { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
             const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
             if (resp && (resp.ok || resp.success)) {
               setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
-              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: remarkModal.text } : x));
+              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: remarkModal.text, _remarkLevel: remarkModal.level, _remarkText: remarkModal.text } : x));
               message.success('Remark saved to sheet');
               setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
             } else { message.error('Save failed'); }
           } catch { message.error('Save failed'); }
+          finally { setRemarkSaving(false); }
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>

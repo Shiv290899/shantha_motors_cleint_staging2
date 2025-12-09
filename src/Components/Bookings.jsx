@@ -1,11 +1,14 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography, Modal, Upload, DatePicker } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from 'dayjs';
 import BookingPrintQuickModal from "./BookingPrintQuickModal";
 import BookingInlineModal from "./BookingInlineModal";
+import BookingForm from "./BookingForm";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
+import { listBranchesPublic } from "../apiCalls/branches";
+import { listUsersPublic } from "../apiCalls/adminUsers";
 
 const { Text } = Typography;
 
@@ -56,6 +59,10 @@ export default function Bookings() {
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
   const [hasCache, setHasCache] = useState(false);
   const [actionModal, setActionModal] = useState({ open: false, type: '', row: null, fileList: [], loading: false });
+  const [formModal, setFormModal] = useState({ open: false });
+  const [branchOptions, setBranchOptions] = useState([]);
+  const [executiveOptions, setExecutiveOptions] = useState([]);
+  const [dropdownLoading, setDropdownLoading] = useState(false);
 
   // User + branch scoping
   const [userRole, setUserRole] = useState("");
@@ -82,9 +89,51 @@ export default function Bookings() {
     }
   }, [userRole, allowedBranches, branchFilter]);
 
+  const loadDropdowns = useCallback(async () => {
+    setDropdownLoading(true);
+    try {
+      const [branchesRes, usersRes] = await Promise.allSettled([
+        listBranchesPublic({ status: 'active', limit: 500 }),
+        listUsersPublic({ role: 'staff', status: 'active', limit: 100000 }),
+      ]);
+      if (branchesRes.status === 'fulfilled' && branchesRes.value?.success) {
+        const names = (branchesRes.value.data.items || [])
+          .filter((b) => String(b?.status || '').toLowerCase() === 'active')
+          .map((b) => b.name)
+          .filter(Boolean);
+        setBranchOptions(names);
+      } else {
+        setBranchOptions([]);
+        if (branchesRes.status === 'fulfilled') {
+          message.warning(branchesRes.value?.message || 'Could not load branches');
+        }
+      }
+      if (usersRes.status === 'fulfilled' && usersRes.value?.success) {
+        const names = (usersRes.value.data.items || [])
+          .filter((u) => String(u.role || '').toLowerCase() === 'staff')
+          .map((u) => u.name || u.email || '')
+          .filter(Boolean);
+        setExecutiveOptions(names);
+      } else {
+        setExecutiveOptions([]);
+        if (usersRes.status === 'fulfilled') {
+          message.warning(usersRes.value?.message || 'Could not load executives');
+        }
+      }
+    } catch {
+      setBranchOptions([]);
+      setExecutiveOptions([]);
+      message.error('Could not load dropdown options');
+    } finally {
+      setDropdownLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadDropdowns(); }, [loadDropdowns]);
+
   // Reuse the same GAS URL for list + print so search works
   const DEFAULT_BOOKING_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
+    "https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
@@ -277,7 +326,7 @@ export default function Bookings() {
   const updateBooking = async (bookingId, patch, mobile) => {
     try {
       setUpdating(bookingId);
-      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
       const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
       const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
       // Mirror patch keys to exact Sheet headers to ensure update reflects
@@ -313,7 +362,7 @@ export default function Bookings() {
 
   // Minimal upload helper to GAS (same endpoint used by BookingForm)
   const uploadFileToGAS = async (file) => {
-    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbydOWWH1jbinBzNj_z5ZRU3906D-tS93o39QSVuH5IfD2YPgPqOTmzNH9FAwWGhorXylg/exec";
+    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
     const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
     const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
     if (!GAS_URL) throw new Error('GAS URL not configured');
@@ -355,7 +404,7 @@ export default function Bookings() {
   const beforeUploadPdf = (file) => {
     const isPdf = file.type === 'application/pdf' || (file.name || '').toLowerCase().endsWith('.pdf');
     if (!isPdf) { message.error('Only PDF files allowed'); return Upload.LIST_IGNORE; }
-    const okSize = (file.size || 0) <= 5 * 1024 * 1024; // 5 MB
+    const okSize = (file.size || 0) <= 10 * 1024 * 1024; // 5 MB
     if (!okSize) { message.error('File must be <= 5MB'); return Upload.LIST_IGNORE; }
     return false; // do not auto-upload
   };
@@ -567,6 +616,10 @@ export default function Bookings() {
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
+          <Button type="primary" onClick={() => {
+            setFormModal({ open: true });
+            if (!branchOptions.length || !executiveOptions.length) loadDropdowns();
+          }}>Booking Form</Button>
           <Tag color="blue">Total: {total}</Tag>
           <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}{statusFilter !== 'all' ? ` (status: ${statusFilter})` : ''}</Tag>
           {!USE_SERVER_PAG && (
@@ -617,6 +670,33 @@ export default function Bookings() {
           </Button>
         </div>
       ) : null}
+
+      <Modal
+        open={formModal.open}
+        onCancel={()=> setFormModal({ open: false })}
+        footer={null}
+        width={1040}
+        destroyOnClose
+        title="New Booking"
+        bodyStyle={{ paddingTop: 8 }}
+      >
+        <BookingForm
+          allowBranchSelect
+          allowExecutiveSelect
+          branchOptions={branchOptions}
+          executiveOptions={executiveOptions}
+          branchOptionsLoading={dropdownLoading}
+          executiveOptionsLoading={dropdownLoading}
+          onSuccess={() => {
+            setFormModal({ open: false });
+            try {
+              window.dispatchEvent(new Event('reload-bookings'));
+            } catch {
+              // ignore
+            }
+          }}
+        />
+      </Modal>
 
       <BookingPrintQuickModal
         open={printModal.open}

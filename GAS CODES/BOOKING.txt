@@ -66,7 +66,7 @@ function doPost(e) {
         fileId: body.fileId || ''
       };
       const type = String(body.type || '');
-      const append = body.append === true;
+      const append = false; // Force replacement; do not accumulate comma-separated links
       const ts = new Date().toISOString();
       return json_(attachDocument_(bookingId, mobile, file, type, append, ts));
     }
@@ -114,7 +114,7 @@ const DRIVE_FOLDER_ID = '1VMnnv-2zYwX4j3k4JSC_Qc6Il7xYaRsT';
 const READ_SECRET = '';  // optional
 const WRITE_SECRET = ''; // optional
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024; // <= 5 MB
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // <= 5 MB
 const ALLOWED_MIME = 'application/pdf';
 
 const HEADERS = [
@@ -248,7 +248,7 @@ function updateExistingBooking_(existing, data) {
   if (payments && payments.length) payload.payments = payments;
   if (bookingAmount) payload.bookingAmount = bookingAmount;
 
-  // Optional file append (APPEND links)
+  // Optional file replace (ALWAYS keep only latest link)
   const incomingFile =
     data.file ||
     (Array.isArray(data.files) && data.files[0]) ||
@@ -256,28 +256,14 @@ function updateExistingBooking_(existing, data) {
     null;
 
   const savedFile = saveOneFileToDrive_(incomingFile);
-  if (savedFile && savedFile.url) {
-    const nameIdx = idx(headers, 'File Name');
-    const urlIdx = idx(headers, 'File URL');
-    const typeIdx = idx(headers, 'File Type');
-    const sizeIdx = idx(headers, 'File Size');
-
-    const curName = String(cells[nameIdx] || '').trim();
-    const curUrl = String(cells[urlIdx] || '').trim();
-
-    if (curUrl) {
-      cells[nameIdx] = curName ? (curName + ', ' + (savedFile.name || 'Document.pdf')) : (savedFile.name || 'Document.pdf');
-      cells[urlIdx] = curUrl ? (curUrl + ', ' + savedFile.url) : savedFile.url;
-    } else {
-      cells[nameIdx] = savedFile.name || '';
-      cells[urlIdx] = savedFile.url || '';
-    }
-    cells[typeIdx] = savedFile.type || '';
-    cells[sizeIdx] = savedFile.size || '';
-
-    if (!Array.isArray(payload.attachments)) payload.attachments = [];
-    payload.attachments.push({ type: 'BookingDoc', name: savedFile.name || 'Document', url: savedFile.url, fileId: '', ts: new Date().toISOString() });
-  }
+  collapseAttachment_(payload, cells, headers, savedFile && savedFile.url ? {
+    name: savedFile.name,
+    url: savedFile.url,
+    fileId: '',
+    type: savedFile.type,
+    size: savedFile.size,
+    ts: new Date().toISOString()
+  } : null);
 
   // Update columns (only if provided)
   cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
@@ -384,9 +370,29 @@ function updateExistingBooking_(existing, data) {
       var branchUse = String(branch || (bIdx >= 0 ? cells[bIdx] : '') || '').trim();
       var execUse = String(executive || (eIdx >= 0 ? cells[eIdx] : '') || '').trim();
       if (branchUse && execUse) {
+        var custIdx = headers.indexOf('Customer Name');
+        var mobIdx = headers.indexOf('Mobile Number');
+        var customerNameUse = String(customerName || (custIdx >= 0 ? cells[custIdx] : '') || payload.customerName || payload.name || '').trim();
+        var customerMobileUse = String(mobileNumber || (mobIdx >= 0 ? cells[mobIdx] : '') || payload.mobileNumber || payload.mobile || '')
+          .replace(/\D/g, '')
+          .slice(-10);
+        var paymentModeUse = String(data.paymentMode || data.purchaseMode || payload.paymentMode || '').toLowerCase();
+        var ledgerCtx = {
+          sourceType: 'booking',
+          sourceId: id || '',
+          bookingId: id || '',
+          customerName: customerNameUse,
+          customerMobile: customerMobileUse,
+          paymentMode: paymentModeUse,
+          payments: payments,
+          deltaAmount: delta,
+          deltaCash: deltaCash,
+          deltaOnline: deltaOnline
+        };
         updateDailyCollection_(branchUse, execUse, delta, 'booking', {
           cashCollected: deltaCash,
           onlineCollected: deltaOnline,
+          staffLedgerContext: ledgerCtx,
         });
       }
     }
@@ -478,10 +484,14 @@ function createNewBooking_(data) {
 
   const payload = JSON.parse(JSON.stringify(data || {}));
   try { if (payload && payload.file && payload.file.base64) delete payload.file.base64; } catch(e){}
-  if (savedFile && savedFile.url) {
-    if (!Array.isArray(payload.attachments)) payload.attachments = [];
-    payload.attachments.push({ type: 'BookingDoc', name: savedFile.name || 'Document', url: savedFile.url, fileId: '', ts: new Date().toISOString() });
-  }
+  collapseAttachment_(payload, row, HEADERS, savedFile && savedFile.url ? {
+    name: savedFile.name,
+    url: savedFile.url,
+    fileId: '',
+    type: savedFile.type,
+    size: savedFile.size,
+    ts: new Date().toISOString()
+  } : null);
   const rawStr = JSON.stringify(payload || {});
   row[idx(HEADERS, 'Raw Payload')] = rawStr.length > 45000
     ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, note: 'payload truncated' })
@@ -616,31 +626,28 @@ function attachDocument_(bookingId, mobileOpt, file, docType, append, tsIso) {
   const newUrl = file.url || (file.fileId ? 'https://drive.google.com/file/d/' + file.fileId + '/view' : '');
   if (!newUrl) return { success: false, error: 'missing_url' };
 
-  if (append && curUrl) {
-    cells[fileNameIdx] = curName ? (curName + ', ' + newName) : newName;
-    cells[fileUrlIdx] = curUrl ? (curUrl + ', ' + newUrl) : newUrl;
-  } else {
-    cells[fileNameIdx] = newName;
-    cells[fileUrlIdx] = newUrl;
-  }
-
+  // Always replace with latest document (append flag intentionally ignored)
+  const nowIso = tsIso || new Date().toISOString();
   var payload = {};
   try { payload = JSON.parse(String(cells[rawIdx] || '{}')); } catch (e) { payload = {}; }
-  if (!Array.isArray(payload.attachments)) payload.attachments = [];
-  payload.attachments.push({
+  payload.attachments = [{
     type: docType || 'Other',
     name: newName,
     url: newUrl,
     fileId: file.fileId || '',
-    ts: tsIso || new Date().toISOString()
-  });
+    ts: nowIso
+  }];
+  cells[fileNameIdx] = newName;
+  cells[fileUrlIdx] = newUrl;
+  cells[idx(headers, 'File Type')] = cells[idx(headers, 'File Type')] || '';
+  cells[idx(headers, 'File Size')] = cells[idx(headers, 'File Size')] || '';
   cells[rawIdx] = JSON.stringify(payload);
 
   cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
   range.setValues([cells]);
 
   const id = String(cells[idx(headers, 'Booking ID')] || '');
-  return { success: true, bookingId: id, appended: append };
+  return { success: true, bookingId: id, appended: false, replaced: true };
 }
 
 // ===================== LIST / SEARCH =====================
@@ -742,17 +749,35 @@ function searchBookings_(mode, query) {
     const idxMap = {
       bookingId: headers.indexOf('Booking ID'),
       mobile: headers.indexOf('Mobile Number'),
+      vehicle: headers.indexOf('Vehicle No'),
       raw: headers.indexOf('Raw Payload'),
     };
 
     for (var i = 1; i < values.length; i++) {
       const id = idxMap.bookingId >= 0 ? String(values[i][idxMap.bookingId]) : '';
       const mobile = idxMap.mobile >= 0 ? String(values[i][idxMap.mobile]) : '';
+      const vehicle = idxMap.vehicle >= 0 ? normReg_(values[i][idxMap.vehicle]) : '';
       const raw = idxMap.raw >= 0 ? String(values[i][idxMap.raw]) : '';
 
-      const hit = (mode === 'booking')
-        ? (id === query)
-        : (mobile.replace(/\D/g, '').slice(-10) === String(query).replace(/\D/g, '').slice(-10));
+      const isBookingId = mode === 'booking';
+      const isVehicle = mode === 'vehicle' || mode === 'reg';
+      const qMobile = String(query).replace(/\D/g, '').slice(-10);
+      const qReg = normReg_(query);
+
+      let hit = false;
+      if (isBookingId) {
+        hit = id === query;
+      } else if (isVehicle) {
+        const regFromRaw = normReg_((function(){
+          try {
+            const pj = JSON.parse(raw || '{}');
+            return pj && pj.vehicle && (pj.vehicle.regNo || pj.vehicle.registrationNumber || pj.vehicleNo || pj.regNo) || '';
+          } catch (_) { return ''; }
+        })());
+        hit = qReg && (vehicle === qReg || regFromRaw === qReg);
+      } else {
+        hit = mobile.replace(/\D/g, '').slice(-10) === qMobile;
+      }
       if (!hit) continue;
 
       var payload = {};
@@ -774,21 +799,15 @@ function searchBookings_(mode, query) {
       payload.address = payload.address || getCell_(headers, values[i], 'Address');
       payload.purchaseMode = payload.purchaseMode || payload.purchaseType || getCell_(headers, values[i], 'Purchase Mode');
       payload.financier = payload.financier || getCell_(headers, values[i], 'Financier');
+      // Surface invoice/insurance links from sheet for UI consumers
+      const invoiceUrl = getCell_(headers, values[i], 'Invoice File URL') || '';
+      const insuranceUrl = getCell_(headers, values[i], 'Insurance File URL') || '';
+      if (invoiceUrl) payload.invoiceFileUrl = payload.invoiceFileUrl || invoiceUrl;
+      if (insuranceUrl) payload.insuranceFileUrl = payload.insuranceFileUrl || insuranceUrl;
 
       var fileName = getCell_(headers, values[i], 'File Name') || '';
       var fileUrl = getCell_(headers, values[i], 'File URL') || '';
-      if (!Array.isArray(payload.attachments)) payload.attachments = [];
-      if (fileUrl) {
-        var names = String(fileName || '').split(',').map(function (s) { return s.trim(); });
-        var urls = String(fileUrl || '').split(',').map(function (s) { return s.trim(); });
-        for (var a = 0; a < urls.length; a++) {
-          if (!urls[a]) continue;
-          payload.attachments.push({
-            name: names[a] || ('Document ' + (a + 1)),
-            url: urls[a]
-          });
-        }
-      }
+      collapseAttachment_(payload, values[i], headers, null);
 
       out.push({ payload });
     }
@@ -940,6 +959,79 @@ function saveOneFileToDrive_(f) {
   }
 }
 
+// Normalize attachments to a single latest entry and rewrite sheet/file columns
+function collapseAttachment_(payload, cells, headers, overrideAtt) {
+  var nameIdx = idx(headers, 'File Name');
+  var urlIdx = idx(headers, 'File URL');
+  var typeIdx = idx(headers, 'File Type');
+  var sizeIdx = idx(headers, 'File Size');
+
+  var nowIso = new Date().toISOString();
+  var att = null;
+
+  if (overrideAtt && overrideAtt.url) {
+    att = {
+      name: overrideAtt.name || 'Document',
+      url: overrideAtt.url,
+      fileId: overrideAtt.fileId || '',
+      type: overrideAtt.type || '',
+      size: overrideAtt.size || '',
+      ts: overrideAtt.ts || nowIso
+    };
+  }
+
+  if (!att && Array.isArray(payload && payload.attachments) && payload.attachments.length) {
+    var last = payload.attachments[payload.attachments.length - 1] || {};
+    var urlFromAtt = last.url || (last.fileId ? ('https://drive.google.com/file/d/' + last.fileId + '/view') : '');
+    if (urlFromAtt) {
+      att = {
+        name: last.name || 'Document',
+        url: urlFromAtt,
+        fileId: last.fileId || '',
+        type: last.type || '',
+        size: last.size || '',
+        ts: last.ts || nowIso
+      };
+    }
+  }
+
+  if (!att) {
+    var curName = String(cells[nameIdx] || '');
+    var curUrl = String(cells[urlIdx] || '');
+    var urls = curUrl.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    var names = curName.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (urls.length) {
+      var u = urls[urls.length - 1];
+      var n = names.length ? names[Math.min(names.length - 1, urls.length - 1)] : '';
+      att = {
+        name: n || 'Document',
+        url: u,
+        fileId: '',
+        type: String(cells[typeIdx] || ''),
+        size: cells[sizeIdx] || '',
+        ts: nowIso
+      };
+    }
+  }
+
+  if (!att || !att.url) {
+    payload.attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(-1) : [];
+    return;
+  }
+
+  cells[nameIdx] = att.name || '';
+  cells[urlIdx] = att.url;
+  cells[typeIdx] = att.type || '';
+  cells[sizeIdx] = att.size || '';
+  payload.attachments = [{
+    type: att.type || 'BookingDoc',
+    name: att.name || 'Document',
+    url: att.url,
+    fileId: att.fileId || '',
+    ts: att.ts || nowIso
+  }];
+}
+
 function formatTs_(d) {
   return Utilities.formatDate(d, Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd HH:mm:ss');
 }
@@ -957,6 +1049,10 @@ function getCell_(headers, row, key) {
 
 function parseJson_(raw, def) {
   try { return JSON.parse(raw || '{}'); } catch (e) { return def; }
+}
+
+function normReg_(s) {
+  return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function idx(arr, key) {

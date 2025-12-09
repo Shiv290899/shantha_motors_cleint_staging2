@@ -1,6 +1,6 @@
 // FetchJobcard.jsx
 import React, { useMemo, useState } from "react";
-import { Button, Modal, Input, List, Space, Spin, message } from "antd";
+import { Alert, Button, Modal, Input, List, Space, Spin, message, Radio } from "antd";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
@@ -35,11 +35,11 @@ export default function FetchJobcard({
 }) {
   const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
   const [open, setOpen] = useState(false);
-  // Restrict search to Mobile only
-  const mode = "mobile";
+  const [mode, setMode] = useState("mobile"); // mobile | vehicle
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
+  const [notFoundText, setNotFoundText] = useState("");
 
   const { BRANCHES, MECHANIC, EXECUTIVES, VEHICLE_TYPES, SERVICE_TYPES } =
     useMemo(() => lists || {}, [lists]);
@@ -93,6 +93,38 @@ export default function FetchJobcard({
   };
 
   const tenDigits = (x) => String(x || "").replace(/\D/g, "").slice(-10);
+  const normalizeReg = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const VEH_RX = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
+  const isVehiclePartial = (val) => {
+    const v = normalizeReg(val);
+    if (v.length > 10) return false;
+    if (!/^[A-Z0-9]*$/.test(v)) return false;
+    const stages = [
+      /^[A-Z]{0,2}$/,
+      /^[A-Z]{2}\d{0,2}$/,
+      /^[A-Z]{2}\d{2}[A-Z]{0,2}$/,
+      /^[A-Z]{2}\d{2}[A-Z]{2}\d{0,4}$/,
+    ];
+    return stages.some((rx) => rx.test(v));
+  };
+
+  const showNotFoundModal = () => {
+    const pretty =
+      mode === "vehicle"
+        ? normalizeReg(query)
+        : tenDigits(query) || String(query || "").trim();
+    const label = mode === "vehicle" ? "vehicle number" : "mobile number";
+    const txt = pretty
+      ? `The ${label} "${pretty}" is not in our job card records.`
+      : "No matching record found in our job card records.";
+    setNotFoundText(txt);
+    Modal.warning({
+      centered: true,
+      title: "No job card found",
+      content: txt,
+      okText: "Got it",
+    });
+  };
 
   const parseDDMMYYYY = (s) => {
     const t = String(s || "").trim();
@@ -176,6 +208,8 @@ export default function FetchJobcard({
     const s = String(val || "").toLowerCase();
     if (s.includes("free")) return "Free";
     if (s.includes("paid")) return "Paid";
+    if (s.includes("minor")) return "Minor";
+    if (s.includes("accid")) return "Accidental";
     return chooseBest(SERVICE_TYPES || [], val);
   };
   const canonVehicleType = (val) => {
@@ -188,89 +222,78 @@ export default function FetchJobcard({
   };
 
   // ---------- Fetch rows (Webhook only) ----------
-  const fetchRows = async () => {
-    if (webhookUrl) {
+  const fetchRows = async (queryOverride) => {
+    if (!webhookUrl) throw new Error("Webhook URL not configured");
+    const payloadMode = mode === 'vehicle' ? 'reg' : 'mobile';
+    const qStr = String(queryOverride ?? query ?? '');
+    const basePayload = JOB_SECRET
+      ? { action: 'search', mode: payloadMode, query: qStr, secret: JOB_SECRET }
+      : { action: 'search', mode: payloadMode, query: qStr };
+    let rows = [];
+    try {
+      const resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: basePayload });
+      const j = resp?.data || resp;
+      rows = Array.isArray(j?.rows) ? j.rows : [];
+    } catch (e) {
+      console.warn('Webhook search failed:', e);
+    }
+    // If no rows and vehicle mode, try literal "vehicle"
+    if (!rows.length && mode === 'vehicle') {
       try {
-        // Try GET first; some deployments allow only GET
-        let resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: { action: 'search', mode: 'mobile', query: String(query || '') } });
-        let j = resp?.data || resp;
-        let rows = Array.isArray(j?.rows) ? j.rows : [];
-        if (!rows.length) {
-          // Fallback to POST
-          resp = await saveJobcardViaWebhook({ webhookUrl, method: 'POST', payload: { action: 'search', mode: 'mobile', query: String(query || '') } });
-          j = resp?.data || resp;
-          rows = Array.isArray(j?.rows) ? j.rows : [];
-        }
-        if (!rows.length) {
-          // Final fallback: fetch full list and filter client-side
-          const listResp = await saveJobcardViaWebhook({
-            webhookUrl,
-            method: 'GET',
-            payload: JOB_SECRET ? { action: 'list', secret: JOB_SECRET } : { action: 'list' },
-          });
-          const lj = listResp?.data || listResp;
-          const dataArr = Array.isArray(lj?.data) ? lj.data : (Array.isArray(lj?.rows) ? lj.rows : []);
-          const q = String(query || '').trim().toLowerCase();
-          const filtered = dataArr.filter((o) => {
-            const v = o && o.values ? o.values : o || {};
-            
-            const mobile = String(v['Mobile'] || v['Mobile Number'] || v['Phone'] || '').replace(/\D/g,'');
-            const q10 = q.replace(/\D/g,'');
-            return q10 && mobile.endsWith(q10);
-          });
-          rows = filtered.map((o) => ({ values: o && o.values ? o.values : o }));
-        }
-        // Normalize rows: merge sheet values into payload.formValues so all fields reflect
-        const norm = rows.map((r) => {
-          const v = r && r.values ? r.values : {};
-          const postAtFromValues = String(v.Post_Service_At || v.Post_Service_at || v.Post_Service || '').trim();
-          const fvFromValues = {
-            jcNo: String(v['JC No.'] || ''),
-            branch: String(v.Branch || ''),
-            regNo: String(v.Vehicle_No || v['Vehicle No'] || ''),
-            model: String(v.Model || ''),
-            colour: String(v.Colour || v.Color || ''),
-            km: String(v.KM || v['Odometer Reading'] || v['Odomete Reading'] || '').replace(/\D/g,'') || '',
-            serviceType: String(v.Service_Type || v['Service Type'] || ''),
-            custName: String(v.Customer_Name || ''),
-            custMobile: String(v.Mobile || ''),
-            obs: String(v.Customer_Observation || ''),
-            expectedDelivery: String(v.Expected_Delivery_Date || ''),
-            amount: String(v.Collected_Amount || ''),
-          };
-          if (r && r.payload && typeof r.payload === 'object') {
-            const p = r.payload || {};
-            // Prefer payload values (they represent what the app saved),
-            // fill only missing keys from the sheet values
-            const merged = { ...fvFromValues, ...(p.formValues || {}) };
-            return {
-              payload: {
-                ...p,
-                formValues: merged,
-                postServiceAt: p.postServiceAt || p.postService_at || postAtFromValues || undefined,
-                postServiceLogged: p.postServiceLogged || Boolean(p.postServiceAt || p.postService_at || postAtFromValues),
-                _values: v,
-              }
-            };
-          }
-          return {
-            payload: {
-              formValues: fvFromValues,
-              labourRows: [],
-              totals: {},
-              postServiceAt: postAtFromValues || undefined,
-              postServiceLogged: Boolean(postAtFromValues),
-              _values: v,
-            }
-          };
-        });
-        return { mode: 'webhook', rows: norm };
+        const altPayload = JOB_SECRET
+          ? { action: 'search', mode: 'vehicle', query: qStr, secret: JOB_SECRET }
+          : { action: 'search', mode: 'vehicle', query: qStr };
+        const resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: altPayload });
+        const j = resp?.data || resp;
+        rows = Array.isArray(j?.rows) ? j.rows : [];
       } catch (e) {
-        console.warn('Webhook search failed:', e);
-        throw e;
+        console.warn('Vehicle search fallback failed:', e);
       }
     }
-    throw new Error("Webhook URL not configured");
+
+    // Normalize rows: merge sheet values into payload.formValues so all fields reflect
+    const norm = rows.map((r) => {
+      const v = r && r.values ? r.values : {};
+      const postAtFromValues = String(v.Post_Service_At || v.Post_Service_at || v.Post_Service || '').trim();
+      const fvFromValues = {
+        jcNo: String(v['JC No.'] || ''),
+        branch: String(v.Branch || ''),
+        regNo: formatReg(v.Vehicle_No || v['Vehicle No'] || '', ''),
+        model: String(v.Model || ''),
+        colour: String(v.Colour || v.Color || ''),
+        km: String(v.KM || v['Odometer Reading'] || v['Odomete Reading'] || '').replace(/\D/g,'') || '',
+        serviceType: String(v.Service_Type || v['Service Type'] || ''),
+        custName: String(v.Customer_Name || ''),
+        custMobile: String(v.Mobile || ''),
+        obs: String(v.Customer_Observation || ''),
+        expectedDelivery: String(v.Expected_Delivery_Date || ''),
+        amount: String(v.Collected_Amount || ''),
+      };
+      if (r && r.payload && typeof r.payload === 'object') {
+        const p = r.payload || {};
+        const merged = { ...fvFromValues, ...(p.formValues || {}) };
+        return {
+          payload: {
+            ...p,
+            formValues: merged,
+            postServiceAt: p.postServiceAt || p.postService_at || postAtFromValues || undefined,
+            postServiceLogged: p.postServiceLogged || Boolean(p.postServiceAt || p.postService_at || postAtFromValues),
+            _values: v,
+          }
+        };
+      }
+      return {
+        payload: {
+          formValues: fvFromValues,
+          labourRows: [],
+          totals: {},
+          postServiceAt: postAtFromValues || undefined,
+          postServiceLogged: Boolean(postAtFromValues),
+          _values: v,
+        }
+      };
+    });
+    return { mode: 'webhook', rows: norm };
   };
 
   // ---------- map & apply ----------
@@ -279,7 +302,7 @@ export default function FetchJobcard({
     const mechanicRaw = pick(row, COL.Mechanic);
     const executiveRaw = pick(row, COL.Executive);
     const expectedDelivery = parseDDMMYYYY(pick(row, COL.ExpectedDelivery));
-    const regNo = formatReg(pick(row, COL.RegNo));
+    const regNo = formatReg(pick(row, COL.RegNo), "");
     const model = pick(row, COL.Model);
     const colour = pick(row, COL.Colour);
     const kmDigits = pick(row, COL.KM).replace(/\D/g, "");
@@ -426,17 +449,36 @@ export default function FetchJobcard({
   const runSearch = async () => {
     const raw = (query || "").trim();
     if (!raw) {
-      message.warning("Enter a mobile number.");
+      message.warning(mode === "vehicle" ? "Enter vehicle no. (KA03AB1234)" : "Enter a valid 10-digit mobile number.");
       return;
     }
+    let qNorm = raw;
+    if (mode === "vehicle") {
+      const reg = normalizeReg(raw);
+      if (!VEH_RX.test(reg)) {
+        message.warning("Enter vehicle no. as KA03AB1234.");
+        return;
+      }
+      qNorm = reg;
+      setQuery(reg);
+    } else {
+      const digits = tenDigits(raw);
+      if (!digits || digits.length !== 10) {
+        message.warning("Enter a valid 10-digit mobile number.");
+        return;
+      }
+      qNorm = digits;
+      setQuery(digits);
+    }
+    setNotFoundText("");
     setLoading(true);
     try {
-      const result = await fetchRows();
+      const result = await fetchRows(qNorm);
       if (!result) throw new Error('No result');
       if (result.mode === 'webhook') {
         const rows = result.rows || [];
         if (!rows.length) {
-          message.warning('No matching record found.');
+          showNotFoundModal();
           setMatches([]);
           return;
         }
@@ -466,7 +508,7 @@ export default function FetchJobcard({
       }
 
       if (!candidates.length) {
-        message.warning("No matching record found.");
+        showNotFoundModal();
         setMatches([]);
         return;
       }
@@ -496,7 +538,10 @@ export default function FetchJobcard({
      <Button
   type="primary"
   style={{ background: "#52c41a", borderColor: "#52c41a" }} // AntD green-6
-  onClick={() => setOpen(true)}
+  onClick={() => {
+    setNotFoundText("");
+    setOpen(true);
+  }}
 >
   Fetch Details
 </Button>
@@ -508,6 +553,7 @@ export default function FetchJobcard({
         onCancel={() => {
           setOpen(false);
           setMatches([]);
+          setNotFoundText("");
         }}
         footer={[
           <Button
@@ -515,6 +561,7 @@ export default function FetchJobcard({
             onClick={() => {
               setOpen(false);
               setMatches([]);
+              setNotFoundText("");
             }}
           >
             Close
@@ -525,13 +572,42 @@ export default function FetchJobcard({
         ]}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
+          <Radio.Group
+            value={mode}
+            onChange={(e) => {
+              setMode(e.target.value);
+              setQuery("");
+            }}
+          >
+            <Radio.Button value="mobile">By Mobile</Radio.Button>
+            <Radio.Button value="vehicle">By Vehicle No</Radio.Button>
+          </Radio.Group>
           <Input
-            placeholder={"Enter Mobile (10-digit or last few digits)"}
+            placeholder={mode === "vehicle" ? "Enter Vehicle No (KA03AB1234)" : "Enter Mobile (10-digit)"}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            inputMode={mode === "vehicle" ? "text" : "numeric"}
+            onChange={(e) => {
+              const val = e.target.value || "";
+              if (mode === "vehicle") {
+                const reg = val.toUpperCase().replace(/[^A-Z0-9]/g, "");
+                if (!isVehiclePartial(reg)) return;
+                setQuery(reg);
+              } else {
+                const digits = String(val || "").replace(/\D/g, "").slice(0, 10);
+                setQuery(digits);
+              }
+            }}
             onPressEnter={runSearch}
             allowClear
           />
+
+          {notFoundText && (
+            <Alert
+              type="warning"
+              showIcon
+              message={notFoundText}
+            />
+          )}
 
           {loading && <Spin />}
 

@@ -10,6 +10,7 @@ import StockUpdate from "../StockUpdate";
 import FollowUpsTabs from "../FollowUpsTabs";
 import Announcements from "../Announcements";
 import MinorSales from "../MinorSales";
+import VehicleSearch from "../VehicleSearch";
 import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 import { GetCurrentUser } from "../../apiCalls/users";
 import StaffAccountCard from "../StaffAccountCard";
@@ -96,6 +97,15 @@ export default function Staff() {
       children: (
         <div style={wrap}>
           <BookingForm />
+        </div>
+      ),
+    },
+    {
+      key: "vehicle-search",
+      label: tabLabel('🏍️', "Vehicle Search"),
+      children: (
+        <div style={wrap}>
+          <VehicleSearch />
         </div>
       ),
     },

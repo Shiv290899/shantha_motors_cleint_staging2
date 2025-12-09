@@ -9,7 +9,7 @@ const { Text } = Typography;
 export default function AdminDailyCollections() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbw-_96BCshSZqrJqZDl2XveC0yVmLcwogwih6K_VNfrb-JiI1H-9y04z7eaeFlh7rwSWg/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
   const readUser = () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } };
@@ -225,7 +225,7 @@ export default function AdminDailyCollections() {
   };
   const ledgerCols = [
     { title:'DateTime', dataIndex:'dateTimeIso', key:'dt', render:(v,r)=> fmtLocalShort(v || r.dateTimeIso || r.date) },
-    { title:'Branch', dataIndex:'branch', key:'branch' },
+   
     { title:'Staff', dataIndex:'staff', key:'staff' },
     { title:'Source', key:'src', render:(_,r)=> `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}` },
     { title:'Customer', dataIndex:'customerName', key:'cust' },
@@ -258,6 +258,7 @@ export default function AdminDailyCollections() {
         </Space>
       );
     } },
+     { title:'Branch', dataIndex:'branch', key:'branch' },
   ];
 
   const prevDueCols = [

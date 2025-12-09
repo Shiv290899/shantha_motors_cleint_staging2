@@ -76,6 +76,7 @@ const PreServiceSheet = forwardRef(function PreServiceSheet(
   const floorMatNo = vals?.floorMat != null ? !floorMatYes : false;
   const branch = String(vals?.branch || "").trim();
   const isNH = branch === "Byadarahalli"; // Switch branding for Byadarahalli
+  const serviceTypeList = ["Free", "Paid", "Minor", "Accidental"];
 
   return (
     // 👇 Attach the ref here — parent will pass this to handleSmartPrint(...)
@@ -298,12 +299,13 @@ img { max-width: 100%; height: auto; background: transparent; }
             <div className="box"><span className="label">Expected Delivery Date:</span> {fmtDate(vals.expectedDelivery)}</div>
           </div>
 
-          {/* Free / Paid ticks */}
+          {/* Service type ticks */}
           <div className="box" style={{ marginTop: 3 }}>
-            <div style={{ display: "flex", gap: "6mm" }}>
-              <div>{tick(vals.serviceType === "Free")} Free</div>
-              <div>{tick(vals.serviceType === "Paid")} Paid</div>
-              <HSpace w="50mm" />
+            <div style={{ display: "flex", gap: "6mm", flexWrap: "wrap", alignItems: "center" }}>
+              {serviceTypeList.map((label) => (
+                <div key={label}>{tick(vals.serviceType === label)} {label}</div>
+              ))}
+              <HSpace w="10mm" />
               <div><span className="label">Color:</span> {vals.colour || "-"}</div>
             </div>
           </div>

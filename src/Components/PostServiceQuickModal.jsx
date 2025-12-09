@@ -19,6 +19,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
   const [pay2Mode, setPay2Mode] = useState('online');
   const [pay2Amt, setPay2Amt] = useState('');
   const [pay2Utr, setPay2Utr] = useState('');
+  const [remarks, setRemarks] = useState('');
   const printRef = useRef(null);
 
   const amount = useMemo(() => {
@@ -114,6 +115,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
       const expectedDeliveryStr = fvRow?.expectedDelivery || '';
       const kmDigits = String(valsForPrint.km || fvRow?.km || "").replace(/\D/g, "");
       const obsOneLine = String(fvRow?.obs || '').replace(/\s*\r?\n\s*/g, ' # ').trim();
+      const remarkText = String(remarks || '').trim();
       const payload = {
         postServiceAt: new Date().toISOString(),
         formValues: {
@@ -131,6 +133,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
           custName: valsForPrint.custName || "",
           custMobile: String(valsForPrint.custMobile || ""),
           obs: obsOneLine,
+          remarks: remarkText,
           vehicleType: String(vehicleType || ""),
           serviceType: String(serviceType || ""),
           floorMat: undefined,
@@ -157,13 +160,14 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
           km: kmDigits || '',
           fuelLevel: String(fvRow?.fuelLevel || ''),
           expectedDelivery: expectedDeliveryStr || '',
-          obs: obsOneLine
+          obs: obsOneLine,
+          remarks: remarkText,
         };
 
         await saveJobcardViaWebhook({
           webhookUrl,
           method: 'POST',
-          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, serviceAmount: amount || 0, collectedAmount, paymentMode, payments, utr: joinedUtr || undefined, utrNo: joinedUtr || undefined, payload: { ...payload, payments }, source: 'jobcard', cashCollected, onlineCollected, totalCollected: collectedAmount, formValues: formValuesTop } },
+          payload: { action: 'postService', data: { mobile: mobile10, jcNo: jc || undefined, serviceAmount: amount || 0, collectedAmount, paymentMode, payments, utr: joinedUtr || undefined, utrNo: joinedUtr || undefined, remarks: remarkText, payload: { ...payload, payments, remarks: remarkText }, source: 'jobcard', cashCollected, onlineCollected, totalCollected: collectedAmount, formValues: formValuesTop } },
         });
       }
       message.success('Saved successfully');
@@ -174,7 +178,7 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
         } }, 50);
       }
       onClose?.();
-      setPay1Amt(''); setPay1Utr(''); setPay2Amt(''); setPay2Utr('');
+      setPay1Amt(''); setPay1Utr(''); setPay2Amt(''); setPay2Utr(''); setRemarks('');
     } catch (e) {
       message.error(e?.message || 'Could not save post-service');
     } finally {
@@ -229,6 +233,16 @@ export default function PostServiceQuickModal({ open, onClose, row, webhookUrl }
           <strong>Payable:</strong> ₹{payablePreview} &nbsp;|
           &nbsp;<strong>Collected:</strong> ₹{collectedPreview} &nbsp;|
           &nbsp;<strong>{duePreview >= 0 ? 'Due' : 'Excess'}:</strong> ₹{Math.abs(duePreview)}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <div style={{ marginBottom: 6 }}>Remarks (optional)</div>
+          <Input.TextArea
+            placeholder="Enter any delivery remarks for this service"
+            value={remarks}
+            onChange={(e)=>setRemarks(e.target.value)}
+            autoSize={{ minRows: 2, maxRows: 3 }}
+          />
         </div>
         
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
