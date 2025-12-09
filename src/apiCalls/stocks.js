@@ -1,8 +1,12 @@
 import axios from "axios";
 import { axiosInstance } from "./index";
 
-// Optional Google Apps Script endpoint for stocks. Default to backend proxy to avoid browser CORS.
-const GAS_STOCKS_URL = import.meta.env.VITE_STOCKS_GAS_URL || "/api/stocks/gas";
+// Optional Google Apps Script endpoint for stocks.
+// Default to the backend proxy (absolute URL) so production builds don't call the Netlify origin.
+const backendBase = String(axiosInstance?.defaults?.baseURL || "").replace(/\/$/, "");
+const GAS_STOCKS_URL =
+  import.meta.env.VITE_STOCKS_GAS_URL ||
+  (backendBase ? `${backendBase}/stocks/gas` : "/api/stocks/gas");
 const useGas = !!GAS_STOCKS_URL;
 
 const gasGet = async (params) => {
