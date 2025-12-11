@@ -603,8 +603,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YY-MM-DD HH:mm') : '—';
 
   const columns = isJobcard ? [
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width:70, render: (_, r) => fmt(r.dateAt) },
-    { title: 'Vehicle No.', dataIndex: 'regNo', key: 'regNo', width: 30 },
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width:80, render: (_, r) => fmt(r.dateAt) },
+    { title: 'Vehicle No.', dataIndex: 'regNo', key: 'regNo', width: 80 },
     { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 20 },
@@ -616,7 +616,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 20 },
   ] : (isBooking ? [
 
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 200, render: (_, r) => fmt(r.dateAt) },
+    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 80, render: (_, r) => fmt(r.dateAt) },
     { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
     { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 50 },
     { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 50, ellipsis: true },

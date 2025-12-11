@@ -354,9 +354,27 @@ export default function AdminDailyCollections() {
       const ok = (resp?.data || resp)?.success !== false;
       if (!ok) throw new Error('Failed');
       message.success('Updated');
-      setSelectedKeys([]);
+      // Optimistically update or remove rows after success
+      const modeSet = new Set(modes);
+      setLedgerRows((prev) => {
+        return prev
+          .map((r) => {
+            if (!ids.includes(r.id)) return r;
+            const next = { ...r };
+            if (modeSet.has('cash') || modeSet.has('both')) next.cashPending = 0;
+            if (modeSet.has('online') || modeSet.has('both')) next.onlinePending = 0;
+            const amt = deriveAmounts(next);
+            if (amt.cashPending <= 0 && amt.onlinePending <= 0) return null; // remove row when fully settled
+            return next;
+          })
+          .filter(Boolean);
+      });
+      setSelectedKeys((prev) => prev.filter((k) => !ids.includes(k)));
       fetchLedger();
-    } catch { message.error('Update failed'); }
+    } catch {
+      message.error('Update failed');
+      fetchLedger(); // reload to correct optimistic state
+    }
   };
 
   return (

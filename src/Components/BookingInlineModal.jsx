@@ -30,11 +30,27 @@ export default function BookingInlineModal({ open, onClose, row, webhookUrl }) {
       }
     }
     const asNum = (x) => Number(String(x ?? '').replace(/[₹,\s]/g, '')) || 0;
-    const modeStr = (m) => String(m || '').toLowerCase() || undefined;
-    const refVal = (o) => (o?.reference || o?.utr || o?.ref || undefined);
-    const p1 = payArr[0] || {};
-    const p2 = payArr[1] || {};
-    const p3 = payArr[2] || {};
+    const split = [
+      { cash: 0, online: 0, ref: undefined },
+      { cash: 0, online: 0, ref: undefined },
+      { cash: 0, online: 0, ref: undefined },
+    ];
+    const assignToPart = (pay, idxHint = 0) => {
+      const mode = String(pay?.mode || '').toLowerCase();
+      const amtVal = asNum(pay?.amount);
+      if (!amtVal) return;
+      const part =
+        Number(pay?.part) && Number(pay?.part) >= 1 && Number(pay?.part) <= 3
+          ? Number(pay.part) - 1
+          : Math.min(Math.max(idxHint, 0), 2);
+      if (mode === 'online') {
+        split[part].online += amtVal;
+        if (!split[part].ref) split[part].ref = pay?.reference || pay?.utr || pay?.ref;
+      } else {
+        split[part].cash += amtVal;
+      }
+    };
+    payArr.forEach((pay, idx) => assignToPart(pay, idx));
 
     return {
       customerName: p.customerName || p.name || '',
@@ -55,15 +71,15 @@ export default function BookingInlineModal({ open, onClose, row, webhookUrl }) {
       addressProofMode: p.addressProofMode || p.addressProof || 'aadhaar',
       addressProofTypes: apTypes,
       // Split payments (prefill booking payments in form)
-      bookingAmount1: asNum(p1.amount) || undefined,
-      paymentMode1: modeStr(p1.mode) || 'cash',
-      paymentReference1: modeStr(p1.mode) === 'online' ? (refVal(p1) || undefined) : undefined,
-      bookingAmount2: asNum(p2.amount) || undefined,
-      paymentMode2: modeStr(p2.mode) || 'cash',
-      paymentReference2: modeStr(p2.mode) === 'online' ? (refVal(p2) || undefined) : undefined,
-      bookingAmount3: asNum(p3.amount) || undefined,
-      paymentMode3: modeStr(p3.mode) || 'cash',
-      paymentReference3: modeStr(p3.mode) === 'online' ? (refVal(p3) || undefined) : undefined,
+      bookingAmount1Cash: split[0].cash || undefined,
+      bookingAmount1Online: split[0].online || undefined,
+      paymentReference1: split[0].ref || undefined,
+      bookingAmount2Cash: split[1].cash || undefined,
+      bookingAmount2Online: split[1].online || undefined,
+      paymentReference2: split[1].ref || undefined,
+      bookingAmount3Cash: split[2].cash || undefined,
+      bookingAmount3Online: split[2].online || undefined,
+      paymentReference3: split[2].ref || undefined,
       // Legacy totals for completeness (not directly shown; computed in form too)
       bookingAmount: toNumber(p.bookingAmount ?? undefined) || undefined,
       downPayment: toNumber((p.dp && p.dp.downPayment) ?? p.downPayment),

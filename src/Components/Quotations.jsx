@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
@@ -51,7 +51,9 @@ export default function Quotations() {
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({}); // key: serialNo -> { level, text }
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
+  const [filterSourceRows, setFilterSourceRows] = useState([]); // full list for dropdown options
 
   useEffect(() => {
     try {
@@ -82,6 +84,53 @@ export default function Quotations() {
     return `Quotations:list:${JSON.stringify({ branchFilter, modeFilter, statusFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
   })();
 
+  const gasConfig = useMemo(() => {
+    const DEFAULT_QUOT_URL =
+      "https://script.google.com/macros/s/AKfycbxXtfRVEFeaKu10ijzfQdOVlgkZWyH1q1t4zS3PHTX9rQQ7ztRJdpFV5svk98eUs3UXuw/exec";
+    const GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
+    const SECRET = import.meta.env.VITE_QUOTATION_GAS_SECRET || '';
+    return { GAS_URL, SECRET };
+  }, []);
+
+  const mapRow = useCallback((o, idx = 0) => {
+    const obj = (o && o.values) ? o.values : o; // support {values,payload}
+    const payloadRaw = (o && o.payload) ? o.payload : (obj ? obj[HEAD.payload[0]] : undefined) || '';
+    let payload = null;
+    try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
+    const fv = (payload && payload.formValues) ? payload.formValues : {};
+    const mode = (payload && payload.mode) || '';
+    const status = (payload && payload.followUp && payload.followUp.status) || pick(obj, HEAD.status) || '';
+    const brand = (payload && payload.brand) || '';
+    const company = fv.company || pick(obj, HEAD.company);
+    const model = fv.bikeModel || fv.model || pick(obj, HEAD.model);
+    const variant = fv.variant || pick(obj, HEAD.variant);
+    const price = String(fv.onRoadPrice || pick(obj, HEAD.price) || '').trim();
+    const remarkLevelRaw = (payload && payload.remark && payload.remark.level) || obj.RemarkLevel || obj.remarkLevel || '';
+    const remarkTextRaw = (payload && payload.remark && payload.remark.text) || obj.RemarkText || obj.remarkText || '';
+    const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
+    return {
+      key: idx,
+      ts: pick(obj, HEAD.ts),
+      tsMs: parseTsMs(pick(obj, HEAD.ts)),
+      name: fv.name || pick(obj, HEAD.name),
+      mobile: fv.mobile || pick(obj, HEAD.mobile),
+      branch: fv.branch || pick(obj, HEAD.branch),
+      executive: fv.executive || pick(obj, HEAD.executive),
+      serialNo: fv.serialNo || pick(obj, HEAD.serialNo),
+      company,
+      model,
+      variant,
+      price,
+      mode: mode || (payload && payload.mode) || '',
+      brand,
+      status,
+      RemarkLevel: remarkLevelRaw || '',
+      RemarkText: remarkTextRaw || '',
+      _remarkLevel: remarkLevelNorm,
+      _remarkText: remarkTextRaw || '',
+    };
+  }, []);
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(cacheKey);
@@ -96,16 +145,35 @@ export default function Quotations() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey]);
 
+  // Fetch a larger slice just for filter options (case-insensitive, across dataset)
+  useEffect(() => {
+    let cancelled = false;
+    const loadFilters = async () => {
+      try {
+        const { GAS_URL, SECRET } = gasConfig;
+        if (!GAS_URL) return;
+        const payload = SECRET ? { action: 'list', page: 1, pageSize: 5000, secret: SECRET } : { action: 'list', page: 1, pageSize: 5000 };
+        const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+        const js = resp?.data || resp;
+        if (!js || (!js.ok && !js.success)) return;
+        const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
+        const mapped = dataArr.map((o, idx) => mapRow(o, idx));
+        if (!cancelled) setFilterSourceRows(mapped);
+      } catch {
+        // ignore filter fetch failure
+      }
+    };
+    loadFilters();
+    return () => { cancelled = true; };
+  }, [gasConfig, mapRow]);
+
   // Server-mode: refetch on filters/page/date change
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
       try {
-        const DEFAULT_QUOT_URL =
-          "https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec";
-        const GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
-        const SECRET = import.meta.env.VITE_QUOTATION_GAS_SECRET || '';
+        const { GAS_URL, SECRET } = gasConfig;
         if (!GAS_URL) {
           message.info('Quotations: Apps Script URL not configured — showing empty list.');
           if (!cancelled) { setRows([]); setTotalCount(0); }
@@ -133,47 +201,8 @@ export default function Quotations() {
         const js = resp?.data || resp;
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
         const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
-        const data = dataArr.map((o, idx) => {
-          const obj = (o && o.values) ? o.values : o; // support {values,payload}
-          const payloadRaw = (o && o.payload) ? o.payload : (obj ? obj[HEAD.payload[0]] : undefined) || '';
-          let payload = null;
-          try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
-          const fv = (payload && payload.formValues) ? payload.formValues : {};
-          const mode = (payload && payload.mode) || '';
-          const status = (payload && payload.followUp && payload.followUp.status) || pick(obj, HEAD.status) || '';
-          const brand = (payload && payload.brand) || '';
-          const company = fv.company || pick(obj, HEAD.company);
-          const model = fv.bikeModel || fv.model || pick(obj, HEAD.model);
-          const variant = fv.variant || pick(obj, HEAD.variant);
-          const price = String(fv.onRoadPrice || pick(obj, HEAD.price) || '').trim();
-          return {
-            key: idx,
-            ts: pick(obj, HEAD.ts),
-            tsMs: parseTsMs(pick(obj, HEAD.ts)),
-            name: fv.name || pick(obj, HEAD.name),
-            mobile: fv.mobile || pick(obj, HEAD.mobile),
-            branch: fv.branch || pick(obj, HEAD.branch),
-            executive: fv.executive || pick(obj, HEAD.executive),
-            serialNo: fv.serialNo || pick(obj, HEAD.serialNo),
-            company,
-            model,
-            variant,
-            price,
-            mode: mode || (payload && payload.mode) || '',
-            brand,
-            status,
-            // carry remark fields through for display
-            RemarkLevel: obj.RemarkLevel || obj.remarkLevel || '',
-            RemarkText: obj.RemarkText || obj.remarkText || '',
-          };
-        });
-        // Extract remarks from list rows (RemarkLevel/RemarkText columns)
-        const withRemarks = data.map(r => {
-          const lvlRaw = (r.remarkLevel || r.RemarkLevel || '').toString().toLowerCase();
-          const txt = r.remarkText || r.RemarkText || '';
-          return { ...r, _remarkLevel: lvlRaw, _remarkText: txt };
-        });
-        const filteredRows = withRemarks.filter((r)=>r.name || r.mobile || r.serialNo);
+        const data = dataArr.map((o, idx) => mapRow(o, idx));
+        const filteredRows = data.filter((r)=>r.name || r.mobile || r.serialNo);
         if (!cancelled) {
           setRows(filteredRows);
           const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
@@ -198,37 +227,61 @@ export default function Quotations() {
     return () => { cancelled = true; window.removeEventListener('reload-quotations', handler); };
   }, [debouncedQ, branchFilter, modeFilter, statusFilter, page, pageSize, dateRange, USE_SERVER_PAG]);
 
+  const optionRows = filterSourceRows.length ? filterSourceRows : rows;
+
   const branches = useMemo(() => {
-    const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    const all = ["all", ...Array.from(set)];
+    const norm = (s) => String(s || '').trim();
+    const set = new Map(); // lower -> display
+    optionRows.forEach((r) => {
+      const raw = norm(r.branch);
+      if (!raw) return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    const opts = Array.from(set.values());
+    const all = ["all", ...opts];
     const isPriv = ["owner","admin","backend"].includes(userRole);
-    if (!isPriv && allowedBranches.length) return all.filter((b)=> b==='all' || allowedBranches.includes(b));
+    if (!isPriv && allowedBranches.length) {
+      const allowedLc = new Set(allowedBranches.map((b)=>String(b||'').toLowerCase()));
+      return all.filter((b)=> b==='all' || allowedLc.has(String(b||'').toLowerCase()));
+    }
     return all;
-  }, [rows, userRole, allowedBranches]);
+  }, [optionRows, userRole, allowedBranches]);
   const modes = useMemo(() => {
-    const set = new Set(rows.map((r)=> (r.mode || '').toLowerCase()).filter(Boolean));
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const norm = (s) => String(s || '').trim();
+    const set = new Map();
+    optionRows.forEach((r) => {
+      const raw = norm(r.mode);
+      if (!raw) return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    return ["all", ...Array.from(set.values())];
+  }, [optionRows]);
   const statuses = useMemo(() => {
-    const set = new Set(
-      rows
-        .map((r)=> String(r.status||'').toLowerCase())
-        .filter((s) => s && s !== 'lost')
-    );
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const norm = (s) => String(s || '').trim();
+    const set = new Map();
+    optionRows.forEach((r) => {
+      const raw = norm(r.status);
+      if (!raw || raw.toLowerCase() === 'lost') return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    return ["all", ...Array.from(set.values())];
+  }, [optionRows]);
 
   const filtered = useMemo(() => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
+    const norm = (s) => String(s || '').toLowerCase().trim();
     // When using server pagination, still enforce branch scope and client-side date filter as a fallback
     if (USE_SERVER_PAG) {
       const scoped = rows.filter((r) => {
         if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
-          if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+          if (!allowedSet.has(norm(r.branch))) return false;
         }
-        if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-        if (modeFilter !== "all" && String(r.mode||'').toLowerCase() !== modeFilter) return false;
-        if (statusFilter !== 'all' && String(r.status||'').toLowerCase() !== statusFilter) return false;
+        if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
+        if (modeFilter !== "all" && norm(r.mode) !== norm(modeFilter)) return false;
+        if (statusFilter !== 'all' && norm(r.status) !== norm(statusFilter)) return false;
         if (dateRange && dateRange[0] && dateRange[1]) {
           const start = dateRange[0].startOf('day').valueOf();
           const end = dateRange[1].endOf('day').valueOf();
@@ -247,11 +300,11 @@ export default function Quotations() {
     }
     const list = rows.filter((r) => {
       if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
-        if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        if (!allowedSet.has(norm(r.branch))) return false;
       }
-      if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-      if (modeFilter !== "all" && String(r.mode||'').toLowerCase() !== modeFilter) return false;
-      if (statusFilter !== 'all' && String(r.status||'').toLowerCase() !== statusFilter) return false;
+      if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
+      if (modeFilter !== "all" && norm(r.mode) !== norm(modeFilter)) return false;
+      if (statusFilter !== 'all' && norm(r.status) !== norm(statusFilter)) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
         const start = dateRange[0].startOf('day').valueOf();
         const end = dateRange[1].endOf('day').valueOf();
@@ -400,8 +453,15 @@ export default function Quotations() {
       <Modal
         open={remarkModal.open}
         title={`Update Remark: ${remarkModal.refId}`}
-        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onCancel={()=> remarkSaving ? null : setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        confirmLoading={remarkSaving}
+        maskClosable={!remarkSaving}
+        keyboard={!remarkSaving}
+        closable={!remarkSaving}
+        cancelButtonProps={{ disabled: remarkSaving }}
         onOk={async ()=>{
+          if (remarkSaving) return;
+          setRemarkSaving(true);
           try {
             // Sheet-only: call GAS to persist
             if (!GAS_URL) { message.error('Quotation GAS URL not configured'); return; }
@@ -410,12 +470,19 @@ export default function Quotations() {
             if (resp && (resp.ok || resp.success)) {
               setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
               // also update rows array for immediate tag color
-              setRows(prev => prev.map(x => x.serialNo === remarkModal.refId ? { ...x, _remarkLevel: remarkModal.level, _remarkText: remarkModal.text } : x));
+              setRows(prev => prev.map(x => x.serialNo === remarkModal.refId ? {
+                ...x,
+                RemarkLevel: remarkModal.level.toUpperCase(),
+                RemarkText: remarkModal.text,
+                _remarkLevel: remarkModal.level,
+                _remarkText: remarkModal.text
+              } : x));
               message.success('Remark saved to sheet');
               // Also mirror to Google Sheet via Apps Script (kept short and resilient)
               setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
             } else { message.error('Save failed'); }
           } catch { message.error('Save failed'); }
+          finally { setRemarkSaving(false); }
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
@@ -468,6 +535,6 @@ function parseTsMs(v) {
   return null;
 }
   // GAS endpoints (same as used for list)
-  const DEFAULT_QUOT_URL = "https://script.google.com/macros/s/AKfycbwqJMP0YxZaoxWL3xcL-4rz8-uzrw4pyq7JgghNPI08FxXLk738agMcozmk7A7RpoC5zw/exec";
+  const DEFAULT_QUOT_URL = "https://script.google.com/macros/s/AKfycbxXtfRVEFeaKu10ijzfQdOVlgkZWyH1q1t4zS3PHTX9rQQ7ztRJdpFV5svk98eUs3UXuw/exec";
   const GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
   const GAS_SECRET = import.meta.env.VITE_QUOTATION_GAS_SECRET || '';

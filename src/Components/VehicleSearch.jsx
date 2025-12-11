@@ -24,7 +24,7 @@ import { handleSmartPrint } from "../utils/printUtils";
 const { Text } = Typography;
 
 const DEFAULT_BOOKING_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
+  "https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
 const DEFAULT_JOBCARD_GAS_URL =
   "https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec";
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";

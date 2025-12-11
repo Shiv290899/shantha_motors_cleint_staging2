@@ -128,6 +128,7 @@ const HEADERS = [
   'Invoice Status', 'Invoice File URL',
   'Insurance Status', 'Insurance File URL',
   'RTO Status', 'Vehicle No',
+  'RemarkLevel', 'RemarkText',
   'Raw Payload'
 ];
 
@@ -678,6 +679,8 @@ function listBookings_(p) {
     variant: headers.indexOf('Variant'),
     chassis: headers.indexOf('Chassis Number'),
     status: headers.indexOf('Status'),
+    remarkLevel: headers.indexOf('RemarkLevel'),
+    remarkText: headers.indexOf('RemarkText'),
     raw: headers.indexOf('Raw Payload'),
   };
 
@@ -686,16 +689,18 @@ function listBookings_(p) {
     const rowObj = {};
     for (var j = 0; j < headers.length; j++) rowObj[headers[j]] = values[i][j];
 
-    if (idxMap.raw >= 0) {
+    // Prefer dedicated remark columns; fall back to payload.remark
+    var remarkLevelFromCol = idxMap.remarkLevel >= 0 ? String(values[i][idxMap.remarkLevel] || '') : '';
+    var remarkTextFromCol = idxMap.remarkText >= 0 ? String(values[i][idxMap.remarkText] || '') : '';
+    if (!remarkLevelFromCol && idxMap.raw >= 0) {
       var payload = {};
       try { payload = JSON.parse(String(values[i][idxMap.raw] || '{}')); } catch (e) { payload = {}; }
       var pr = payload && payload.remark ? payload.remark : null;
-      rowObj.RemarkLevel = pr && pr.level ? String(pr.level).toUpperCase() : '';
-      rowObj.RemarkText = pr && pr.text ? String(pr.text) : '';
-    } else {
-      rowObj.RemarkLevel = '';
-      rowObj.RemarkText = '';
+      remarkLevelFromCol = pr && pr.level ? String(pr.level).toUpperCase() : '';
+      remarkTextFromCol = pr && pr.text ? String(pr.text) : '';
     }
+    rowObj.RemarkLevel = remarkLevelFromCol;
+    rowObj.RemarkText = remarkTextFromCol;
 
     var tsMs = 0;
     if (idxMap.submittedAt >= 0) {
@@ -1068,15 +1073,19 @@ function updateRemark_(bookingId, level, text, by) {
   if (!/(^ok$|^warning$|^alert$)/.test(lv)) return { success: false, error: 'level must be ok|warning|alert' };
 
   var sh = getSheet_();
-  var headers = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn() || HEADERS.length).getValues()[0];
+  // Ensure remark columns exist even on old sheets
+  var remarkCols = ensureRemarkCols_(sh, headers);
+  headers = remarkCols.headers;
+  var idCol = remarkCols.idxBookingId + 1;
+  var payloadCol = remarkCols.idxRaw + 1;
+  var remarkLevelCol = remarkCols.idxRemarkLevel + 1;
+  var remarkTextCol = remarkCols.idxRemarkText + 1;
+
   var last = sh.getLastRow();
   if (last < 2) return { success: false, error: 'empty_sheet' };
 
-  var idCol = headers.indexOf('Booking ID') + 1;
-  var payloadCol = headers.indexOf('Raw Payload') + 1;
-  if (idCol < 1 || payloadCol < 1) return { success: false, error: 'bad_headers' };
-
-  var range = sh.getRange(2, 1, last - 1, HEADERS.length).getValues();
+  var range = sh.getRange(2, 1, last - 1, headers.length).getValues();
   var targetRow = -1;
   for (var i = range.length - 1; i >= 0; i--) {
     var id = String(range[i][idCol - 1] || '').trim();
@@ -1096,6 +1105,10 @@ function updateRemark_(bookingId, level, text, by) {
     at: nowIso
   };
 
+  // Persist to dedicated columns for resilience (Jobcards parity)
+  sh.getRange(targetRow, remarkLevelCol).setValue(String(lv).toUpperCase());
+  sh.getRange(targetRow, remarkTextCol).setValue(String(text || '').slice(0, 240));
+  // Mirror in payload for backward compatibility
   sh.getRange(targetRow, payloadCol).setValue(JSON.stringify(payload));
   return {
     success: true,
@@ -1110,6 +1123,33 @@ function updateRemark_(bookingId, level, text, by) {
 function _toInt(v, d) { var n = parseInt(v, 10); return isNaN(n) ? d : n; }
 function _lc(s) { return String(s || '').toLowerCase(); }
 function _contains(hay, needle) { return _lc(hay || '').indexOf(_lc(needle || '')) !== -1; }
+
+// Guarantee remark columns exist and return indexes
+function ensureRemarkCols_(sh, headersArr) {
+  var headers = headersArr.slice();
+  var idxBookingId = headers.indexOf('Booking ID');
+  var idxRaw = headers.indexOf('Raw Payload');
+  var idxRemarkLevel = headers.indexOf('RemarkLevel');
+  var idxRemarkText = headers.indexOf('RemarkText');
+
+  var appendCols = [];
+  if (idxRemarkLevel < 0) { appendCols.push('RemarkLevel'); }
+  if (idxRemarkText < 0) { appendCols.push('RemarkText'); }
+  if (appendCols.length) {
+    var start = headers.length + 1;
+    sh.getRange(1, start, 1, appendCols.length).setValues([appendCols]);
+    headers = headers.concat(appendCols);
+    idxRemarkLevel = headers.indexOf('RemarkLevel');
+    idxRemarkText = headers.indexOf('RemarkText');
+  }
+  return {
+    headers: headers,
+    idxBookingId: idxBookingId,
+    idxRaw: idxRaw,
+    idxRemarkLevel: idxRemarkLevel,
+    idxRemarkText: idxRemarkText
+  };
+}
 
 /* ============== DAILY COLLECTIONS (BOOKING AMOUNT) ============== */
 

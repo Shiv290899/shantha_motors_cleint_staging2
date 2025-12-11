@@ -1,0 +1,623 @@
+function doGet(e) {
+  try {
+    const p = e && e.parameter ? e.parameter : {};
+    const action = String(p.action || '').toLowerCase();
+
+    if (action === 'nextserial') {
+      return json_({ success: true, nextSerial: nextSerial_() });
+    }
+
+    if (action === 'search') {
+      const mode = p.mode || 'serial';
+      const query = p.query || '';
+      return json_({ success: true, rows: search_(mode, query) });
+    }
+
+    if (action === 'followups') {
+      const filter = p.filter || 'today';
+      const branch = String(p.branch || '').trim();
+      const executive = String(p.executive || '').trim(); // optional
+      return json_({ success: true, rows: followups_(filter, branch, executive) });
+    }
+
+    if (action === 'list') {
+      // Pagination + filters (compatible with legacy limit)
+      const limit = parseInt(p.limit || '0', 10) || 0; // legacy: optional
+      const branch = String(p.branch || '').trim();
+      const mode = String(p.mode || '').trim().toLowerCase();
+
+      const page = Math.max(1, parseInt(p.page || '1', 10) || 1);
+      const pageSize = Math.min(100, Math.max(1, parseInt(p.pageSize || p.pagesize || '10', 10) || 10));
+
+      const q = String(p.q || '').trim();
+      const status = String(p.status || '').trim().toLowerCase();
+      const start = p.start ? +p.start : null; // epoch ms
+      const end = p.end ? +p.end : null;       // epoch ms
+
+      const resp = list_({ page, pageSize, limit, branch, mode, q, status, start, end });
+      return json_({ ok: true, success: true, data: resp.data, rows: resp.data, total: resp.total });
+    }
+
+    return json_({ ok: true, hint: 'Use ?action=list, ?action=nextSerial, ?action=search or ?action=followups' });
+  } catch (err) {
+    return json_({ success: false, error: String(err) });
+  }
+}
+
+function doPost(e) {
+  try {
+    const body = e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
+    const action = String(body.action || '').toLowerCase();
+
+    if (action === 'save') {
+      const data = body.data || body;
+      return json_(saveQuotation_(data));
+    }
+
+    if (action === 'search') {
+      return json_({ success: true, rows: search_(body.mode || 'serial', body.query || '') });
+    }
+
+    if (action === 'updatefollowup') {
+      return json_({ success: true, ...(updateFollowup_(body.serialNo, body.patch || {})) });
+    }
+
+    if (action === 'list') {
+      const limit = parseInt(body.limit || '0', 10) || 0; // legacy
+      const branch = String(body.branch || '').trim();
+      const mode = String(body.mode || '').trim().toLowerCase();
+
+      const page = Math.max(1, parseInt(body.page || '1', 10) || 1);
+      const pageSize = Math.min(100, Math.max(1, parseInt(body.pageSize || body.pagesize || '10', 10) || 10));
+
+      const q = String(body.q || '').trim();
+      const status = String(body.status || '').trim().toLowerCase();
+      const start = body.start ? +body.start : null; // epoch ms
+      const end = body.end ? +body.end : null;       // epoch ms
+
+      const resp = list_({ page, pageSize, limit, branch, mode, q, status, start, end });
+      return json_({ ok: true, success: true, data: resp.data, rows: resp.data, total: resp.total });
+    }
+
+    // Upsert a short remark into dedicated columns + Payload.remark
+    if (action === 'remark') {
+      const serialNo = String(body.serialNo || '').trim();
+      const level = String(body.level || '').toLowerCase(); // ok|warning|alert
+      const text  = String(body.text || '').trim();
+      const by    = String(body.by || '').trim(); // optional
+      return json_(updateRemark_(serialNo, level, text, by));
+    }
+
+    return json_({ success: false, message: 'Unknown action' });
+  } catch (err) {
+    return json_({ success: false, error: String(err) });
+  }
+}
+
+/**
+ * Quotation Web App (no-duplicate upsert by Quotation_ID) with dedicated remark columns.
+ */
+const SHEET_ID = ''; // leave '' if bound to the target Sheet
+const SHEET_NAME = 'Sheet1'; // change to your tab name
+
+// Preferred headers (tolerate variations when reading/writing)
+const HEADERS = [
+  'Timestamp','Customer_Name','Mobile','Company','Model','Variant',
+  'Remarks','Payload','Branch','Executive_Name','Quotation_ID',
+  'RemarkLevel','RemarkText'
+];
+
+// When upserting and multiple duplicates exist, update the newest and optionally delete older ones
+const DEDUPE_ON_UPDATE = true;
+
+// ---------- Helpers ----------
+function getSheet_() {
+  const ss = SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(SHEET_NAME) || ss.getSheets()[0];
+  // Ensure a header row exists (don’t reorder existing columns)
+  if (sh.getLastRow() === 0) {
+    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  }
+  return sh;
+}
+
+function json_(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function safeJson_(txt, def) {
+  try { return JSON.parse(String(txt || '')); } catch (e) { return def; }
+}
+function toTenDigits_(s) { return String(s||'').replace(/\D/g,'').replace(/^0+/,'').slice(-10); }
+function startOfDay_(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function endOfDay_(d) { const x = new Date(d); x.setHours(23,59,59,999); return x; }
+
+function norm_(s) { return String(s || '').trim().toLowerCase(); }
+function contains_(h, n) { return norm_(h).indexOf(norm_(n)) !== -1; }
+
+// Read the current header row as strings
+function headerRow_(sh) {
+  const width = Math.max(sh.getLastColumn(), HEADERS.length);
+  const vals = sh.getRange(1,1,1,width).getValues()[0];
+  return vals.map(v => String(v || '').trim());
+}
+
+// Tolerant header index finder: exact, then underscore/space normalized, then regex
+function headerIndex_(headers, want, rxAlt) {
+  const norm = s => String(s || '').trim().toLowerCase().replace(/[\s_]+/g, '_');
+  const t = norm(want);
+  let idx = headers.findIndex(h => norm(h) === t);
+  if (idx >= 0) return idx + 1;
+  if (rxAlt) {
+    idx = headers.findIndex(h => rxAlt.test(String(h || '')));
+    if (idx >= 0) return idx + 1;
+  }
+  return 0;
+}
+
+function idxTimestamp_(headers) { return headerIndex_(headers, 'Timestamp'); }
+function idxCustomer_(headers) { return headerIndex_(headers, 'Customer_Name', /customer/i); }
+function idxMobile_(headers) { return headerIndex_(headers, 'Mobile', /mobile/i); }
+function idxCompany_(headers) { return headerIndex_(headers, 'Company', /company/i); }
+function idxModel_(headers) { return headerIndex_(headers, 'Model', /\bmodel\b/i); }
+function idxVariant_(headers) { return headerIndex_(headers, 'Variant', /\bvariant\b/i); }
+function idxRemarks_(headers) { return headerIndex_(headers, 'Remarks', /remarks?/i); }
+function idxPayload_(headers) { return headerIndex_(headers, 'Payload', /payload/i); }
+function idxBranch_(headers) { return headerIndex_(headers, 'Branch', /branch/i); }
+function idxExecutive_(headers) { return headerIndex_(headers, 'Executive_Name', /executive/i); }
+function idxSerial_(headers) { return headerIndex_(headers, 'Quotation_ID', /(quotation[_\s]id|quotation\s(no|number)|serial(\s*no)?)/i); }
+// Optional remark columns (auto-created on first write)
+function idxRemarkLevel_(headers) { return headerIndex_(headers, 'RemarkLevel', /remark.*level/i); }
+function idxRemarkText_(headers) { return headerIndex_(headers, 'RemarkText', /remark.*text/i); }
+
+// ---------- Serial (numeric fallback only) ----------
+function nextSerial_() {
+  const sh = getSheet_();
+  const headers = headerRow_(sh);
+  const c = idxSerial_(headers);
+  if (!c) return '1';
+  const last = sh.getLastRow();
+  if (last <= 1) return '1';
+  const vals = sh.getRange(2, c, last-1, 1).getValues()
+    .map(r => parseInt(String(r[0]).trim(), 10))
+    .filter(n => Number.isFinite(n));
+  const max = vals.length ? Math.max.apply(null, vals) : 0;
+  return String(max + 1);
+}
+
+// ---------- Find rows by Quotation_ID (exact match, trimmed) ----------
+function findRowsBySerial_(serial) {
+  if (!serial) return [];
+  const sh = getSheet_();
+  const headers = headerRow_(sh);
+  const c = idxSerial_(headers);
+  if (!c) return [];
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+  const vals = sh.getRange(2, c, last - 1, 1).getValues();
+  const q = String(serial).trim();
+  const rows = [];
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === q) rows.push(i + 2);
+  }
+  return rows;
+}
+
+// ---------- Save (UPSERT by Quotation_ID) with Lock ----------
+function saveQuotation_(data) {
+  const lock = LockService.getDocumentLock();
+  lock.waitLock(15000);
+  try {
+    const sh = getSheet_();
+    const headers = headerRow_(sh);
+
+    const fv = data.formValues || {};
+    const payload = data.payload || {};
+
+    // Prefer client-provided serial (e.g., Q-<BRANCH>-XXXXXX). Fallback to numeric.
+    let serial = String(
+      (data.serialNo != null ? data.serialNo : (fv.serialNo != null ? fv.serialNo : ''))
+    ).trim();
+    if (!serial) serial = nextSerial_();
+
+    // Resolve column indices (tolerant)
+    const cTs   = idxTimestamp_(headers);
+    const cName = idxCustomer_(headers);
+    const cMob  = idxMobile_(headers);
+    const cComp = idxCompany_(headers);
+    const cMod  = idxModel_(headers);
+    const cVar  = idxVariant_(headers);
+    const cRem  = idxRemarks_(headers);
+    const cPay  = idxPayload_(headers);
+    const cBr   = idxBranch_(headers);
+    const cEx   = idxExecutive_(headers);
+    const cSer  = idxSerial_(headers);
+    if (!cSer) return { success:false, message:'Quotation_ID column not found' };
+
+    const now = new Date();
+    const values = {
+      [cTs]: now,
+      [cName]: fv.name || '',
+      [cMob]: fv.mobile || '',
+      [cComp]: fv.company || '',
+      [cMod]: fv.bikeModel || '',
+      [cVar]: fv.variant || '',
+      [cRem]: fv.remarks || '',
+      [cPay]: JSON.stringify(payload),
+      [cBr]:  fv.branch || '',
+      [cEx]:  fv.executive || '',
+      [cSer]: serial,
+    };
+
+    const matches = findRowsBySerial_(serial);
+
+    if (matches.length > 0) {
+      const targetRow = Math.max.apply(null, matches);
+      // Update only the columns we control
+      Object.keys(values).forEach(c => {
+        const col = Number(c);
+        if (col > 0) sh.getRange(targetRow, col).setValue(values[c]);
+      });
+
+      if (DEDUPE_ON_UPDATE && matches.length > 1) {
+        const toDelete = matches.filter(r => r !== targetRow).sort((a,b) => b - a);
+        toDelete.forEach(r => sh.deleteRow(r));
+      }
+
+      return { success:true, updated:true, serialNo:serial, row:targetRow };
+    } else {
+      // Append a new row, writing only our columns
+      const newRow = sh.getLastRow() + 1;
+      if (newRow === 1) sh.getRange(1,1,1,HEADERS.length).setValues([HEADERS]);
+      Object.keys(values).forEach(c => {
+        const col = Number(c);
+        if (col > 0) sh.getRange(newRow, col).setValue(values[c]);
+      });
+      return { success:true, created:true, serialNo:serial, row:newRow };
+    }
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
+}
+
+// ---------- Search (serial or mobile) ----------
+function search_(mode, query) {
+  const sh = getSheet_();
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+
+  const headers = headerRow_(sh);
+  const width = Math.min(sh.getLastColumn(), Math.max(headers.length, HEADERS.length));
+  const data = sh.getRange(2,1,last-1,width).getValues();
+
+  const idxSerial = idxSerial_(headers) - 1;
+  const idxMobile = idxMobile_(headers) - 1;
+  const idxPayload = idxPayload_(headers) - 1;
+
+  const q = String(query || '').trim();
+  const ten = toTenDigits_(q);
+  const modeMobile = String(mode||'serial').toLowerCase() === 'mobile';
+
+  const rows = data
+    .map((r, i) => ({ row: i+2, r }))
+    .filter(({ r }) => {
+      if (modeMobile) {
+        const m = toTenDigits_(r[idxMobile]);
+        return ten ? (m && (m.endsWith(ten))) : false;
+      } else {
+        return String(r[idxSerial] || '').trim() === q;
+      }
+    })
+    .sort((a,b) => b.row - a.row)
+    .slice(0, 50)
+    .map(({row, r}) => {
+      const payload = safeJson_(r[idxPayload], null);
+      const pickCell = (rx) => {
+        const j = headers.findIndex(h => rx.test(String(h||'')));
+        return j >= 0 ? r[j] : '';
+      };
+      return {
+        row,
+        payload,
+        values: {
+          serialNo: r[idxSerial],
+          name: pickCell(/customer/i),
+          mobile: r[idxMobile],
+          company: pickCell(/company/i),
+          bikeModel: pickCell(/\bmodel\b/i),
+          variant: pickCell(/\bvariant\b/i),
+          branch: pickCell(/branch/i),
+          executive: pickCell(/executive/i),
+        }
+      };
+    });
+
+  return rows;
+}
+
+// ---------- Follow-ups list (strict branch filter; executive optional) ----------
+function followups_(filter, branch, executive) {
+  const sh = getSheet_();
+  const last = sh.getLastRow();
+  if (last <= 1) return [];
+
+  const headers = headerRow_(sh);
+  const width = Math.min(sh.getLastColumn(), Math.max(headers.length, HEADERS.length));
+  const data = sh.getRange(2,1,last-1,width).getValues();
+
+  const idxSerial = idxSerial_(headers) - 1;
+  const idxPayload = idxPayload_(headers) - 1;
+  const idxBranch = idxBranch_(headers) - 1;
+  const idxExec = idxExecutive_(headers) - 1;
+
+  const today = new Date();
+  const start = startOfDay_(today);
+  const end = endOfDay_(today);
+  const want = String(filter || 'today').toLowerCase();
+  const wantBranchKey = norm_(branch);
+  const wantExecKey = norm_(executive); // applied only if non-empty
+
+  const out = [];
+
+  for (let i = 0; i < data.length; i++) {
+    const r = data[i];
+    const payload = safeJson_(r[idxPayload], null);
+    if (!payload || !payload.followUp) continue;
+
+    const fu = payload.followUp || {};
+    const status = String(fu.status || 'pending').toLowerCase();
+    if (status !== 'pending') continue;
+    if (!fu.enabled && fu.enabled !== undefined) continue;
+
+    const at = fu.at ? new Date(fu.at) : null;
+
+    // Resolve branch/executive from payload first, then cells
+    const rowBranch = String(
+      fu.branch ||
+      (payload.formValues && payload.formValues.branch) ||
+      (idxBranch >= 0 ? r[idxBranch] : '') ||
+      ''
+    ).trim();
+    const rowExec = String(
+      (payload.formValues && payload.formValues.executive) ||
+      fu.assignedTo ||
+      (idxExec >= 0 ? r[idxExec] : '') ||
+      ''
+    ).trim();
+
+    // STRICT BRANCH FILTER
+    if (wantBranchKey && norm_(rowBranch) !== wantBranchKey) continue;
+    // Optional executive filter
+    if (wantExecKey && norm_(rowExec) !== wantExecKey) continue;
+
+    let keep = true;
+    if (want !== 'all') {
+      if (!at || isNaN(at.getTime())) keep = false;
+      else if (want === 'today')    keep = (at >= start && at <= end);
+      else if (want === 'overdue')  keep = (at < start);
+      else if (want === 'upcoming') keep = (at > end);
+    }
+    if (!keep) continue;
+
+    out.push({ row: i + 2, payload, values: { serialNo: r[idxSerial], branch: rowBranch, executive: rowExec } });
+  }
+
+  out.sort((a,b) => b.row - a.row);
+  return out;
+}
+
+// ---------- Update follow-up ----------
+function updateFollowup_(serialNo, patch) {
+  if (!serialNo) return { success:false, message:'serialNo is required' };
+  const sh = getSheet_();
+  const last = sh.getLastRow();
+  if (last <= 1) return { success:false, message:'No data' };
+
+  const headers = headerRow_(sh);
+  const cSerial = idxSerial_(headers);
+  const cPayload = idxPayload_(headers);
+  if (!cSerial || !cPayload) return { success:false, message:'Required columns not found' };
+
+  let targetRow = -1;
+  const vals = sh.getRange(2, cSerial, last-1, 1).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === String(serialNo).trim()) { targetRow = i + 2; break; }
+  }
+  if (targetRow < 0) return { success:false, message:'Quotation not found' };
+
+  const cell = sh.getRange(targetRow, cPayload).getValue();
+  const payload = safeJson_(cell, {}) || {};
+  const fu = payload.followUp || {};
+
+  if (patch && typeof patch === 'object') {
+    if (patch.followUp && typeof patch.followUp === 'object') {
+      const src = patch.followUp;
+      if ('at' in src) fu.at = src.at;
+      if ('notes' in src) fu.notes = src.notes;
+      if ('assignedTo' in src) fu.assignedTo = src.assignedTo;
+      if ('branch' in src) fu.branch = src.branch;
+      if ('enabled' in src) fu.enabled = !!src.enabled;
+    }
+    if ('status' in patch) fu.status = String(patch.status || '').toLowerCase() || 'pending';
+  }
+  if (!('status' in fu)) fu.status = 'pending';
+  if (!('enabled' in fu)) fu.enabled = true;
+
+  payload.followUp = fu;
+  sh.getRange(targetRow, cPayload).setValue(JSON.stringify(payload));
+
+  return { success:true, row: targetRow, serialNo, followUp: fu };
+}
+
+// ---------- List Quotations (paginated + filters) ----------
+function list_({ page = 1, pageSize = 10, limit = 0, branch = '', mode = '', q = '', status = '', start = null, end = null } = {}) {
+  const sh = getSheet_();
+  const last = sh.getLastRow();
+  if (last <= 1) return { data: [], total: 0 };
+
+  const headers = headerRow_(sh);
+  const width = Math.min(sh.getLastColumn(), Math.max(headers.length, HEADERS.length));
+  const rows = sh.getRange(2, 1, last - 1, width).getValues();
+
+  const cTs = idxTimestamp_(headers) - 1;
+  const cName = idxCustomer_(headers) - 1;
+  const cMob = idxMobile_(headers) - 1;
+  const cComp = idxCompany_(headers) - 1;
+  const cMod = idxModel_(headers) - 1;
+  const cVar = idxVariant_(headers) - 1;
+  const cPay = idxPayload_(headers) - 1;
+  const cBr = idxBranch_(headers) - 1;
+  const cEx = idxExecutive_(headers) - 1;
+  const cSer = idxSerial_(headers) - 1;
+  const cRL = idxRemarkLevel_(headers) - 1; // may be -1 if not present
+  const cRT = idxRemarkText_(headers) - 1; // may be -1 if not present
+
+  const wantBranchKey = norm_((branch || ''));
+  const wantMode = String(mode || '').toLowerCase();
+  const wantStatus = String(status || '').toLowerCase();
+  const wantQ = String(q || '').trim();
+
+  const enriched = rows.map((r) => {
+    const payload = safeJson_(cPay >= 0 ? r[cPay] : '', null) || null;
+    const fv = (payload && payload.formValues) || {};
+
+    const ts = cTs >= 0 ? r[cTs] : '';
+    let tsMs = 0;
+    if (ts instanceof Date) tsMs = ts.getTime();
+    else if (ts) {
+      const d = new Date(ts);
+      if (!isNaN(d.getTime())) tsMs = d.getTime();
+    }
+
+    // Remark: prefer dedicated columns; fallback to payload.remark
+    const pr = payload && payload.remark ? payload.remark : null;
+    const levelFromCols = cRL >= 0 ? r[cRL] : '';
+    const textFromCols = cRT >= 0 ? r[cRT] : '';
+    const level = levelFromCols || (pr && pr.level) || '';
+    const text  = textFromCols  || (pr && pr.text)  || '';
+
+    const rowBranchRaw = fv.branch || (cBr >= 0 ? String(r[cBr] || '') : '');
+    const execName = fv.executive || (cEx >= 0 ? r[cEx] : '');
+    const modeRaw = (payload && payload.mode) ? String(payload.mode).toLowerCase() : '';
+    const followUpStatus = payload && payload.followUp && payload.followUp.status ? String(payload.followUp.status).toLowerCase() : '';
+
+    return {
+      tsMs,
+      values: {
+        Timestamp:        cTs  >= 0 ? r[cTs]  : '',
+        Customer_Name:    cName>= 0 ? r[cName]: (fv.name || ''),
+        Mobile:           cMob >= 0 ? r[cMob] : (fv.mobile || ''),
+        Company:          cComp>= 0 ? r[cComp]: (fv.company || ''),
+        Model:            cMod >= 0 ? r[cMod] : (fv.bikeModel || fv.model || ''),
+        Variant:          cVar >= 0 ? r[cVar] : (fv.variant || ''),
+        Branch:           rowBranchRaw,
+        Executive_Name:   execName,
+        'Quotation No.':  cSer >= 0 ? r[cSer] : (fv.serialNo || ''),
+        Payload:          cPay >= 0 ? r[cPay] : '',
+        RemarkLevel:      level || '',
+        RemarkText:       text  || '',
+      },
+      payload,
+      rowBranchRaw,
+      execName,
+      modeRaw,
+      followUpStatus,
+      name: cName>=0 ? r[cName] : (fv.name || ''),
+      mobile: cMob>=0 ? r[cMob] : (fv.mobile || ''),
+      serial: cSer>=0 ? r[cSer] : (fv.serialNo || ''),
+      company: cComp>=0 ? r[cComp] : (fv.company || ''),
+      model: cMod>=0 ? r[cMod] : (fv.bikeModel || fv.model || ''),
+      variant: cVar>=0 ? r[cVar] : (fv.variant || ''),
+    };
+  });
+
+  // Filters
+  let filtered = enriched.filter((x) => {
+    if (wantBranchKey && norm_(x.rowBranchRaw) !== wantBranchKey) return false;
+    if (wantMode && x.modeRaw !== wantMode) return false;
+    if (wantStatus && x.followUpStatus !== wantStatus) return false;
+    if (start && end) {
+      if (!x.tsMs || x.tsMs < start || x.tsMs > end) return false;
+    }
+    if (wantQ) {
+      const hay = [
+        x.name, x.mobile, x.serial, x.company, x.model, x.variant,
+        x.rowBranchRaw, x.execName
+      ];
+      let hit = false;
+      for (var i=0;i<hay.length;i++) {
+        if (contains_(hay[i], wantQ)) { hit = true; break; }
+      }
+      if (!hit) return false;
+    }
+    return true;
+  });
+
+  // Sort newest first
+  filtered.sort((a,b) => (b.tsMs||0) - (a.tsMs||0));
+
+  const total = filtered.length;
+
+  // Legacy limit support (if limit > 0 and page not set by caller)
+  let dataSlice;
+  if (limit > 0 && (page === 1 && pageSize === 10 && !q && !status && !start && !end)) {
+    dataSlice = filtered.slice(0, limit);
+  } else {
+    const startIdx = (page - 1) * pageSize;
+    dataSlice = filtered.slice(startIdx, startIdx + pageSize);
+  }
+
+  const data = dataSlice.map(x => ({ values: x.values, payload: x.payload }));
+  return { data, total };
+}
+
+// ---------- Upsert remark into Payload + dedicated columns ----------
+function updateRemark_(serialNo, level, text, by) {
+  if (!serialNo) return { success:false, message:'serialNo is required' };
+  const lv = String(level || '').toLowerCase();
+  if (!/(^ok$|^warning$|^alert$)/.test(lv)) return { success:false, message:'level must be ok|warning|alert' };
+
+  const sh = getSheet_();
+  const last = sh.getLastRow();
+  if (last <= 1) return { success:false, message:'No data' };
+
+  // Ensure remark columns exist
+  let headers = headerRow_(sh);
+  let rl = idxRemarkLevel_(headers);
+  let rt = idxRemarkText_(headers);
+  if (!rl) {
+    rl = headers.length + 1;
+    sh.getRange(1, rl).setValue('RemarkLevel');
+    headers = headerRow_(sh);
+  }
+  if (!rt) {
+    rt = Math.max(sh.getLastColumn(), headers.length) + 1;
+    sh.getRange(1, rt).setValue('RemarkText');
+    headers = headerRow_(sh);
+  }
+
+  const cSerial = idxSerial_(headers);
+  const cPayload = idxPayload_(headers);
+  if (!cSerial || !cPayload) return { success:false, message:'Required columns not found' };
+
+  const matches = findRowsBySerial_(serialNo);
+  if (!matches.length) return { success:false, message:'Quotation not found' };
+  const row = Math.max.apply(null, matches);
+
+  const cell = sh.getRange(row, cPayload).getValue();
+  const payload = safeJson_(cell, {}) || {};
+  const nowIso = new Date().toISOString();
+  payload.remark = {
+    level: lv,
+    text: String(text || '').slice(0, 240),
+    by: String(by || '').slice(0, 120),
+    at: nowIso,
+  };
+  sh.getRange(row, cPayload).setValue(JSON.stringify(payload));
+
+  sh.getRange(row, rl).setValue(lv.toUpperCase());
+  sh.getRange(row, rt).setValue(String(text || '').slice(0, 240));
+
+  return { success:true, serialNo, row, level: lv, text };
+}

@@ -24,6 +24,9 @@ const CONFIG = {
   MOVEMENTS_SHEET: 'StockMovements',
   SNAPSHOT_SHEET: 'StockSnapshot',
   DEFAULT_LIMIT: 500,
+  // If this Apps Script is NOT bound to a spreadsheet, set this to your sheet ID.
+  // Example: '1AbC...xyz' from https://docs.google.com/spreadsheets/d/<ID>/edit
+  SPREADSHEET_ID: '',
 };
 
 const MOVEMENT_HEADERS = [
@@ -40,9 +43,13 @@ const SNAPSHOT_HEADERS = [
   'status', 'lastMovementId', 'updatedAt',
 ];
 
+// ---- Entry points ----
+
 function doGet(e) {
-  const action = String(e.parameter.action || 'list').toLowerCase();
-  const params = e.parameter || {};
+  // Make it safe when run from the editor (e can be undefined)
+  const params = e && e.parameter ? e.parameter : {};
+  const action = String(params.action || 'list').toLowerCase();
+
   if (action === 'current') return respond(handleCurrent(params));
   if (action === 'pending') return respond(handlePendingTransfers(params));
   return respond(handleList(params));
@@ -50,7 +57,9 @@ function doGet(e) {
 
 function doPost(e) {
   const body = parseBody(e);
-  const action = String(body.action || e.parameter.action || 'create').toLowerCase();
+  const queryParams = e && e.parameter ? e.parameter : {};
+  const action = String(body.action || queryParams.action || 'create').toLowerCase();
+
   if (action === 'create') return respond(handleCreate(body));
   if (action === 'admit') return respond(handleAdmitReject(body, 'admitted'));
   if (action === 'reject') return respond(handleAdmitReject(body, 'rejected'));
@@ -319,12 +328,22 @@ function parseBody(e) {
 }
 
 function respond(obj) {
+  // TextOutput cannot set headers in Apps Script Web Apps; we rely on Web App CORS settings.
   return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function getSheet(name) {
+function getSpreadsheet() {
+  if (CONFIG.SPREADSHEET_ID) {
+    return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  }
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('No active spreadsheet. Set CONFIG.SPREADSHEET_ID.');
+  return ss;
+}
+
+function getSheet(name) {
+  const ss = getSpreadsheet();
   let sh = ss.getSheetByName(name);
   if (!sh) {
     sh = ss.insertSheet(name);

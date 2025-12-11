@@ -97,6 +97,7 @@ export default function StockUpdate() {
   const [loadingPending, setLoadingPending] = useState(false);
   const [actingTransferId, setActingTransferId] = useState(null);
   const [actingMode, setActingMode] = useState(null);
+  const normalizeKey = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
   const dealerOptions = useMemo(() => {
     const name = String(company || '').toLowerCase();
     if (!name) return [];
@@ -118,7 +119,7 @@ export default function StockUpdate() {
     return name || '';
   }, [currentUser]);
   const myRole = useMemo(() => String(currentUser?.role || '').toLowerCase(), [currentUser]);
-  const isPriv = useMemo(() => ['admin','owner'].includes(myRole), [myRole]);
+  const isPriv = useMemo(() => ['admin','owner','backend'].includes(myRole), [myRole]);
   const lockSourceBranch = useMemo(() => ['staff','mechanic','employees'].includes(myRole), [myRole]);
   const isAdminOwner = useMemo(() => ['admin'].includes(myRole), [myRole]);
   const isOwner = useMemo(() => myRole === 'owner', [myRole]);
@@ -129,6 +130,14 @@ export default function StockUpdate() {
     }
     return myBranch || '';
   }, [isPriv, branchFilter, myBranch]);
+  // Fallback: derive pending transfers from existing rows when API returns none
+  const computedPending = useMemo(() => {
+    const base = (items || []).filter((r) => String(r.action || '').toLowerCase() === 'transfer' && String(r.transferStatus || '').toLowerCase() === 'pending');
+    if (isPriv && pendingBranch === 'all') return base;
+    const targetKey = normalizeKey(pendingBranch || myBranch || '');
+    return base.filter((r) => normalizeKey(r.targetBranch) === targetKey);
+  }, [items, pendingBranch, myBranch, isPriv, normalizeKey]);
+  const alertPending = pendingTransfers.length ? pendingTransfers : computedPending;
   const listBranchScope = useMemo(() => {
     const isStaffLike = ['staff','mechanic','employees'].includes(myRole);
     if (isStaffLike) return myBranch || 'self';
@@ -334,26 +343,37 @@ export default function StockUpdate() {
         ? await listCurrentStocks({ branch: branchParam })
         : await listStocks({ branch: branchParam, mode: undefined });
         const list = Array.isArray(resp?.data) ? resp.data : [];
-        const rows = list.map((r, idx) => ({
-          key: idx + 1,
-          ts: r.timestamp || r.createdAt || '',
-          chassis: r.chassisNo || '',
-          company: r.company || '',
-          model: r.model || '',
-          variant: r.variant || '',
-          color: r.color || '',
-          action: r.action || '',
-          targetBranch: r.targetBranch || '',
-          returnTo: r.returnTo || '',
-          customerName: r.customerName || '',
-          sourceBranch: r.sourceBranch || '',
-          lastSourceBranch: r.lastSourceBranch || '',
-          notes: r.notes || '',
-          movementId: r.movementId || '',
-          transferStatus: r.transferStatus || '',
-          resolvedByName: r.resolvedByName || '',
-          resolvedAt: r.resolvedAt || '',
-        }));
+        const rows = list.map((r, idx) => {
+          // Infer action when backend snapshot doesn't carry it (common in current stock view)
+          const status = String(r.status || '').toLowerCase();
+          const transferStatus = String(r.transferStatus || '').toLowerCase();
+          let action = String(r.action || '').toLowerCase();
+          if (!action) {
+            if (transferStatus && transferStatus !== 'completed') action = 'transfer';
+            else if (status === 'in_stock' || status === 'in stock') action = 'add';
+            else if (status === 'out') action = 'invoice';
+          }
+          return {
+            key: idx + 1,
+            ts: r.timestamp || r.createdAt || '',
+            chassis: r.chassisNo || '',
+            company: r.company || '',
+            model: r.model || '',
+            variant: r.variant || '',
+            color: r.color || '',
+            action: action || '',
+            targetBranch: r.targetBranch || '',
+            returnTo: r.returnTo || '',
+            customerName: r.customerName || '',
+            sourceBranch: r.sourceBranch || '',
+            lastSourceBranch: r.lastSourceBranch || '',
+            notes: r.notes || '',
+            movementId: r.movementId || '',
+            transferStatus: r.transferStatus || '',
+            resolvedByName: r.resolvedByName || '',
+            resolvedAt: r.resolvedAt || '',
+          };
+        });
         setItems(rows);
         setHasCache(true);
         try {
@@ -568,11 +588,25 @@ export default function StockUpdate() {
   // Reset to first page when filters change
   useEffect(() => { setPage(1); }, [branchFilter, actionFilter, q]);
 
+  // Debounce qText into q for both staff and admin
+  useEffect(() => {
+    const h = setTimeout(() => setQ(String(qText || '').trim()), 150);
+    return () => clearTimeout(h);
+  }, [qText]);
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <strong>Total:</strong> {filteredItems.length || 0}
+          <Input.Search
+            placeholder="Search chassis/company/model/notes"
+            allowClear
+            value={qText}
+            onChange={(e)=>setQText(e.target.value)}
+            onSearch={(v)=>setQ(String(v || '').trim())}
+            style={{ width: 260 }}
+          />
           {isPriv && (
             <>
               <Select
@@ -589,17 +623,9 @@ export default function StockUpdate() {
                 placeholder="Action"
                 options={[{value:'all',label:'All Actions'},{value:'add',label:'Add'},{value:'transfer',label:'Transfer'},{value:'return',label:'Return'},{value:'invoice',label:'Invoice'}]}
               />
-              <Input.Search
-                placeholder="Search chassis/company/model/notes"
-                allowClear
-                value={qText}
-                onChange={(e)=>setQText(e.target.value)}
-                onSearch={(v)=>setQ(String(v || '').trim())}
-                style={{ width: 260 }}
-              />
-              <Button onClick={()=>{ setQText(''); setQ(''); setActionFilter('all'); setBranchFilter('all'); }}>Reset</Button>
             </>
           )}
+          <Button onClick={()=>{ setQText(''); setQ(''); setActionFilter('all'); setBranchFilter('all'); }}>Reset</Button>
         </div>
         <Space>
           <Button onClick={fetchList} loading={loadingList}>Refresh</Button>
@@ -633,19 +659,23 @@ export default function StockUpdate() {
             </div>
           </div>
           <Space size="small">
-            <Tag color={pendingTransfers.length ? 'orange' : 'green'} style={{ margin: 0 }}>
-              {pendingTransfers.length} pending
+            <Tag color={alertPending.length ? 'orange' : 'green'} style={{ margin: 0 }}>
+              {alertPending.length} pending
             </Tag>
             <Button size="small" loading={loadingPending} onClick={fetchPendingTransfers}>Refresh alerts</Button>
           </Space>
         </div>
-        {pendingTransfers.length === 0 ? (
+        {alertPending.length === 0 ? (
           <div style={{ marginTop: 8, color: '#92400e', fontSize: 12 }}>
-            {loadingPending ? 'Checking pending transfers...' : 'No pending transfers for this branch.'}
+            {loadingPending
+              ? 'Checking pending transfers...'
+              : (pendingBranch === 'all' && isPriv)
+                ? 'No pending transfers across branches.'
+                : 'No pending transfers for this branch.'}
           </div>
         ) : (
           <Space direction="vertical" style={{ width: '100%', marginTop: 12 }} size="small">
-            {pendingTransfers.map((p) => (
+            {alertPending.map((p) => (
               <div key={p.movementId || p.key} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: 12, borderRadius: 8, border: '1px dashed #f97316', background: '#fff' }}>
                 <div style={{ flex: '1 1 260px', minWidth: 220 }}>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

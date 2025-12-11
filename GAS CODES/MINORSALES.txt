@@ -25,8 +25,9 @@ const WRITE_SECRET = ''; // set and require via payload.secret if you want
 const SHEET_NAME = 'MinorSales';
 const HEADERS = [
   'Order ID','DateTime ISO','Staff','Branch',
-  'Item','Qty','Unit','Amount','Total','Purchased',
-  'Customer Name','Customer Mobile','Payment Mode','UTR / Reference'
+  'Items','Qty','Unit','Amount','Total','Purchased',
+  'Customer Name','Customer Mobile','Payment Mode','UTR / Reference',
+  'Items JSON'
 ];
 
 /* ============== DAILY COLLECTIONS (JC / Booking / Minor Sales) ============== */
@@ -206,7 +207,8 @@ function updateDailyCollection_(branch, staff, amount, type, opt) {
       type,
       amount: amt,
       cash: cashInc,
-      online: onlineInc
+      online: onlineInc,
+      sourceIds: opt && opt.sourceId ? [String(opt.sourceId)] : []
     });
 
     sh.appendRow(row);
@@ -214,6 +216,13 @@ function updateDailyCollection_(branch, staff, amount, type, opt) {
   } else {
     // Update existing row
     const cur = sh.getRange(hit,1,1,I.width).getValues()[0];
+    let raw = {};
+    try { raw = JSON.parse(String(cur[I.Raw] || '{}')); } catch (_) {}
+    const sourceId = opt && opt.sourceId ? String(opt.sourceId) : '';
+    const existingIds = Array.isArray(raw.sourceIds) ? raw.sourceIds.map(String) : [];
+    if (sourceId && existingIds.indexOf(sourceId) >= 0) {
+      return { success: true, skipped: true, reason: 'duplicate sourceId' };
+    }
 
     if (type === 'booking')         cur[I.Booking] = dcToNum_(cur[I.Booking]) + amt;
     else if (type === 'jc')         cur[I.JC]      = dcToNum_(cur[I.JC]) + amt;
@@ -226,16 +235,19 @@ function updateDailyCollection_(branch, staff, amount, type, opt) {
     cur[I.Total] = dcToNum_(cur[I.Booking]) + dcToNum_(cur[I.JC]) + dcToNum_(cur[I.Minor]);
     if (I.TotalCollected >= 0) cur[I.TotalCollected] = dcToNum_(cur[I.Cash]) + dcToNum_(cur[I.Online]);
 
-    let raw = {};
-    try { raw = JSON.parse(String(cur[I.Raw] || '{}')); } catch (_) {}
     if (!Array.isArray(raw.logs)) raw.logs = [];
     raw.logs.push({
       at: dcTsIndia_(),
       type,
       amount: amt,
       cash: cashInc,
-      online: onlineInc
+      online: onlineInc,
+      sourceId: sourceId
     });
+    if (sourceId) {
+      if (!Array.isArray(raw.sourceIds)) raw.sourceIds = [];
+      if (raw.sourceIds.indexOf(sourceId) < 0) raw.sourceIds.push(sourceId);
+    }
     cur[I.Raw] = JSON.stringify(raw);
 
     sh.getRange(hit,1,1,I.width).setValues([cur]);
@@ -322,28 +334,39 @@ function doPost(e) {
     var sh = getOrCreateSheet(SHEET_NAME);
     ensureHeaders(sh, HEADERS);
 
-    // Build rows (one per item)
-    var rows = items.map(function(it) {
-      var itemName = u(it && it.item || '');
-      var qty      = num(it && it.qty);
-      if (qty <= 0) qty = 1;
-      var unit     = num(it && it.unitPrice);
-      var amount   = (it && (it.amount != null)) ? num(it.amount) : (qty * unit);
+    // Build a single summary row for all items
+    var itemSummary = items.map(function(it){
+      var name = u(it && it.item || '');
+      var qty = num(it && it.qty);
+      if (!(qty > 0)) qty = 1;
+      var unit = num(it && it.unitPrice);
+      var amount = (it && (it.amount != null)) ? num(it.amount) : (qty * unit);
+      return name + ' x' + qty + ' @' + unit + ' = ' + amount;
+    }).join(' | ');
 
-      return [
-        orderId,
-        dateTimeIso,
-        staffName, branchName,
-        itemName, qty, unit, amount, summaryTotal,
-        purchased,
-        custName, custMobile, payMode, utr || ''
-      ];
-    });
+    var totalQty = items.reduce(function(sum, it){
+      var q = num(it && it.qty);
+      if (!(q > 0)) q = 1;
+      return sum + q;
+    }, 0);
 
-    // Append in one batch
-    var startRow = sh.getLastRow() + 1;
-    var range = sh.getRange(startRow, 1, rows.length, HEADERS.length);
-    range.setValues(rows);
+    var row = [
+      orderId,
+      dateTimeIso,
+      staffName, branchName,
+      itemSummary, totalQty, '', summaryTotal, summaryTotal,
+      purchased,
+      custName, custMobile, payMode, utr || '',
+      JSON.stringify(items)
+    ];
+
+    // Overwrite existing row with same Order ID to prevent duplicates
+    var existingRow = findRowByOrderId_(sh, orderId);
+    if (existingRow > 0) {
+      sh.getRange(existingRow, 1, 1, HEADERS.length).setValues([row]);
+    } else {
+      sh.appendRow(row);
+    }
 
     // 🔴 ALSO UPDATE DailyCollections: Minor Sales Amount with Cash/Online split
     try {
@@ -377,7 +400,8 @@ function doPost(e) {
         updateDailyCollection_(branchName, staffName, summaryTotal, 'minorsales', {
           cashCollected:   cashCollected,
           onlineCollected: onlineCollected,
-          staffLedgerContext: ledgerCtx
+          staffLedgerContext: ledgerCtx,
+          sourceId: orderId
         });
       }
     } catch (errDC) {
@@ -434,6 +458,20 @@ function genOrderId() {
   var dd = ('0' + dt.getDate()).slice(-2);
   var rand = Math.random().toString(36).slice(2, 6).toUpperCase();
   return yy + mm + dd + '-' + rand;
+}
+
+// Find an existing MinorSales row by Order ID (case-insensitive)
+function findRowByOrderId_(sh, orderId) {
+  var oid = String(orderId || '').trim().toLowerCase();
+  if (!oid) return -1;
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var range = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (var i = 0; i < range.length; i++) {
+    var v = String(range[i][0] || '').trim().toLowerCase();
+    if (v && v === oid) return i + 2;
+  }
+  return -1;
 }
 
 /* ============================

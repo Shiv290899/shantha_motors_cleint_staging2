@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
@@ -60,6 +60,7 @@ export default function Jobcards() {
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
   const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
+  const [filterSourceRows, setFilterSourceRows] = useState([]);
 
   useEffect(() => {
     try {
@@ -90,6 +91,66 @@ export default function Jobcards() {
     const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
     return `Jobcards:list:${JSON.stringify({ branchFilter, serviceFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
   })();
+
+  // Row normalizer (used for main list and filter source fetch)
+  const mapJobRow = useCallback((o, idx = 0) => {
+    const obj = (o && o.values) ? o.values : o;
+    const payloadRaw = (o && o.payload) ? o.payload : (obj ? obj[HEAD.payload[0]] : undefined) || '';
+    let payload = null;
+    try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
+    const fv = (payload && payload.formValues) ? payload.formValues : {};
+    const company = fv.company || '';
+    const model = fv.model || pick(obj, HEAD.model);
+    const regNo = fv.regNo || pick(obj, HEAD.regNo);
+    const serviceAmount = (() => {
+      const g = payload?.totals?.grand;
+      if (g !== undefined && g !== null && g !== '') return String(g);
+      return String(pick(obj, HEAD.amount) || '');
+    })();
+    const payMode = (() => {
+      const fromSheet = pick(obj, HEAD.paymentMode);
+      return String(fromSheet || payload?.paymentMode || '');
+    })();
+    const postAt = (payload && payload.postServiceAt) || (obj && (obj.Post_Service_At || obj['Post Service At'])) || '';
+    const status = (() => {
+      const hasPost = String(postAt || '').trim().length > 0;
+      const hasPayments = Array.isArray(payload?.payments) && payload.payments.some(p => Number(p?.amount || 0) > 0);
+      if (hasPost || hasPayments) return 'completed';
+      const hasPaymentMode = String(payMode || '').trim().length > 0;
+      const hasAmount = String(serviceAmount || '').trim().length > 0;
+      if (hasPaymentMode && hasAmount) return 'completed';
+      return 'pending';
+    })();
+    const remarkLevelRaw = payload?.remark?.level || obj?.RemarkLevel || obj?.['Remark Level'] || '';
+    const remarkTextRaw = payload?.remark?.text || obj?.RemarkText || obj?.['Remark Text'] || '';
+    const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
+    const serviceType = fv.serviceType || fv.service || pick(obj, HEAD.serviceType);
+    return {
+      key: idx,
+      ts: pick(obj, HEAD.ts),
+      tsMs: parseTsMs(pick(obj, HEAD.ts)),
+      name: fv.name || pick(obj, HEAD.name),
+      mobile: fv.mobile || pick(obj, HEAD.mobile),
+      branch: fv.branch || pick(obj, HEAD.branch),
+      executive: fv.executive || pick(obj, HEAD.executive),
+      jcNo: fv.jcNo || pick(obj, HEAD.jcNo),
+      regNo,
+      model,
+      company,
+      serviceType: serviceType || '',
+      vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
+      amount: serviceAmount,
+      paymentMode: payMode,
+      postAt,
+      status,
+      RemarkLevel: remarkLevelRaw || '',
+      RemarkText: remarkTextRaw || '',
+      _remarkLevel: remarkLevelNorm,
+      _remarkText: remarkTextRaw || '',
+      payload,
+      _raw: o,
+    };
+  }, []);
 
   // Seed from cache for instant paint
   useEffect(() => {
@@ -138,63 +199,7 @@ export default function Jobcards() {
         const js = resp?.data || resp;
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
         const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
-        const data = dataArr.map((o, idx) => {
-          const obj = (o && o.values) ? o.values : o; // support {values,payload}
-          const payloadRaw = (o && o.payload) ? o.payload : (obj ? obj[HEAD.payload[0]] : undefined) || '';
-          let payload = null;
-          try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
-          const fv = (payload && payload.formValues) ? payload.formValues : {};
-          const company = fv.company || '';
-          const model = fv.model || pick(obj, HEAD.model);
-          const regNo = fv.regNo || pick(obj, HEAD.regNo);
-          // Prefer authoritative values from payload when available
-          const serviceAmount = (() => {
-            const g = payload?.totals?.grand;
-            if (g !== undefined && g !== null && g !== '') return String(g);
-            return String(pick(obj, HEAD.amount) || '');
-          })();
-          const payMode = (() => {
-            const fromSheet = pick(obj, HEAD.paymentMode);
-            return String(fromSheet || payload?.paymentMode || '');
-          })();
-          const postAt = (payload && payload.postServiceAt) || (obj && (obj.Post_Service_At || obj['Post Service At'])) || '';
-          const status = (() => {
-            const hasPost = String(postAt || '').trim().length > 0;
-            const hasPayments = Array.isArray(payload?.payments) && payload.payments.some(p => Number(p?.amount || 0) > 0);
-            if (hasPost || hasPayments) return 'completed';
-            const hasPaymentMode = String(payMode || '').trim().length > 0;
-            const hasAmount = String(serviceAmount || '').trim().length > 0;
-            if (hasPaymentMode && hasAmount) return 'completed';
-            return 'pending';
-          })();
-          const remarkLevelRaw = payload?.remark?.level || obj?.RemarkLevel || obj?.['Remark Level'] || '';
-          const remarkTextRaw = payload?.remark?.text || obj?.RemarkText || obj?.['Remark Text'] || '';
-          const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
-
-          return {
-            key: idx,
-            ts: pick(obj, HEAD.ts),
-            tsMs: parseTsMs(pick(obj, HEAD.ts)),
-            name: (String(fv.custName || pick(obj, HEAD.name) || '').trim()),
-            mobile: fv.custMobile || pick(obj, HEAD.mobile),
-            branch: fv.branch || pick(obj, HEAD.branch),
-            executive: fv.executive || pick(obj, HEAD.executive),
-            jcNo: fv.jcNo || pick(obj, HEAD.jcNo),
-            regNo,
-            company,
-            model,
-            serviceType: fv.serviceType || pick(obj, HEAD.serviceType),
-            vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
-            amount: serviceAmount.trim(),
-            paymentMode: payMode.trim(),
-            status,
-            // remarks (sheet columns or payload.remark)
-            RemarkLevel: remarkLevelRaw || '',
-            RemarkText: remarkTextRaw || '',
-            _remarkLevel: remarkLevelNorm,
-            _remarkText: remarkTextRaw || '',
-          };
-        });
+        const data = dataArr.map((o, idx) => mapJobRow(o, idx));
         const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
         if (!cancelled) {
           setRows(filteredRows);
@@ -225,27 +230,47 @@ export default function Jobcards() {
     return () => { cancelled = true; window.removeEventListener('reload-jobcards', handler); };
   }, [branchFilter, serviceFilter, debouncedQ, dateRange, page, pageSize, USE_SERVER_PAG]);
 
+  const optionRows = filterSourceRows.length ? filterSourceRows : rows;
+
   const branches = useMemo(() => {
-    const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    const all = Array.from(set);
+    const norm = (s) => String(s || '').trim();
+    const set = new Map();
+    optionRows.forEach((r) => {
+      const raw = norm(r.branch);
+      if (!raw) return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    const opts = Array.from(set.values());
     const isPriv = ["owner","admin"].includes(userRole);
-    if (!isPriv && allowedBranches.length) return [...Array.from(new Set(all.filter((b)=>allowedBranches.includes(b))))];
-    return ["all", ...all];
-  }, [rows, userRole, allowedBranches]);
+    if (!isPriv && allowedBranches.length) {
+      const allowedLc = new Set(allowedBranches.map((b)=>String(b||'').toLowerCase()));
+      return ["all", ...opts.filter((b)=> allowedLc.has(String(b||'').toLowerCase()))];
+    }
+    return ["all", ...opts];
+  }, [optionRows, userRole, allowedBranches]);
   const services = useMemo(() => {
-    const set = new Set(rows.map((r)=> String(r.serviceType||'').toLowerCase()).filter(Boolean));
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const norm = (s) => String(s || '').trim();
+    const set = new Map();
+    optionRows.forEach((r) => {
+      const raw = norm(r.serviceType);
+      if (!raw) return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    return ["all", ...Array.from(set.values())];
+  }, [optionRows]);
 
   const filtered = useMemo(() => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
+    const norm = (s) => String(s || '').toLowerCase().trim();
     if (USE_SERVER_PAG) {
       const scoped = rows.filter((r)=>{
         if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
-          if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+          if (!allowedSet.has(norm(r.branch))) return false;
         }
-        if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-        if (serviceFilter !== "all" && String(r.serviceType||'').toLowerCase() !== serviceFilter) return false;
+        if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
+        if (serviceFilter !== "all" && norm(r.serviceType) !== norm(serviceFilter)) return false;
         if (dateRange && dateRange[0] && dateRange[1]) {
           const start = dateRange[0].startOf('day').valueOf();
           const end = dateRange[1].endOf('day').valueOf();
@@ -264,10 +289,10 @@ export default function Jobcards() {
     }
     const list = rows.filter((r) => {
       if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
-        if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        if (!allowedSet.has(norm(r.branch))) return false;
       }
-      if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-      if (serviceFilter !== "all" && String(r.serviceType||'').toLowerCase() !== serviceFilter) return false;
+      if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
+      if (serviceFilter !== "all" && norm(r.serviceType) !== norm(serviceFilter)) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
         const start = dateRange[0].startOf('day').valueOf();
         const end = dateRange[1].endOf('day').valueOf();
@@ -291,6 +316,27 @@ export default function Jobcards() {
     setLoadedCount(pageSize);
   }, [branchFilter, serviceFilter, debouncedQ, dateRange]);
   useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
+
+  // Fetch larger slice for filter dropdowns
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        if (!GAS_URL) return;
+        const payload = GAS_SECRET
+          ? { action: 'list', page: 1, pageSize: 5000, secret: GAS_SECRET }
+          : { action: 'list', page: 1, pageSize: 5000 };
+        const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+        const js = resp?.data || resp;
+        if (!js || (!js.ok && !js.success)) return;
+        const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
+        const mapped = dataArr.map((o, idx) => mapJobRow(o, idx));
+        if (!cancelled) setFilterSourceRows(mapped);
+      } catch { /* ignore */ }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
 
   const columns = [
     { title: "Time", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v)=> formatTs(v) },

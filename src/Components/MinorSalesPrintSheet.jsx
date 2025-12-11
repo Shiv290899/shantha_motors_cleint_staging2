@@ -17,6 +17,15 @@ const MinorSalesPrintSheet = forwardRef(function MinorSalesPrintSheet({ active =
 
   const rows = Array.isArray(vals?.items) ? vals.items : [];
   const total = Number(vals?.summaryTotal || 0) || 0;
+  const cash = Number(vals?.customer?.cashCollected ?? vals?.cashCollected ?? 0) || 0;
+  const online = Number(vals?.customer?.onlineCollected ?? vals?.onlineCollected ?? 0) || 0;
+  const paymentLabel = (() => {
+    if (cash > 0 && online > 0) return `CASH ₹${cash} + ONLINE ₹${online}`;
+    if (cash > 0) return `CASH ₹${cash}`;
+    if (online > 0) return `ONLINE ₹${online}`;
+    return String(vals?.customer?.paymentMode || '').toUpperCase() || '-';
+  })();
+  const utr = vals?.customer?.utr || vals?.utr;
 
   return (
     <div ref={ref} className={`print-sheet ${active ? "active" : ""}`}>
@@ -81,9 +90,9 @@ th { background: #fafafa; }
             <div className="kv"><div className="name">Branch:</div><div>{branch || '-'}</div></div>
             <div className="kv"><div className="name">Executive:</div><div>{vals?.staffName || '-'}</div></div>
             <div className="kv full"><div className="name">Customer:</div><div>{String(vals?.customer?.name || '-').toUpperCase()} ({vals?.customer?.mobile || '-'})</div></div>
-            <div className="kv"><div className="name">Payment Mode:</div><div>{String(vals?.customer?.paymentMode || '').toUpperCase() || '-'}</div></div>
-            {String(vals?.customer?.paymentMode || '').toLowerCase() === 'online' && (
-              <div className="kv"><div className="name">UTR / Ref:</div><div>{vals?.customer?.utr || '-'}</div></div>
+            <div className="kv"><div className="name">Payment:</div><div>{paymentLabel}</div></div>
+            {online > 0 && (
+              <div className="kv"><div className="name">UTR / Ref:</div><div>{utr || '-'}</div></div>
             )}
           </div>
 

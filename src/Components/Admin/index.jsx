@@ -10,6 +10,7 @@ import Announcements from "../Announcements";
 import useAnnouncementBadge from "../../hooks/useAnnouncementBadge";
 import Jobcards from "../Jobcards";
 import AdminDailyCollections from '../AdminDailyCollections'
+import VehicleSearch from '../VehicleSearch'
 // Announcements tab/banner removed as requested
 
 const { Title, Paragraph } = Typography;
@@ -36,9 +37,10 @@ export default function Admin() {
     { key: "quotations", label: "Quotations", children: <Quotations /> },
     { key: "jobcards", label: "Job Cards", children: <Jobcards /> },
     { key: "bookings", label: "Bookings", children: <Bookings /> },
+    { key: "vehiclesearch", label: "Vehicle Search", children: <VehicleSearch /> },
     // 4) Stock Update, 5) In-Stock Update
-    { key: "stock", label: "Stock Update", children: <StockUpdate /> },
-    { key: "in-stock", label: "In-Stock Update", children: <InStockUpdate /> },
+   { key: 'stock', label: 'Stock Movements', children: <StockUpdate /> },
+       { key: 'instock', label: 'Display Vehicles', children: <InStockUpdate /> },
     { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
     // 6) Branches, 7) Users, 8) Announcements
     { key: "branches", label: "Branches", children: <Branches /> },
@@ -61,7 +63,7 @@ export default function Admin() {
 
   return (
     <div style={container}>
-      <h2 style={{ marginTop: 0 }}>Admin Dashboard</h2>
+     
       <Tabs
         defaultActiveKey="quotations"
         items={items}

@@ -57,12 +57,14 @@ export default function Bookings() {
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
   const [actionModal, setActionModal] = useState({ open: false, type: '', row: null, fileList: [], loading: false });
   const [formModal, setFormModal] = useState({ open: false });
   const [branchOptions, setBranchOptions] = useState([]);
   const [executiveOptions, setExecutiveOptions] = useState([]);
   const [dropdownLoading, setDropdownLoading] = useState(false);
+  const [filterSourceRows, setFilterSourceRows] = useState([]);
 
   // User + branch scoping
   const [userRole, setUserRole] = useState("");
@@ -133,7 +135,7 @@ export default function Bookings() {
 
   // Reuse the same GAS URL for list + print so search works
   const DEFAULT_BOOKING_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
+    "https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
@@ -142,6 +144,39 @@ export default function Bookings() {
     const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
     return `Bookings:list:${JSON.stringify({ branchFilter, statusFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
   })();
+
+  const mapRow = useCallback((o, idx = 0) => {
+    let payload = {};
+    try {
+      payload = typeof o['Raw Payload'] === 'object'
+        ? (o['Raw Payload'] || {})
+        : JSON.parse(String(o['Raw Payload'] || o.rawPayload || o.payload || '{}'));
+    } catch { payload = {}; }
+    const remarkLevelRaw = (payload?.remark?.level || o.RemarkLevel || o.remarkLevel || '').toString();
+    const remarkTextRaw = payload?.remark?.text || o.RemarkText || o.remarkText || '';
+    const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
+    return {
+      key: idx,
+      ts: pick(o, HEAD.ts),
+      tsMs: parseTsMs(pick(o, HEAD.ts)),
+      bookingId: pick(o, HEAD.bookingId),
+      name: pick(o, HEAD.name),
+      mobile: pick(o, HEAD.mobile),
+      company: pick(o, HEAD.company),
+      model: pick(o, HEAD.model),
+      variant: pick(o, HEAD.variant),
+      chassis: pick(o, HEAD.chassis),
+      fileUrl: pick(o, HEAD.file),
+      branch: pick(o, HEAD.branch),
+      status: (pick(o, HEAD.status) || 'pending').toLowerCase(),
+      availability: pick(o, HEAD.availability),
+      RemarkLevel: remarkLevelRaw || '',
+      RemarkText: remarkTextRaw || '',
+      _remarkLevel: remarkLevelNorm,
+      _remarkText: remarkTextRaw || '',
+      _raw: o,
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -156,6 +191,26 @@ export default function Bookings() {
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cacheKey]);
+
+  // Fetch larger slice for filter options (case-insensitive, across dataset)
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        if (!GAS_URL_STATIC) return;
+        const payload = GAS_SECRET_STATIC
+          ? { action: 'list', page: 1, pageSize: 5000, secret: GAS_SECRET_STATIC }
+          : { action: 'list', page: 1, pageSize: 5000 };
+        const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'GET', payload });
+        const js = resp?.data || resp;
+        const dataArr = Array.isArray(js?.data) ? js.data : [];
+        const mapped = dataArr.map((o, idx) => mapRow(o, idx));
+        if (!cancelled) setFilterSourceRows(mapped);
+      } catch { /* ignore filter fetch failures */ }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [GAS_URL_STATIC, GAS_SECRET_STATIC, mapRow]);
 
   // Server-mode: refetch on filters/page change
   useEffect(() => {
@@ -191,34 +246,15 @@ export default function Bookings() {
         });
         const js = resp?.data || resp;
         if (!js?.ok || !Array.isArray(js?.data)) throw new Error('Invalid response');
-        const data = js.data.map((o, idx) => ({
-          key: idx,
-          ts: pick(o, HEAD.ts),
-          tsMs: parseTsMs(pick(o, HEAD.ts)),
-          bookingId: pick(o, HEAD.bookingId),
-          name: pick(o, HEAD.name),
-          mobile: pick(o, HEAD.mobile),
-          company: pick(o, HEAD.company),
-          model: pick(o, HEAD.model),
-          variant: pick(o, HEAD.variant),
-          chassis: pick(o, HEAD.chassis),
-          fileUrl: pick(o, HEAD.file),
-          branch: pick(o, HEAD.branch),
-          status: (pick(o, HEAD.status) || 'pending').toLowerCase(),
-          availability: pick(o, HEAD.availability),
-          _raw: o, // keep original for any extended fields like invoice/insurance/RTO
-        }));
-        const withRemarks = data.map(r => ({
-          ...r,
-          RemarkLevel: (r.RemarkLevel || r['RemarkLevel'] || '').toString(),
-          RemarkText: r.RemarkText || r['Remark Text'] || ''
-        }));
-        const filteredRows = withRemarks.filter((r)=>r.bookingId || r.name || r.mobile);
+        const data = js.data.map((o, idx) => mapRow(o, idx));
+        const filteredRows = data.filter((r)=>r.bookingId || r.name || r.mobile);
         if (!cancelled) {
           setRows(filteredRows);
           const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
           setTotalCount(nextTotal);
-          const map = {}; filteredRows.forEach(rr => { if (rr.bookingId) map[rr.bookingId] = { level: String(rr.RemarkLevel||'').toLowerCase(), text: rr.RemarkText||'' }; });
+          const map = {}; filteredRows.forEach(rr => {
+            if (rr.bookingId) map[rr.bookingId] = { level: rr._remarkLevel || String(rr.RemarkLevel||'').toLowerCase(), text: rr._remarkText || rr.RemarkText || '' };
+          });
           setRemarksMap(map);
           try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
             //hg
@@ -238,29 +274,48 @@ export default function Bookings() {
     return () => { cancelled = true; };
   }, [debouncedQ, branchFilter, statusFilter, page, pageSize, GAS_URL_STATIC, USE_SERVER_PAG]);
 
+  const optionRows = filterSourceRows.length ? filterSourceRows : rows;
+
   const branches = useMemo(() => {
-    const set = new Set(rows.map((r)=>r.branch).filter(Boolean));
-    const all = ["all", ...Array.from(set)];
+    const norm = (s) => String(s || '').trim();
+    const set = new Map();
+    optionRows.forEach((r) => {
+      const raw = norm(r.branch);
+      if (!raw) return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    const opts = Array.from(set.values());
+    const all = ["all", ...opts];
     const isPriv = ["owner","admin","backend"].includes(userRole);
     if (!isPriv && allowedBranches.length) {
-      return all.filter((b)=> b==='all' || allowedBranches.includes(b));
+      const allowedLc = new Set(allowedBranches.map((b)=>String(b||'').toLowerCase()));
+      return all.filter((b)=> b==='all' || allowedLc.has(String(b||'').toLowerCase()));
     }
     return all;
-  }, [rows, userRole, allowedBranches]);
+  }, [optionRows, userRole, allowedBranches]);
   const statuses = useMemo(() => {
-    const set = new Set(rows.map((r) => (r.status || "").toLowerCase()).filter(Boolean));
-    return ["all", ...Array.from(set)];
-  }, [rows]);
+    const norm = (s) => String(s || '').trim();
+    const set = new Map();
+    optionRows.forEach((r) => {
+      const raw = norm(r.status);
+      if (!raw) return;
+      const low = raw.toLowerCase();
+      if (!set.has(low)) set.set(low, raw);
+    });
+    return ["all", ...Array.from(set.values())];
+  }, [optionRows]);
 
   const filtered = useMemo(() => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
+    const norm = (s) => String(s || '').toLowerCase().trim();
     if (USE_SERVER_PAG) {
       const scoped = rows.filter((r) => {
         if (allowedSet.size && !["owner","admin"].includes(userRole)) {
-          if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+          if (!allowedSet.has(norm(r.branch))) return false;
         }
-        if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-        if (statusFilter !== "all" && (String(r.status || "").toLowerCase() !== statusFilter)) return false;
+        if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
+        if (statusFilter !== "all" && norm(r.status) !== norm(statusFilter)) return false;
         if (dateRange && dateRange[0] && dateRange[1]) {
           const start = dateRange[0].startOf('day').valueOf();
           const end = dateRange[1].endOf('day').valueOf();
@@ -279,10 +334,10 @@ export default function Bookings() {
     }
     const list = rows.filter((r) => {
       if (allowedSet.size && !["owner","admin"].includes(userRole)) {
-        if (!allowedSet.has(String(r.branch||'').toLowerCase())) return false;
+        if (!allowedSet.has(norm(r.branch))) return false;
       }
-      if (branchFilter !== "all" && r.branch !== branchFilter) return false;
-      if (statusFilter !== "all" && (String(r.status || "").toLowerCase() !== statusFilter)) return false;
+      if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
+      if (statusFilter !== "all" && (norm(r.status) !== norm(statusFilter))) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
         const start = dateRange[0].startOf('day').valueOf();
         const end = dateRange[1].endOf('day').valueOf();
@@ -326,7 +381,7 @@ export default function Bookings() {
   const updateBooking = async (bookingId, patch, mobile) => {
     try {
       setUpdating(bookingId);
-      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
       const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
       const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
       // Mirror patch keys to exact Sheet headers to ensure update reflects
@@ -362,7 +417,7 @@ export default function Bookings() {
 
   // Minimal upload helper to GAS (same endpoint used by BookingForm)
   const uploadFileToGAS = async (file) => {
-    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbwjkChHx31B3d961Yn_SkVqI5PGrT4VvGNaUmLzs2Z5V7JK8xhAl4wbjYvdw0CBtq71kg/exec";
+    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
     const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
     const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
     if (!GAS_URL) throw new Error('GAS URL not configured');
@@ -716,19 +771,33 @@ export default function Bookings() {
       <Modal
         open={remarkModal.open}
         title={`Update Remark: ${remarkModal.refId}`}
-        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onCancel={()=> remarkSaving ? null : setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        confirmLoading={remarkSaving}
+        maskClosable={!remarkSaving}
+        keyboard={!remarkSaving}
+        closable={!remarkSaving}
+        cancelButtonProps={{ disabled: remarkSaving }}
         onOk={async ()=>{
+          if (remarkSaving) return;
+          setRemarkSaving(true);
           try {
             if (!GAS_URL_STATIC) { message.error('Booking GAS URL not configured'); return; }
             const body = GAS_SECRET_STATIC ? { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET_STATIC } : { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
             const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'POST', payload: body });
             if (resp && (resp.ok || resp.success)) {
               setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
-              setRows(prev => prev.map(x => x.bookingId === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: remarkModal.text } : x));
+              setRows(prev => prev.map(x => x.bookingId === remarkModal.refId ? {
+                ...x,
+                RemarkLevel: remarkModal.level.toUpperCase(),
+                RemarkText: remarkModal.text,
+                _remarkLevel: remarkModal.level,
+                _remarkText: remarkModal.text
+              } : x));
               message.success('Remark saved to sheet');
               setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
             } else { message.error('Save failed'); }
           } catch { message.error('Save failed'); }
+          finally { setRemarkSaving(false); }
         }}
       >
         <Space direction='vertical' style={{ width: '100%' }}>

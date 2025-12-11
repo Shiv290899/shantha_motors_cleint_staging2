@@ -12,6 +12,8 @@ import Announcements from '../Announcements'
 import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
 import Users from '../Admin/Users'
 import AdminDailyCollections from '../AdminDailyCollections'
+import VehicleSearch from '../VehicleSearch'
+
 // Announcements tab/banner removed as requested
 
 // Owner dashboard: Analytics & Reports in tabs
@@ -68,9 +70,12 @@ export default function OwnerIndex() {
     
     { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },
+    { key: 'vehiclesearch', label: 'Vehicle Search', children: <VehicleSearch /> },
     // 4) Stock Update, 5) In-Stock Update
     { key: 'stock', label: 'Stock Movements', children: <StockUpdate /> },
     { key: 'instock', label: 'Display Vehicles', children: <InStockUpdate /> },
+   
+    
     
     // 6) Branches, 7) Users, 8) Announcements
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },

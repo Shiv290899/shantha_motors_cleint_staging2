@@ -161,6 +161,41 @@ export default function FetchBooking({
             .map((s) => s.trim())
             .filter(Boolean);
 
+      // Normalize split payments (supports new Cash+Online in same partial)
+      const split = [
+        { cash: 0, online: 0, ref: undefined },
+        { cash: 0, online: 0, ref: undefined },
+        { cash: 0, online: 0, ref: undefined },
+      ];
+      const payArr = Array.isArray(p.payments) ? p.payments : [];
+      const assignToPart = (pay, idxHint = 0) => {
+        const mode = String(pay?.mode || "").toLowerCase();
+        const amtVal = toNumber(pay?.amount);
+        if (!amtVal) return;
+        const part =
+          Number(pay?.part) && Number(pay?.part) >= 1 && Number(pay?.part) <= 3
+            ? Number(pay.part) - 1
+            : Math.min(Math.max(idxHint, 0), 2);
+        if (mode === "online") {
+          split[part].online += amtVal;
+          if (!split[part].ref) split[part].ref = pay?.reference || pay?.utr || pay?.ref || "";
+        } else {
+          split[part].cash += amtVal;
+        }
+      };
+      if (payArr.length) {
+        payArr.forEach((pay, idx) => assignToPart(pay, idx));
+      } else if (p.bookingAmount || p.paymentMode) {
+        assignToPart(
+          {
+            amount: p.bookingAmount,
+            mode: p.paymentMode || "cash",
+            reference: p.paymentReference || p.utr || p.ref,
+          },
+          0
+        );
+      }
+
       const patch = {
         executive: p.executive || undefined,
         branch: p.branch || undefined,
@@ -172,7 +207,7 @@ export default function FetchBooking({
         variant: v.variant || "",
         color: v.color || undefined,
         chassisNo:
-          v.chassisNo || v.availability === "allot"
+          v.availability === "allot"
             ? "__ALLOT__"
             : v.chassisNo || undefined,
         rtoOffice: p.rtoOffice || "KA",
@@ -189,42 +224,15 @@ export default function FetchBooking({
             : undefined,
         addressProofMode: p.addressProofMode || p.addressProof || "aadhaar",
         addressProofTypes: apTypes,
-        bookingAmount1:
-          Array.isArray(p.payments) && p.payments[0]
-            ? toNumber(p.payments[0].amount)
-            : toNumber(p.bookingAmount),
-        paymentMode1:
-          Array.isArray(p.payments) && p.payments[0]
-            ? p.payments[0].mode || "cash"
-            : p.paymentMode || "cash",
-        paymentReference1:
-          Array.isArray(p.payments) && p.payments[0]
-            ? p.payments[0].reference || ""
-            : p.paymentReference || "",
-        bookingAmount2:
-          Array.isArray(p.payments) && p.payments[1]
-            ? toNumber(p.payments[1].amount)
-            : undefined,
-        paymentMode2:
-          Array.isArray(p.payments) && p.payments[1]
-            ? p.payments[1].mode || "cash"
-            : undefined,
-        paymentReference2:
-          Array.isArray(p.payments) && p.payments[1]
-            ? p.payments[1].reference || ""
-            : undefined,
-        bookingAmount3:
-          Array.isArray(p.payments) && p.payments[2]
-            ? toNumber(p.payments[2].amount)
-            : undefined,
-        paymentMode3:
-          Array.isArray(p.payments) && p.payments[2]
-            ? p.payments[2].mode || "cash"
-            : undefined,
-        paymentReference3:
-          Array.isArray(p.payments) && p.payments[2]
-            ? p.payments[2].reference || ""
-            : undefined,
+        bookingAmount1Cash: split[0].cash || undefined,
+        bookingAmount1Online: split[0].online || undefined,
+        paymentReference1: split[0].ref || undefined,
+        bookingAmount2Cash: split[1].cash || undefined,
+        bookingAmount2Online: split[1].online || undefined,
+        paymentReference2: split[1].ref || undefined,
+        bookingAmount3Cash: split[2].cash || undefined,
+        bookingAmount3Online: split[2].online || undefined,
+        paymentReference3: split[2].ref || undefined,
         // DP breakdown
         downPayment: toNumber((p.dp && p.dp.downPayment) ?? p.downPayment),
         extraFittingAmount: toNumber(
@@ -246,6 +254,7 @@ export default function FetchBooking({
         onApplied?.({
           bookingId: p.bookingId || p.serialNo || undefined,
           mobile: tenDigits(p.mobileNumber || p.mobile || ""),
+          vehicle: v,
         });
       } catch { /* noop */ }
     } catch (e) {

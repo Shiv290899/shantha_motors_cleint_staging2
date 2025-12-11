@@ -1,6 +1,6 @@
 // components/BookingPrintSheet.jsx
 import React, { forwardRef } from "react";
-import { fmtDate } from "../utils/printUtils";
+import { fmtDate, inr } from "../utils/printUtils";
 
 /**
  * Printable A4 booking slip for vehicle bookings.
@@ -10,14 +10,8 @@ import { fmtDate } from "../utils/printUtils";
  *   <BookingPrintSheet ref={ref} active vals={valsForPrint} />
  *   handleSmartPrint(ref.current)
  *
- * EXCLUDES (per spec):
- *  - Booking Amount
- *  - Payment Mode (Cash/Online) and UTR/Reference No.
- *  - Down Payment, Total DP, Balanced DP
- *  - Extra Fitting Amounts, Affidavit Charges
- *  - Total Vehicle Cost, Balanced Amount
- *  - On-road Price
- * Everything else is shown. One-page A4. Labels with inline values (no stacking).
+ * Shows a concise booking slip including customer, vehicle and a payment
+ * breakdown (cash/online with ref). One-page A4. Labels with inline values.
  */
 const BookingPrintSheet = forwardRef(function BookingPrintSheet({ active = true, vals = {} }, ref) {
   // Normalize brand by branch (Byadarahalli => NH Motors)
@@ -65,46 +59,64 @@ const BookingPrintSheet = forwardRef(function BookingPrintSheet({ active = true,
   // RTO
   const rtoOffice = vals?.rtoOffice || vals?.rto || vals?.rtoOfficeName || vals?.rtoCode || "";
 
-  // Address proof (mode + types) – accept arrays or CSV strings across multiple field names
-  const addressProofMode =
-    vals?.addressProofMode ||
-    vals?.addressProof ||
-    vals?.addrProofMode ||
-    vals?.addressProofType ||
-    vals?.addressProofCategory ||
-    "";
-
-  const addressProofTypesRaw = Array.isArray(vals?.addressProofTypes)
-    ? vals.addressProofTypes
-    : Array.isArray(vals?.addressProofSelected)
-    ? vals.addressProofSelected
-    : Array.isArray(vals?.addrProofTypes)
-    ? vals.addrProofTypes
-    : typeof vals?.addressProofTypes === "string"
-    ? vals.addressProofTypes.split(",").map((s) => s.trim()).filter(Boolean)
-    : typeof vals?.addressProofSelected === "string"
-    ? vals.addressProofSelected.split(",").map((s) => s.trim()).filter(Boolean)
-    : typeof vals?.addrProofTypes === "string"
-    ? vals.addrProofTypes.split(",").map((s) => s.trim()).filter(Boolean)
-    : [];
-
-  // Friendly labels for proof type codes
-  const PROOF_LABEL = {
-    DL: 'Driving License',
-    GasBill: 'Gas Bill',
-    RentalAgreement: 'Rental Agreement',
-    Others: 'Others',
+  // Payment summary (accepts newer split + legacy fields)
+  const num = (v) => {
+    const n = Number(String(v ?? "").replace(/[^\d.-]/g, ""));
+    return Number.isFinite(n) ? n : 0;
   };
-  const addressProofTypes = (addressProofTypesRaw || []).map((x) => PROOF_LABEL[x] || x);
 
-  // File meta (if you want to show what was uploaded)
-  const fileName =
-    vals?.fileName ||
-    vals?.documentName ||
-    vals?.uploadedFileName ||
-    (Array.isArray(vals?.files) && vals.files[0]?.name) ||
-    "";
+  const payments = (() => {
+    const rows = [];
+    const pushPay = (part, mode, amount, reference) => {
+      const amt = num(amount);
+      if (!amt) return;
+      rows.push({
+        part: part ? `Part ${part}` : "",
+        mode: String(mode || "").toLowerCase() === "online" ? "Online" : "Cash",
+        amount: amt,
+        reference: reference || "",
+      });
+    };
 
+    if (Array.isArray(vals?.payments) && vals.payments.length) {
+      vals.payments.forEach((p, idx) =>
+        pushPay(
+          p?.part || idx + 1,
+          p?.mode || p?.paymentMode,
+          p?.amount ?? p?.total ?? p?.value,
+          p?.reference || p?.ref || p?.utr || p?.refNo
+        )
+      );
+    } else if (Array.isArray(vals?.paymentSplit) && vals.paymentSplit.length) {
+      vals.paymentSplit.forEach((p) => {
+        pushPay(p?.part, "Cash", p?.cash);
+        pushPay(p?.part, "Online", p?.online, p?.reference || p?.ref || p?.utr);
+      });
+    } else {
+      [1, 2, 3].forEach((idx) => {
+        const cash = num(vals?.[`bookingAmount${idx}Cash`]);
+        const online = num(vals?.[`bookingAmount${idx}Online`]);
+        const legacyAmount = num(vals?.[`bookingAmount${idx}`]);
+        const mode = String(vals?.[`paymentMode${idx}`] || "").toLowerCase();
+        const ref =
+          vals?.[`paymentReference${idx}`] ||
+          vals?.[`paymentRef${idx}`] ||
+          vals?.[`utr${idx}`] ||
+          vals?.utr;
+
+        if (!cash && !online && legacyAmount) {
+          if (mode === "online") pushPay(idx, "Online", legacyAmount, ref);
+          else pushPay(idx, "Cash", legacyAmount);
+        } else {
+          if (cash) pushPay(idx, "Cash", cash);
+          if (online) pushPay(idx, "Online", online, ref);
+        }
+      });
+    }
+    return rows;
+  })();
+
+  const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
   // Meta
   const executive = vals?.executive || vals?.salesExecutive || vals?.salesperson || "-";
   const createdAt = vals?.createdAt || vals?.ts || new Date();
@@ -185,6 +197,9 @@ img { max-width: 100%; height: auto; background: transparent; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2mm; margin-top: 2mm; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2mm; margin-top: 2mm; }
 .full { grid-column: 1 / -1; }
+.pay-table { width: 100%; border-collapse: collapse; margin-top: 2mm; font-size: 11pt; }
+.pay-table th, .pay-table td { border: 1px solid #d1d5db; padding: 2mm 2.5mm; text-align: left; }
+.pay-table th { background: #f3f4f6; }
 
 .sign-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; margin-top: 6mm; }
 .sign { border-top: 1px dashed #777; padding-top: 2mm; text-align: center; }
@@ -290,7 +305,7 @@ img { max-width: 100%; height: auto; background: transparent; }
               </div>
             </div>
 
-            {/* Mode (no Payment Mode/UTR) */}
+            {/* Mode */}
             <div className="grid">
               <div className="kv">
                 <div className="name"><span className="label">Purchase Mode:</span></div>
@@ -306,29 +321,40 @@ img { max-width: 100%; height: auto; background: transparent; }
               )}
             </div>
 
-            {/* Address proof & document */}
+            {/* Payments */}
             <div className="grid">
               <div className="kv">
-                <div className="name"><span className="label">Address Proof:</span></div>
-                <div className="val">
-                  {addressProofMode
-                    ? (String(addressProofMode).toLowerCase() === "aadhaar" ? "Aadhaar / Voter ID" : String(addressProofMode))
-                    : "-"}
-                </div>
-              </div>
-              <div className="kv">
-                <div className="name"><span className="label">Proof Types:</span></div>
-                <div className="val">
-                  {(String(addressProofMode).toLowerCase() === 'additional' && addressProofTypes && addressProofTypes.length)
-                    ? addressProofTypes.join(', ')
-                    : '-'}
-                </div>
-              </div>
-              <div className="kv full">
-                <div className="name"><span className="label">Document Name:</span></div>
-                <div className="val">{fileName || "-"}</div>
+                <div className="name"><span className="label">Booking Amount Paid:</span></div>
+                <div className="val">{totalPaid ? inr(totalPaid) : "-"}</div>
               </div>
             </div>
+
+            <table className="pay-table">
+              <thead>
+                <tr>
+                  <th style={{ width: "28%" }}>Payment Part</th>
+                  <th style={{ width: "22%" }}>Mode</th>
+                  <th style={{ width: "25%" }}>Amount</th>
+                  <th>UTR / Ref</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.length ? (
+                  payments.map((p, i) => (
+                    <tr key={`${p.part || "p"}-${i}`}>
+                      <td>{p.part || `Part ${i + 1}`}</td>
+                      <td>{p.mode}</td>
+                      <td>{inr(p.amount)}</td>
+                      <td>{p.reference || "-"}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} style={{ textAlign: "center" }}>No payment recorded</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
 
             {/* Notes */}
             <div className="note">

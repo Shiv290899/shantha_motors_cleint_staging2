@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { Card, Form, Input, InputNumber, Select, Button, Row, Col, Divider, message, Space, Typography, Table, Popconfirm } from "antd";
+import { Card, Form, Input, InputNumber, Button, Row, Col, Divider, message, Space, Typography, Table, Popconfirm, Select } from "antd";
 import { handleSmartPrint } from "../utils/printUtils";
 import MinorSalesPrintSheet from "./MinorSalesPrintSheet";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
@@ -8,7 +8,7 @@ import { GetCurrentUser } from "../apiCalls/users";
 // Optional: Configure your Minor Sales Google Apps Script Web App URL via Vite env
 // Add to client/.env (vite-project/.env):
 //   VITE_MINOR_SALES_GAS_URL=https://script.google.com/macros/s/YOUR_ID/exec
-const MINOR_SALES_GAS_URL = import.meta.env.VITE_MINOR_SALES_GAS_URL || "https://script.google.com/macros/s/AKfycbyfODhZ-dBPwGz2MVh2v7m7OcUGgHQewhqB7zq7ddh5LYAtAeu4bDmhTT4gQ3q7vaT_/exec"; // empty -> offline mode
+const MINOR_SALES_GAS_URL = import.meta.env.VITE_MINOR_SALES_GAS_URL || "https://script.google.com/macros/s/AKfycbzbC3mT6yvFY11wCsOscheFBIW6rhr7Nm7NVVyNPW6-zZg6r-oncoUoixB9ZDck67is/exec"; // empty -> offline mode
 
 const phoneRule = [
   { required: true, message: "Mobile number is required" },
@@ -26,10 +26,7 @@ const ITEM_OPTIONS = [...Object.entries(ITEM_DEFS)]
   .sort((a, b) => (a[0] === 'others') - (b[0] === 'others'))
   .map(([value, def]) => ({ value, label: def.label }));
 
-const PAYMENT_MODES = [
-  { label: "Cash", value: "cash" },
-  { label: "ONLINE", value: "online" },
-];
+const toNum = (v) => Number(String(v ?? 0).replace(/[₹,\s]/g, "")) || 0;
 
 function inr(n) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Math.max(0, Math.round(n || 0)));
@@ -108,6 +105,16 @@ export default function MinorSales() {
 
   const customItemName = Form.useWatch('customItemName', form);
   const customQty = Form.useWatch('customQty', form) || 1;
+  const payCash = Form.useWatch('paymentCash', form);
+  const payOnline = Form.useWatch('paymentOnline', form);
+
+  const cartTotal = useMemo(() => {
+    if (!Array.isArray(cart) || cart.length === 0) return 0;
+    return cart.reduce((sum, it) => sum + Number(it.amount || 0), 0);
+  }, [cart]);
+
+  const splitTotal = useMemo(() => toNum(payCash) + toNum(payOnline), [payCash, payOnline]);
+  const splitMatchesTotal = cartTotal > 0 && splitTotal === toNum(cartTotal);
 
   const selectedItemRow = useMemo(() => {
     if (!selectedKey) return null;
@@ -125,10 +132,14 @@ export default function MinorSales() {
     return { item: label, qty: q, unitPrice: unit, amount: unit * q };
   }, [selectedKey, selectedDef, selectedPrice, qty, customQty, customItemName]);
 
-  const cartTotal = useMemo(() => {
-    if (!Array.isArray(cart) || cart.length === 0) return 0;
-    return cart.reduce((sum, it) => sum + Number(it.amount || 0), 0);
-  }, [cart]);
+  // Autofill cash with total when amounts are empty to reduce clicks
+  useEffect(() => {
+    const cashVal = toNum(payCash);
+    const onlineVal = toNum(payOnline);
+    if (cartTotal > 0 && cashVal === 0 && onlineVal === 0) {
+      form.setFieldsValue({ paymentCash: cartTotal, paymentOnline: 0 });
+    }
+  }, [cartTotal, payCash, payOnline, form]);
 
   function addToCart() {
     if (!selectedItemRow) { message.warning("Select item, price, and qty first"); return; }
@@ -202,13 +213,23 @@ export default function MinorSales() {
       // Ensure spinner paints before heavy work
       await new Promise((r) => setTimeout(r, 0));
       if (!cart.length) { message.warning("Add at least one item to cart"); return; }
-      const vals = await form.validateFields(["custName", "custMobile", "paymentMode"]);
+      const vals = await form.validateFields(["custName", "custMobile", "paymentCash", "paymentOnline", "utr"]);
 
-      // Pre-aggregate split for GAS (frontend-only approach)
-      const mode = String(vals.paymentMode || '').toLowerCase();
-      const cashCollected = mode === 'cash' ? Number(cartTotal || 0) : 0;
-      const onlineCollected = mode === 'online' ? Number(cartTotal || 0) : 0;
-      const totalCollected = Number(cartTotal || 0);
+      const cashCollected = toNum(vals.paymentCash);
+      const onlineCollected = toNum(vals.paymentOnline);
+      const totalCollected = cashCollected + onlineCollected;
+
+      if (totalCollected !== toNum(cartTotal)) {
+        message.error("Cash + Online should equal the cart total.");
+        return;
+      }
+
+      const modeLabel =
+        cashCollected > 0 && onlineCollected > 0
+          ? "CASH+ONLINE"
+          : onlineCollected > 0
+          ? "ONLINE"
+          : "CASH";
 
       const payload = {
         action: "minor_sales_save",
@@ -227,8 +248,10 @@ export default function MinorSales() {
           customer: {
             name: String(vals.custName || "").trim().toUpperCase(),
             mobile: normalize10(vals.custMobile),
-            paymentMode: vals.paymentMode || "",
-            utr: String(form.getFieldValue('utr') || '').trim() || undefined,
+            paymentMode: modeLabel,
+            utr: onlineCollected > 0 ? String(form.getFieldValue('utr') || '').trim() || undefined : undefined,
+            cashCollected,
+            onlineCollected,
           },
         },
       };
@@ -260,8 +283,10 @@ export default function MinorSales() {
         customer: {
           name: String(vals.custName || '').trim().toUpperCase(),
           mobile: normalize10(vals.custMobile),
-          paymentMode: vals.paymentMode || '',
-          utr: String(form.getFieldValue('utr') || '').trim() || undefined,
+          paymentMode: modeLabel,
+          cashCollected,
+          onlineCollected,
+          utr: onlineCollected > 0 ? String(form.getFieldValue('utr') || '').trim() || undefined : undefined,
         },
       });
       await new Promise((r)=>setTimeout(r,0));
@@ -283,7 +308,7 @@ export default function MinorSales() {
 
   // removed legacy printSlip (use printAndSaveSlip)
 
-  const initValues = useMemo(() => ({ item: undefined, price: undefined, qty: 1, customQty: 1 }), []);
+  const initValues = useMemo(() => ({ item: undefined, price: undefined, qty: 1, customQty: 1, paymentCash: 0, paymentOnline: 0 }), []);
 
   async function _handleSave() {
     try {
@@ -292,15 +317,24 @@ export default function MinorSales() {
         message.error("Cart is empty. Add at least one item.");
         return;
       }
-      await form.validateFields(["custName", "custMobile", "paymentMode"]);
+      await form.validateFields(["custName", "custMobile", "paymentCash", "paymentOnline", "utr"]);
 
       const items = cart;
 
-      // Pre-aggregate split for GAS (frontend-only approach)
-      const mode = String(vals.paymentMode || '').toLowerCase();
-      const cashCollected = mode === 'cash' ? Number(cartTotal || 0) : 0;
-      const onlineCollected = mode === 'online' ? Number(cartTotal || 0) : 0;
-      const totalCollected = Number(cartTotal || 0);
+      const cashCollected = toNum(vals.paymentCash);
+      const onlineCollected = toNum(vals.paymentOnline);
+      const totalCollected = cashCollected + onlineCollected;
+      if (totalCollected !== toNum(cartTotal)) {
+        message.error("Cash + Online should equal the cart total.");
+        return;
+      }
+
+      const modeLabel =
+        cashCollected > 0 && onlineCollected > 0
+          ? "CASH+ONLINE"
+          : onlineCollected > 0
+          ? "ONLINE"
+          : "CASH";
 
       const payload = {
         action: "minor_sales_save",
@@ -319,7 +353,10 @@ export default function MinorSales() {
           customer: {
             name: String(vals.custName || "").trim().toUpperCase(),
             mobile: normalize10(vals.custMobile),
-            paymentMode: vals.paymentMode || "",
+            paymentMode: modeLabel,
+            cashCollected,
+            onlineCollected,
+            utr: onlineCollected > 0 ? String(form.getFieldValue('utr') || '').trim() || undefined : undefined,
           },
         },
       };
@@ -550,10 +587,10 @@ export default function MinorSales() {
           />
         </Card>
 
-        {/* Customer Details */}
+        {/* Customer Details + Payment Split */}
         <Card
           size="small"
-          title="Customer Details"
+          title="Customer & Payment"
           bodyStyle={{ padding: 8 }}
         >
           <Row gutter={12}>
@@ -574,31 +611,59 @@ export default function MinorSales() {
                 <Input maxLength={10} placeholder="10-digit mobile" />
               </Form.Item>
             </Col>
-            <Col xs={24} md={8}>
-              <Form.Item
-                name="paymentMode"
-                label="Payment Mode"
-                rules={[{ required: true, message: "Select payment mode" }]}
-              >
-                <Select options={PAYMENT_MODES} placeholder="Select" allowClear />
-              </Form.Item>
-            </Col>
           </Row>
           <Row gutter={12}>
             <Col xs={24} md={8}>
+              <Form.Item
+                name="paymentCash"
+                label="Cash (₹)"
+                rules={[
+                  {
+                    validator: (_, v) => toNum(v) >= 0 ? Promise.resolve() : Promise.reject(new Error("Enter cash amount (₹)")),
+                  },
+                ]}
+              >
+                <InputNumber
+                  min={0}
+                  step={50}
+                  style={{ width: "100%" }}
+                  prefix="₹"
+                  placeholder="0"
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="paymentOnline"
+                label="Online (₹)"
+                rules={[
+                  {
+                    validator: (_, v) => toNum(v) >= 0 ? Promise.resolve() : Promise.reject(new Error("Enter online amount (₹)")),
+                  },
+                ]}
+              >
+                <InputNumber
+                  min={0}
+                  step={50}
+                  style={{ width: "100%" }}
+                  prefix="₹"
+                  placeholder="0"
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
               <Form.Item shouldUpdate noStyle>
-                {() =>
-                  String(form.getFieldValue("paymentMode") || "").toLowerCase() ===
-                  "online" ? (
+                {() => {
+                  const onlineVal = toNum(form.getFieldValue("paymentOnline"));
+                  return (
                     <Form.Item
                       name="utr"
-                      label="UTR / Reference"
-                      rules={[
-                        {
-                          required: true,
-                          message: "Enter UTR/Reference for online payments",
-                        },
-                      ]}
+                      label="UTR / Reference No."
+                      rules={
+                        onlineVal > 0
+                          ? [{ required: true, message: "Enter UTR/Reference for online payments" }]
+                          : []
+                      }
                       getValueFromEvent={(e) => {
                         const v = e && e.target ? e.target.value : e;
                         return typeof v === "string" ? v.toUpperCase() : v;
@@ -607,10 +672,11 @@ export default function MinorSales() {
                       <Input
                         placeholder="e.g., 23XXXXUTR123"
                         style={{ textTransform: "uppercase" }}
+                        disabled={onlineVal <= 0}
                       />
                     </Form.Item>
-                  ) : null
-                }
+                  );
+                }}
               </Form.Item>
             </Col>
           </Row>
@@ -632,10 +698,10 @@ export default function MinorSales() {
               <Button
                 type="primary"
                 onClick={printAndSaveSlip}
-                disabled={!cart.length || printing}
+                disabled={!cart.length || printing || !splitMatchesTotal}
                 loading={printing}
               >
-                Print &amp; Save
+                Print
               </Button>
             </Space>
           </Col>
