@@ -5,6 +5,7 @@ import useDebouncedValue from "../hooks/useDebouncedValue";
 import dayjs from "dayjs";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import { useNavigate } from "react-router-dom";
+import { exportToCsv } from "../utils/csvExport";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
 const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec";
@@ -261,33 +262,10 @@ export default function Jobcards() {
     return ["all", ...Array.from(set.values())];
   }, [optionRows]);
 
-  const filtered = useMemo(() => {
+  const applyFilters = useCallback((list) => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     const norm = (s) => String(s || '').toLowerCase().trim();
-    if (USE_SERVER_PAG) {
-      const scoped = rows.filter((r)=>{
-        if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
-          if (!allowedSet.has(norm(r.branch))) return false;
-        }
-        if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
-        if (serviceFilter !== "all" && norm(r.serviceType) !== norm(serviceFilter)) return false;
-        if (dateRange && dateRange[0] && dateRange[1]) {
-          const start = dateRange[0].startOf('day').valueOf();
-          const end = dateRange[1].endOf('day').valueOf();
-          const t = r.tsMs ?? parseTsMs(r.ts);
-          if (!t || t < start || t > end) return false;
-        }
-        if (debouncedQ) {
-          const s = debouncedQ.toLowerCase();
-          if (![
-            r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode, r.status
-          ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
-        }
-        return true;
-      });
-      return scoped.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-    }
-    const list = rows.filter((r) => {
+    const scoped = (list || []).filter((r)=>{
       if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
         if (!allowedSet.has(norm(r.branch))) return false;
       }
@@ -307,8 +285,10 @@ export default function Jobcards() {
       }
       return true;
     });
-    return list.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-  }, [rows, branchFilter, serviceFilter, debouncedQ, dateRange, userRole, allowedBranches, USE_SERVER_PAG]);
+    return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
+  }, [allowedBranches, branchFilter, dateRange, debouncedQ, serviceFilter, userRole]);
+
+  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
 
   // Reset pagination when filters/search/date change
   useEffect(() => {
@@ -316,6 +296,77 @@ export default function Jobcards() {
     setLoadedCount(pageSize);
   }, [branchFilter, serviceFilter, debouncedQ, dateRange]);
   useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
+
+  const loadExportRows = useCallback(async () => {
+    if (!USE_SERVER_PAG) return rows;
+    if (!GAS_URL) return rows;
+    const base = { action: 'list', page: 1, pageSize: 10000 };
+    const filters = {
+      q: debouncedQ || '',
+      branch: branchFilter !== 'all' ? branchFilter : '',
+      service: serviceFilter !== 'all' ? serviceFilter : '',
+    };
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      filters.start = dateRange[0].startOf('day').valueOf();
+      filters.end = dateRange[1].endOf('day').valueOf();
+    }
+    const payload = GAS_SECRET ? { ...base, ...filters, secret: GAS_SECRET } : { ...base, ...filters };
+    const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+    const js = resp?.data || resp;
+    const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+    return dataArr.map((o, idx) => mapJobRow(o, idx)).filter((r)=>r.jcNo || r.name || r.mobile);
+  }, [USE_SERVER_PAG, GAS_URL, GAS_SECRET, branchFilter, dateRange, debouncedQ, mapJobRow, rows, serviceFilter]);
+
+  const handleExportCsv = async () => {
+    const msgKey = 'export-jobcards';
+    message.loading({ key: msgKey, content: 'Preparing CSV…', duration: 0 });
+    try {
+      const baseRows = USE_SERVER_PAG ? await loadExportRows() : rows;
+      const scoped = applyFilters(baseRows);
+      if (!scoped.length) {
+        message.info({ key: msgKey, content: 'No rows to export for current filters' });
+        return;
+      }
+      const headers = [
+        { key: 'ts', label: 'Timestamp' },
+        { key: 'jcNo', label: 'Job Card No' },
+        { key: 'name', label: 'Customer' },
+        { key: 'mobile', label: 'Mobile' },
+        { key: 'branch', label: 'Branch' },
+        { key: 'serviceType', label: 'Service Type' },
+        { key: 'vehicleType', label: 'Vehicle Type' },
+        { key: 'regNo', label: 'Vehicle No' },
+        { key: 'model', label: 'Model' },
+        { key: 'company', label: 'Company' },
+        { key: 'amount', label: 'Service Amount' },
+        { key: 'paymentMode', label: 'Payment Mode' },
+        { key: 'status', label: 'Status' },
+        { key: 'RemarkLevel', label: 'Remark Level' },
+        { key: 'RemarkText', label: 'Remark' },
+      ];
+      const rowsForCsv = scoped.map((r) => ({
+        ts: r.ts,
+        jcNo: r.jcNo,
+        name: r.name,
+        mobile: r.mobile,
+        branch: r.branch,
+        serviceType: r.serviceType,
+        vehicleType: r.vehicleType,
+        regNo: r.regNo,
+        model: r.model,
+        company: r.company,
+        amount: r.amount,
+        paymentMode: r.paymentMode,
+        status: r.status,
+        RemarkLevel: r.RemarkLevel || r._remarkLevel,
+        RemarkText: r.RemarkText || r._remarkText,
+      }));
+      exportToCsv({ filename: 'jobcards.csv', headers, rows: rowsForCsv });
+      message.success({ key: msgKey, content: `Exported ${rowsForCsv.length} job cards` });
+    } catch {
+      message.error({ key: msgKey, content: 'Export failed. Please try again.' });
+    }
+  };
 
   // Fetch larger slice for filter dropdowns
   useEffect(() => {
@@ -431,6 +482,7 @@ export default function Jobcards() {
             options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
             style={{ width: 130 }}
           />)}
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button loading={loading} onClick={() => {
             const ev = new Event('reload-jobcards');
             window.dispatchEvent(ev);

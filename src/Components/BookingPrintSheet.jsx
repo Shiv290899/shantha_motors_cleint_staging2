@@ -15,8 +15,10 @@ import { fmtDate, inr } from "../utils/printUtils";
  */
 const BookingPrintSheet = forwardRef(function BookingPrintSheet({ active = true, vals = {} }, ref) {
   // Normalize brand by branch (Byadarahalli => NH Motors)
-  const branch = String(vals?.branch || "").trim();
-  const isNH = branch === "Byadarahalli";
+  const branchRaw = String(vals?.branch || "").trim();
+  const branch = branchRaw;
+  const branchKey = branchRaw.toLowerCase();
+  const isNH = branchKey === "byadarahalli";
 
   // Customer
   const custName =

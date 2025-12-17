@@ -20,6 +20,7 @@ import dayjs from "dayjs";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
 import PostServiceSheet from "./PostServiceSheet";
 import { handleSmartPrint } from "../utils/printUtils";
+import { exportToCsv } from "../utils/csvExport";
 
 const { Text } = Typography;
 
@@ -588,6 +589,57 @@ export default function VehicleSearch() {
     }, 50);
   };
 
+  const handleExportCsv = () => {
+    const fmt = (v) => {
+      const d = dayjs(v);
+      return d.isValid() ? d.format("YYYY-MM-DD HH:mm") : "";
+    };
+    const rowsForCsv = [];
+    bookings.forEach((b, idx) => {
+      rowsForCsv.push({
+        type: "Booking",
+        ref: b.id || `booking-${idx + 1}`,
+        customer: b.customerName,
+        mobile: b.mobile,
+        vehicle: b.vehicle,
+        color: b.color,
+        chassis: b.chassis,
+        branch: b.branch,
+        createdAt: fmt(b.createdAt),
+      });
+    });
+    serviceTimeline.forEach((s, idx) => {
+      rowsForCsv.push({
+        type: "Service",
+        ref: s.jcNo || `service-${idx + 1}`,
+        customer: s.custName || s.customerName,
+        mobile: s.mobile,
+        vehicle: s.model || s.company,
+        color: s.colour || s.color,
+        chassis: s.regNo,
+        branch: s.branch,
+        createdAt: fmt(s.createdAt),
+      });
+    });
+    if (!rowsForCsv.length) {
+      message.info("No search results to export");
+      return;
+    }
+    const headers = [
+      { key: "type", label: "Type" },
+      { key: "ref", label: "Reference" },
+      { key: "customer", label: "Customer" },
+      { key: "mobile", label: "Mobile" },
+      { key: "vehicle", label: "Vehicle" },
+      { key: "color", label: "Color" },
+      { key: "chassis", label: "Chassis / Reg No" },
+      { key: "branch", label: "Branch" },
+      { key: "createdAt", label: "Created At" },
+    ];
+    exportToCsv({ filename: "vehicle-search.csv", headers, rows: rowsForCsv });
+    message.success(`Exported ${rowsForCsv.length} records`);
+  };
+
   return (
     <>
     <div
@@ -617,6 +669,13 @@ export default function VehicleSearch() {
         }
         extra={
           <Space>
+            <Button
+              size="small"
+              onClick={handleExportCsv}
+              disabled={!bookings.length && !services.length}
+            >
+              Export CSV
+            </Button>
             <Radio.Group
               value={mode}
               onChange={(e) => {

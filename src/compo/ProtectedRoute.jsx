@@ -11,26 +11,32 @@ export default function ProtectedRoute({ children, roles }) {
   });
 
   useEffect(() => {
+    let cancelled = false;
     const token = localStorage.getItem("token");
-    // If no token and no cached user, we can immediately gate to login
-    if (!token && !user) { setLoading(false); return; }
-
-    // If we have a token or cached user, do NOT block UI.
-    // Let the page render immediately and refresh user in the background.
-    setLoading(false);
     (async () => {
+      // If no token and no cached user, gate to login quickly
+      if (!token && !user) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      let nextUser = user;
       try {
         const result = await GetCurrentUser();
         if (result?.success && result?.data) {
-          setUser(result.data);
+          nextUser = result.data;
           try { localStorage.setItem("user", JSON.stringify(result.data)); } catch (e) { void e; }
         }
       } catch {
-        // Do NOT clear token/user on transient failures; keep session.
+        // ignore fetch errors; fall back to cached user
       } finally {
-        // nothing
+        if (!cancelled) {
+          if (nextUser) setUser(nextUser);
+          setLoading(false);
+        }
       }
     })();
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -44,6 +50,9 @@ export default function ProtectedRoute({ children, roles }) {
     const role = String(user.role || "").toLowerCase();
     const ok = roles.map((r) => String(r).toLowerCase()).includes(role);
     if (!ok) return <Navigate to="/" replace />;
+  } else if (Array.isArray(roles) && roles.length && !user) {
+    // If a protected role is required but we still don't have a user, block access
+    return <Navigate to="/login" replace />;
   }
 
   return <>{children}</>;

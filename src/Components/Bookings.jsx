@@ -9,6 +9,7 @@ import BookingForm from "./BookingForm";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import { listBranchesPublic } from "../apiCalls/branches";
 import { listUsersPublic } from "../apiCalls/adminUsers";
+import { exportToCsv } from "../utils/csvExport";
 
 const { Text } = Typography;
 
@@ -306,33 +307,10 @@ export default function Bookings() {
     return ["all", ...Array.from(set.values())];
   }, [optionRows]);
 
-  const filtered = useMemo(() => {
+  const applyFilters = useCallback((list) => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     const norm = (s) => String(s || '').toLowerCase().trim();
-    if (USE_SERVER_PAG) {
-      const scoped = rows.filter((r) => {
-        if (allowedSet.size && !["owner","admin"].includes(userRole)) {
-          if (!allowedSet.has(norm(r.branch))) return false;
-        }
-        if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
-        if (statusFilter !== "all" && norm(r.status) !== norm(statusFilter)) return false;
-        if (dateRange && dateRange[0] && dateRange[1]) {
-          const start = dateRange[0].startOf('day').valueOf();
-          const end = dateRange[1].endOf('day').valueOf();
-          const t = r.tsMs ?? parseTsMs(r.ts);
-          if (!t || t < start || t > end) return false;
-        }
-        if (debouncedQ) {
-          const s = debouncedQ.toLowerCase();
-          if (![
-            r.bookingId, r.name, r.mobile, r.company, r.model, r.variant, r.chassis, r.branch,
-          ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
-        }
-        return true;
-      });
-      return scoped.slice().sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
-    }
-    const list = rows.filter((r) => {
+    const scoped = (list || []).filter((r) => {
       if (allowedSet.size && !["owner","admin"].includes(userRole)) {
         if (!allowedSet.has(norm(r.branch))) return false;
       }
@@ -352,8 +330,10 @@ export default function Bookings() {
       }
       return true;
     });
-    return list.sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
-  }, [rows, branchFilter, statusFilter, debouncedQ, dateRange, userRole, allowedBranches, USE_SERVER_PAG]);
+    return scoped.slice().sort((a,b)=> (b.tsMs||0)-(a.tsMs||0));
+  }, [allowedBranches, branchFilter, dateRange, debouncedQ, statusFilter, userRole]);
+
+  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
 
   // Reset page when filters/search change
   useEffect(() => {
@@ -362,6 +342,71 @@ export default function Bookings() {
   }, [branchFilter, statusFilter, debouncedQ, dateRange]);
 
   useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
+
+  const loadExportRows = useCallback(async () => {
+    if (!USE_SERVER_PAG) return rows;
+    if (!GAS_URL_STATIC) return rows;
+    const base = { action: 'list', page: 1, pageSize: 10000 };
+    const filters = {
+      q: debouncedQ || '',
+      branch: branchFilter !== 'all' ? branchFilter : '',
+      status: statusFilter !== 'all' ? statusFilter : '',
+    };
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      filters.start = dateRange[0].startOf('day').valueOf();
+      filters.end = dateRange[1].endOf('day').valueOf();
+    }
+    const payload = GAS_SECRET_STATIC ? { ...base, ...filters, secret: GAS_SECRET_STATIC } : { ...base, ...filters };
+    const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'GET', payload });
+    const js = resp?.data || resp;
+    const dataArr = Array.isArray(js?.data) ? js.data : [];
+    return dataArr.map((o, idx) => mapRow(o, idx)).filter((r)=>r.bookingId || r.name || r.mobile);
+  }, [USE_SERVER_PAG, GAS_URL_STATIC, GAS_SECRET_STATIC, branchFilter, dateRange, debouncedQ, mapRow, statusFilter, rows]);
+
+  const handleExportCsv = async () => {
+    const msgKey = 'export-bookings';
+    message.loading({ key: msgKey, content: 'Preparing CSV…', duration: 0 });
+    try {
+      const baseRows = USE_SERVER_PAG ? await loadExportRows() : rows;
+      const scoped = applyFilters(baseRows);
+      if (!scoped.length) {
+        message.info({ key: msgKey, content: 'No rows to export for current filters' });
+        return;
+      }
+      const headers = [
+        { key: 'ts', label: 'Submitted At' },
+        { key: 'bookingId', label: 'Booking ID' },
+        { key: 'name', label: 'Customer' },
+        { key: 'mobile', label: 'Mobile' },
+        { key: 'branch', label: 'Branch' },
+        { key: 'status', label: 'Status' },
+        { key: 'availability', label: 'Stock Status' },
+        { key: 'company', label: 'Company' },
+        { key: 'model', label: 'Model' },
+        { key: 'variant', label: 'Variant' },
+        { key: 'chassis', label: 'Chassis' },
+        { key: 'fileUrl', label: 'File URL' },
+      ];
+      const rowsForCsv = scoped.map((r) => ({
+        ts: r.ts,
+        bookingId: r.bookingId,
+        name: r.name,
+        mobile: r.mobile,
+        branch: r.branch,
+        status: r.status,
+        availability: stockLabel(r.chassis, r.availability),
+        company: r.company,
+        model: r.model,
+        variant: r.variant,
+        chassis: r.chassis,
+        fileUrl: r.fileUrl,
+      }));
+      exportToCsv({ filename: 'bookings.csv', headers, rows: rowsForCsv });
+      message.success({ key: msgKey, content: `Exported ${rowsForCsv.length} bookings` });
+    } catch  {
+      message.error({ key: msgKey, content: 'Export failed. Please try again.' });
+    }
+  };
 
   const STATUS_COLOR = {
     pending: 'gold',
@@ -685,6 +730,7 @@ export default function Bookings() {
             options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
             style={{ width: 130 }}
           />)}
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button loading={loading} onClick={() => {
             // re-run the loader without full page refresh
             const ev = new Event('reload-bookings');

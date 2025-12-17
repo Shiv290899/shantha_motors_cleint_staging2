@@ -44,12 +44,12 @@ function App() {
 
           {/* Dynamic redirect based on user role */}
           <Route path="/dashboard" element={<ProtectedRoute><RoleRedirect /></ProtectedRoute>} />
-          <Route path="/admin" element={<ProtectedRoute roles={["admin","owner"]}><Admin /></ProtectedRoute>} />
-          <Route path="/owner" element={<ProtectedRoute><Owner /></ProtectedRoute>} />
+          <Route path="/admin" element={<ProtectedRoute roles={["admin"]}><Admin /></ProtectedRoute>} />
+          <Route path="/owner" element={<ProtectedRoute roles={["owner"]}><Owner /></ProtectedRoute>} />
           <Route path="/mechanic" element={<ProtectedRoute><Mechanic /></ProtectedRoute>} />
           
-          <Route path="/staff" element={<ProtectedRoute><Staff /></ProtectedRoute>} />
-          <Route path="/backend" element={<ProtectedRoute><Backend /></ProtectedRoute>} />
+          <Route path="/staff" element={<ProtectedRoute roles={["staff"]}><Staff /></ProtectedRoute>} />
+          <Route path="/backend" element={<ProtectedRoute roles={["backend"]}><Backend /></ProtectedRoute>} />
           <Route path="/employees" element={<ProtectedRoute><Employees /></ProtectedRoute>} />
 
           <Route path="/bookingform" element={<ProtectedRoute><BookingForm /></ProtectedRoute>} />

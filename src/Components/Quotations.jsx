@@ -4,6 +4,7 @@ import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 import { useNavigate } from "react-router-dom";
+import { exportToCsv } from "../utils/csvExport";
 
 const { Text } = Typography;
 
@@ -270,35 +271,10 @@ export default function Quotations() {
     return ["all", ...Array.from(set.values())];
   }, [optionRows]);
 
-  const filtered = useMemo(() => {
+  const applyFilters = useCallback((list) => {
     const allowedSet = new Set((allowedBranches || []).map((b)=>String(b||'').toLowerCase()));
     const norm = (s) => String(s || '').toLowerCase().trim();
-    // When using server pagination, still enforce branch scope and client-side date filter as a fallback
-    if (USE_SERVER_PAG) {
-      const scoped = rows.filter((r) => {
-        if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
-          if (!allowedSet.has(norm(r.branch))) return false;
-        }
-        if (branchFilter !== "all" && norm(r.branch) !== norm(branchFilter)) return false;
-        if (modeFilter !== "all" && norm(r.mode) !== norm(modeFilter)) return false;
-        if (statusFilter !== 'all' && norm(r.status) !== norm(statusFilter)) return false;
-        if (dateRange && dateRange[0] && dateRange[1]) {
-          const start = dateRange[0].startOf('day').valueOf();
-          const end = dateRange[1].endOf('day').valueOf();
-          const t = r.tsMs ?? parseTsMs(r.ts);
-          if (!t || t < start || t > end) return false;
-        }
-        if (debouncedQ) {
-          const s = debouncedQ.toLowerCase();
-          if (![
-            r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive, r.status
-          ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
-        }
-        return true;
-      });
-      return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-    }
-    const list = rows.filter((r) => {
+    const scoped = (list || []).filter((r) => {
       if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
         if (!allowedSet.has(norm(r.branch))) return false;
       }
@@ -319,9 +295,10 @@ export default function Quotations() {
       }
       return true;
     });
-    // Always show most recent first
-    return list.sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-  }, [rows, branchFilter, modeFilter, statusFilter, debouncedQ, dateRange, userRole, allowedBranches, USE_SERVER_PAG]);
+    return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
+  }, [allowedBranches, branchFilter, dateRange, debouncedQ, modeFilter, statusFilter, userRole]);
+
+  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
 
   // Reset pagination on filters/search/date change
   useEffect(() => {
@@ -329,6 +306,77 @@ export default function Quotations() {
     setLoadedCount(pageSize);
   }, [branchFilter, modeFilter, statusFilter, debouncedQ, dateRange]);
   useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
+
+  const loadExportRows = useCallback(async () => {
+    if (!USE_SERVER_PAG) return rows;
+    const { GAS_URL, SECRET } = gasConfig;
+    if (!GAS_URL) return rows;
+    const base = { action: 'list', page: 1, pageSize: 10000 };
+    const filters = {
+      q: debouncedQ || '',
+      branch: branchFilter !== 'all' ? branchFilter : '',
+      mode: modeFilter !== 'all' ? modeFilter : '',
+      status: statusFilter !== 'all' ? statusFilter : '',
+    };
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      filters.start = dateRange[0].startOf('day').valueOf();
+      filters.end = dateRange[1].endOf('day').valueOf();
+    }
+    const payload = SECRET ? { ...base, ...filters, secret: SECRET } : { ...base, ...filters };
+    const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+    const js = resp?.data || resp;
+    const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+    return dataArr.map((o, idx) => mapRow(o, idx)).filter((r)=>r.name || r.mobile || r.serialNo);
+  }, [USE_SERVER_PAG, gasConfig, branchFilter, dateRange, debouncedQ, mapRow, modeFilter, rows, statusFilter]);
+
+  const handleExportCsv = async () => {
+    const msgKey = 'export-quotations';
+    message.loading({ key: msgKey, content: 'Preparing CSV…', duration: 0 });
+    try {
+      const baseRows = USE_SERVER_PAG ? await loadExportRows() : rows;
+      const scoped = applyFilters(baseRows);
+      if (!scoped.length) {
+        message.info({ key: msgKey, content: 'No rows to export for current filters' });
+        return;
+      }
+      const headers = [
+        { key: 'ts', label: 'Timestamp' },
+        { key: 'serialNo', label: 'Quotation No' },
+        { key: 'name', label: 'Customer' },
+        { key: 'mobile', label: 'Mobile' },
+        { key: 'branch', label: 'Branch' },
+        { key: 'executive', label: 'Executive' },
+        { key: 'mode', label: 'Mode' },
+        { key: 'company', label: 'Company' },
+        { key: 'model', label: 'Model' },
+        { key: 'variant', label: 'Variant' },
+        { key: 'price', label: 'On-Road Price' },
+        { key: 'status', label: 'Status' },
+        { key: 'RemarkLevel', label: 'Remark Level' },
+        { key: 'RemarkText', label: 'Remark' },
+      ];
+      const rowsForCsv = scoped.map((r) => ({
+        ts: r.ts,
+        serialNo: r.serialNo,
+        name: r.name,
+        mobile: r.mobile,
+        branch: r.branch,
+        executive: r.executive,
+        mode: r.mode,
+        company: r.company,
+        model: r.model,
+        variant: r.variant,
+        price: r.price,
+        status: r.status,
+        RemarkLevel: r.RemarkLevel || r._remarkLevel,
+        RemarkText: r.RemarkText || r._remarkText,
+      }));
+      exportToCsv({ filename: 'quotations.csv', headers, rows: rowsForCsv });
+      message.success({ key: msgKey, content: `Exported ${rowsForCsv.length} quotations` });
+    } catch {
+      message.error({ key: msgKey, content: 'Export failed. Please try again.' });
+    }
+  };
 
   const statusColor = (s) => {
     const k = String(s || '').toLowerCase();
@@ -409,6 +457,7 @@ export default function Quotations() {
             options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
             style={{ width: 130 }}
           />)}
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button loading={loading} onClick={() => {
             const ev = new Event('reload-quotations');
             window.dispatchEvent(ev);

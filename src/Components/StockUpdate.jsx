@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import dayjs from 'dayjs';
-import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip, Popconfirm } from "antd";
+import { Row, Col, Form, Input, Select, Radio, Button, message, Divider, Modal, Table, Space, Tag, Grid, Tooltip, Popconfirm, Alert } from "antd";
 // Stock updates now use MongoDB backend only
 import { listStocks, listCurrentStocks, createStock, updateStock, listPendingTransfers, admitTransfer, rejectTransfer } from "../apiCalls/stocks";
 import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
+import { exportToCsv } from "../utils/csvExport";
 
 // --- Config ---
 // Vehicle catalog CSV remains (read-only) for dropdowns
 const CATALOG_CSV_URL = import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv";
 
 // --- CSV loader ---
 const HEADERS = {
@@ -77,6 +78,7 @@ export default function StockUpdate() {
   const [allowedActions, setAllowedActions] = useState(null); // null = all, ["add"] or [specific]
   const [submitting, setSubmitting] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [formError, setFormError] = useState("");
   const [editingMovementId, setEditingMovementId] = useState(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [invoicePrefill, setInvoicePrefill] = useState(null);
@@ -249,7 +251,8 @@ export default function StockUpdate() {
     setLoadingPending(true);
     try {
       const resp = await listPendingTransfers({ branch: pendingBranch || undefined });
-      if (!resp?.success && resp?.message) {
+      const ok = resp?.success ?? resp?.ok;
+      if (!ok && resp?.message) {
         message.warning(resp.message === 'Token Invalid' ? 'Session expired. Please log in again to admit/reject transfers.' : resp.message);
       }
       const list = Array.isArray(resp?.data) ? resp.data : [];
@@ -276,7 +279,9 @@ export default function StockUpdate() {
   }, [pendingBranch]);
 
   const onSubmit = async () => {
+    let success = false;
     try {
+      setFormError("");
       const values = await form.validateFields();
       setSubmitting(true);
       const user = (() => { try { return JSON.parse(localStorage.getItem('user')||'null') } catch { return null } })();
@@ -300,19 +305,31 @@ export default function StockUpdate() {
       };
       if (editingMovementId) {
         const resp = await updateStock(editingMovementId, row);
-        if (resp?.success) message.success("Stock movement updated.");
-        else message.error(resp?.message || "Update failed");
+        success = !!(resp?.success ?? resp?.ok);
+        if (success) {
+          message.success("Stock movement updated.");
+          setFormError("");
+        } else {
+          const errMsg = resp?.message || "Update failed";
+          setFormError(errMsg);
+          message.error(errMsg);
+        }
       } else {
         const resp = await createStock({ data: row, createdBy: user?.name || user?.email || 'user' });
-        if (resp?.success) {
+        success = !!(resp?.success ?? resp?.ok);
+        if (success) {
           const msg = action === 'transfer'
             ? 'Transfer recorded and waiting for admit by the target branch.'
             : 'Stock movement saved.';
           message.success(msg);
+          setFormError("");
         } else {
-          message.error(resp?.message || "Save failed");
+          const errMsg = resp?.message || "Save failed";
+          setFormError(errMsg);
+          message.error(errMsg);
         }
       }
+      if (!success) return;
       form.resetFields(["chassis", "notes", "targetBranch", "returnTo", "customerName", "franchise"]);
       setModalOpen(false);
       setEditingMovementId(null);
@@ -321,7 +338,9 @@ export default function StockUpdate() {
       if (action === 'transfer') fetchPendingTransfers();
     } catch (err) {
       if (err?.errorFields) return; // antd validation
-      message.error("Failed to save. Check configuration or network.");
+      const apiMessage = err?.response?.data?.message || err?.message;
+      setFormError(apiMessage || "Failed to save. Check configuration or network.");
+      message.error(apiMessage || "Failed to save. Check configuration or network.");
     } finally {
       setSubmitting(false);
     }
@@ -458,6 +477,7 @@ export default function StockUpdate() {
 
       setAllowedActions([act]);
       setAction(act);
+      setFormError("");
       const patch = {
         chassis: base?.chassis || base?.chassisNo || undefined,
         company: base?.company || undefined,
@@ -483,6 +503,7 @@ export default function StockUpdate() {
     try {
       setEditingMovementId(base?.movementId || null);
       setAllowedActions(null);
+      setFormError("");
       const act = String(base?.action || 'add').toLowerCase();
       setAction(act);
       setCompany(base?.company || '');
@@ -594,6 +615,45 @@ export default function StockUpdate() {
     return () => clearTimeout(h);
   }, [qText]);
 
+  const handleExportCsv = () => {
+    if (!filteredItems.length) {
+      message.info('No stock movements to export for current filters');
+      return;
+    }
+    const headers = [
+      { key: 'ts', label: 'Timestamp' },
+      { key: 'chassis', label: 'Chassis' },
+      { key: 'company', label: 'Company' },
+      { key: 'model', label: 'Model' },
+      { key: 'variant', label: 'Variant' },
+      { key: 'color', label: 'Color' },
+      { key: 'action', label: 'Action' },
+      { key: 'sourceBranch', label: 'Source Branch' },
+      { key: 'targetBranch', label: 'Target Branch' },
+      { key: 'returnTo', label: 'Return To' },
+      { key: 'customerName', label: 'Customer' },
+      { key: 'notes', label: 'Notes' },
+      { key: 'transferStatus', label: 'Transfer Status' },
+    ];
+    const rowsForCsv = filteredItems.map((r) => ({
+      ts: r.ts,
+      chassis: r.chassis,
+      company: r.company,
+      model: r.model,
+      variant: r.variant,
+      color: r.color,
+      action: r.action,
+      sourceBranch: r.sourceBranch || r.lastSourceBranch,
+      targetBranch: r.targetBranch,
+      returnTo: r.returnTo,
+      customerName: r.customerName,
+      notes: r.notes,
+      transferStatus: r.transferStatus,
+    }));
+    exportToCsv({ filename: 'stock-movements.csv', headers, rows: rowsForCsv });
+    message.success(`Exported ${rowsForCsv.length} stock movements`);
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
@@ -626,8 +686,9 @@ export default function StockUpdate() {
             </>
           )}
           <Button onClick={()=>{ setQText(''); setQ(''); setActionFilter('all'); setBranchFilter('all'); }}>Reset</Button>
-        </div>
+      </div>
         <Space>
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button onClick={fetchList} loading={loadingList}>Refresh</Button>
           <Button
             type="primary"
@@ -635,6 +696,7 @@ export default function StockUpdate() {
               setAllowedActions(["add"]);
               setAction("add");
               setEditingMovementId(null);
+              setFormError("");
               // reset form except locked fields
               form.resetFields();
               if (lockSourceBranch && myBranch) {
@@ -746,7 +808,7 @@ export default function StockUpdate() {
       <Modal
         title={editingMovementId ? "Edit Stock Movement" : "New Stock Movement"}
         open={modalOpen}
-        onCancel={() => { setModalOpen(false); setAllowedActions(null); setAction("add"); setEditingMovementId(null); }}
+        onCancel={() => { setModalOpen(false); setAllowedActions(null); setAction("add"); setEditingMovementId(null); setFormError(""); }}
         onOk={onSubmit}
         okText="Save"
         confirmLoading={submitting}
@@ -754,6 +816,14 @@ export default function StockUpdate() {
         forceRender
         width={720}
       >
+        {formError && (
+          <Alert
+            type="error"
+            showIcon
+            message={formError}
+            style={{ marginBottom: 12 }}
+          />
+        )}
         <Form form={form} layout="vertical" initialValues={{}}>
           <Row gutter={[12, 8]}>
 
@@ -970,14 +1040,19 @@ export default function StockUpdate() {
                 Source_Branch: invoiceBaseRow?.sourceBranch || myBranch || '',
                 Notes: response?.bookingId ? `Book via Booking ID ${response.bookingId}` : 'Book via Booking form',
               };
-              await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'user' });
+              const stockResp = await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'user' });
+              if (!(stockResp?.success ?? stockResp?.ok)) {
+                message.error(stockResp?.message || 'Failed to update stock for this booking.');
+                return;
+              }
               message.success('Stock updated: vehicle marked booked / out of stock');
               setInvoiceModalOpen(false);
               setInvoicePrefill(null);
               setInvoiceBaseRow(null);
-              fetchList();
-            } catch {
-              message.error('Saved booking but failed to update stock. Please refresh and try again.');
+              await fetchList();
+            } catch (err) {
+              const apiMessage = err?.response?.data?.message || err?.message;
+              message.error(apiMessage ? `Saved booking but failed to update stock: ${apiMessage}` : 'Saved booking but failed to update stock. Please refresh and try again.');
             }
           }}
         />

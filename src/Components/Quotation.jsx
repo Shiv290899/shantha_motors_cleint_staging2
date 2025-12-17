@@ -24,13 +24,13 @@ const QUOT_GAS_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_GAS_
 // Vehicle catalog CSV (for auto Company/Model/Variant/On-Road Price)
 const CATALOG_CSV_URL =
   import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv";
 
 const HEADERS = {
   company: ["Company", "Company Name"],
   model: ["Model", "Model Name"],
   variant: ["Variant"],
-  price: ["On-Road Price", "On Road Price", "Price"],
+  price: ["On-Road Price", "On Road Price", "Price", "OnRoadPrice"],
 };
 
 // Minimal CSV parser (RFC4180-ish)

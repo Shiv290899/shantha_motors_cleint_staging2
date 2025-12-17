@@ -3,6 +3,7 @@ import { Table, Grid, Space, Button, Select, Input, Tag, DatePicker, message, Mo
 import { listCurrentStocks, createStock, updateStock } from "../apiCalls/stocks";
 import BookingForm from "./BookingForm";
 import { listBranches, listBranchesPublic } from "../apiCalls/branches";
+import { exportToCsv } from "../utils/csvExport";
 
 export default function InStockUpdate() {
   const screens = Grid.useBreakpoint();
@@ -42,7 +43,7 @@ export default function InStockUpdate() {
 
   // Vehicle catalog (for prefilled dropdowns in Edit)
   const CATALOG_CSV_URL = import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
-    "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv";
   const HEADERS = { company: ["Company","Company Name"], model: ["Model","Model Name"], variant: ["Variant"], color: ["Color","Colours"] };
   const pick = (row, keys) => String(keys.map((k)=> row[k] ?? "").find((v)=> v !== "") || "").trim();
   const normalizeCatalogRow = (row={}) => ({ company: pick(row, HEADERS.company), model: pick(row, HEADERS.model), variant: pick(row, HEADERS.variant), color: pick(row, HEADERS.color) });
@@ -344,6 +345,37 @@ export default function InStockUpdate() {
 
   const columns = isAdminOwner ? [...baseColumns, actionsColumn] : baseColumns;
 
+  const handleExportCsv = () => {
+    if (!filtered.length) {
+      message.info('No vehicles to export for current filters');
+      return;
+    }
+    const headers = [
+      { key: 'ts', label: 'Timestamp' },
+      { key: 'chassis', label: 'Chassis' },
+      { key: 'company', label: 'Company' },
+      { key: 'model', label: 'Model' },
+      { key: 'variant', label: 'Variant' },
+      { key: 'color', label: 'Color' },
+      { key: 'branch', label: 'Branch' },
+      { key: 'status', label: 'Status' },
+      { key: 'movementId', label: 'Movement Id' },
+    ];
+    const rowsForCsv = filtered.map((r) => ({
+      ts: r.ts,
+      chassis: r.chassis,
+      company: r.company,
+      model: r.model,
+      variant: r.variant,
+      color: r.color,
+      branch: r.branch,
+      status: r.status,
+      movementId: r.movementId || r.lastMovementId,
+    }));
+    exportToCsv({ filename: 'in-stock.csv', headers, rows: rowsForCsv });
+    message.success(`Exported ${rowsForCsv.length} vehicles`);
+  };
+
   return (
     <div>
      
@@ -400,6 +432,7 @@ export default function InStockUpdate() {
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button onClick={() => { setSelCompanies([]); setSelModels([]); setSelVariants([]); setSelColors([]); setDateRange([]); setQ(""); }}>Reset Filters</Button>
           <Button onClick={fetchData} loading={loading}>Refresh</Button>
         </Space>

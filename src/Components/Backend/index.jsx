@@ -8,9 +8,9 @@ import Jobcards from '../Jobcards'
 import Branches from '../Admin/Branches'
 import Announcements from '../Announcements'
 import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
-import AdminDailyCollections from '../AdminDailyCollections'
 import Users from '../Admin/Users'
 import VehicleSearch from '../VehicleSearch'
+import VehicleCatalogManager from '../VehicleCatalogManager'
 // Announcements tab/banner removed as requested
 
 // Owner dashboard: Analytics & Reports in tabs
@@ -40,13 +40,13 @@ export default function Backend() {
     { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },
     { key: 'vehiclesearch', label: 'Vehicle Search', children: <VehicleSearch /> },
+    { key: 'vehiclecatalog', label: 'Vehicle Catalog', children: <VehicleCatalogManager csvFallbackUrl={import.meta.env.VITE_VEHICLE_SHEET_CSV_URL || "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv"} /> },
     // 4) Stock Update, 5) In-Stock Update
    { key: 'stock', label: 'Stock Movements', children: <StockUpdate /> },
        { key: 'instock', label: 'Display Vehicles', children: <InStockUpdate /> },
     // 6) Branches, 7) Users, 8) Announcements
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
-    { key: 'collections', label: 'Daily Collections', children: <AdminDailyCollections /> },
     { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
     
   ]

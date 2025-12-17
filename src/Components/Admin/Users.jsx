@@ -2,6 +2,7 @@ import React from "react";
 import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Checkbox, Row, Col } from "antd";
 import { listUsers, listUsersPublic, updateUser, deleteUser } from "../../apiCalls/adminUsers";
 import { listBranchesPublic } from "../../apiCalls/branches";
+import { exportToCsv } from "../../utils/csvExport";
 
 const ROLE_OPTIONS = [
   { label: "Admin", value: "admin" },
@@ -40,7 +41,7 @@ export default function Users({ readOnly = false }) {
   const [pageSize, setPageSize] = React.useState(25);
 
   const fetchBranches = React.useCallback(async () => {
-    const res = await listBranchesPublic({ limit: 500 });
+    const res = await listBranchesPublic({ limit: 500, status: 'active' });
     if (res?.success) setBranches(res.data.items || []);
   }, []);
 
@@ -215,6 +216,44 @@ export default function Users({ readOnly = false }) {
     }] : []),
   ];
 
+  const handleExportCsv = () => {
+    if (!items.length) {
+      message.info('No users to export for current filters');
+      return;
+    }
+    const headers = [
+      { key: 'name', label: 'Name' },
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'role', label: 'Role' },
+      { key: 'status', label: 'Status' },
+      { key: 'jobTitle', label: 'Job Title' },
+      { key: 'employeeCode', label: 'Employee Code' },
+      { key: 'primaryBranch', label: 'Primary Branch' },
+      { key: 'branches', label: 'Additional Branches' },
+      { key: 'lastLoginAt', label: 'Last Login' },
+    ];
+    const rowsForCsv = items.map((u) => {
+      const branchNames = Array.isArray(u.branches)
+        ? u.branches.map((b) => (typeof b === 'string' ? b : (b?.name || b?.branchName || ''))).filter(Boolean).join('; ')
+        : '';
+      return {
+        name: u.name,
+        email: u.email,
+        phone: u.phone,
+        role: u.role,
+        status: u.status,
+        jobTitle: u.jobTitle,
+        employeeCode: u.employeeCode,
+        primaryBranch: (typeof u.primaryBranch === 'string' ? u.primaryBranch : u.primaryBranch?.name) || '',
+        branches: branchNames,
+        lastLoginAt: u.lastLoginAt,
+      };
+    });
+    exportToCsv({ filename: 'users.csv', headers, rows: rowsForCsv });
+    message.success(`Exported ${rowsForCsv.length} users`);
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -256,6 +295,7 @@ export default function Users({ readOnly = false }) {
             options={branches.map((b) => ({ label: b.name, value: b.id }))}
             style={{ width: 220 }}
           />
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button onClick={fetchList}>Refresh</Button>
           <Button onClick={() => { setQText(""); setQ(""); setRoleFilter(undefined); setStatusFilter(undefined); setBranchFilter(undefined); }}>Reset</Button>
         </div>

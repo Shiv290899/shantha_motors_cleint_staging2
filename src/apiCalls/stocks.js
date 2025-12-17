@@ -3,10 +3,10 @@ import { axiosInstance } from "./index";
 
 // Optional Google Apps Script endpoint for stocks.
 // Default to the backend proxy (absolute URL) so production builds don't call the Netlify origin.
-const backendBase = String(axiosInstance?.defaults?.baseURL || "").replace(/\/$/, "");
+
 const GAS_STOCKS_URL =
   import.meta.env.VITE_STOCKS_GAS_URL ||
-  (backendBase ? `${backendBase}/stocks/gas` : "/api/stocks/gas");
+  "https://script.google.com/macros/s/AKfycbzWT7aSLTZl-qW2peDaHMcsW_aA55ttVfheZThFfYpj7sMm09Mg_6Gp2xjc7Z0XNHmwpw/exec";
 const useGas = !!GAS_STOCKS_URL;
 
 const gasGet = async (params) => {
@@ -15,8 +15,18 @@ const gasGet = async (params) => {
 };
 
 const gasPost = async (payload) => {
-  const res = await axios.post(GAS_STOCKS_URL, payload, { validateStatus: () => true });
-  return res?.data || {};
+  try {
+    const res = await fetch(GAS_STOCKS_URL, {
+      method: "POST",
+      mode: "cors",
+      credentials: "omit",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload || {}),
+    });
+    try { return await res.json(); } catch { return {}; }
+  } catch {
+    return {};
+  }
 };
 
 // Fetch stock movements. Default to a high limit so admin can see all recent records.
@@ -102,6 +112,12 @@ export const listCurrentStocksPublic = async ({ branch, limit = 500, page = 1 } 
 
 // Pending transfers must hit the backend (GAS does not track transfer admits/rejects)
 export const listPendingTransfers = async ({ branch, limit = 500 } = {}) => {
+  if (useGas) {
+    const params = { action: "pending", limit };
+    if (branch) params.branch = branch;
+    const data = await gasGet(params);
+    return { success: !!data.ok, data: data.data || [], message: data.message };
+  }
   const params = {};
   if (branch) params.branch = branch;
   params.limit = limit;
@@ -118,7 +134,7 @@ export const createStock = async ({ data: row, createdBy }) => {
     return { success: !!data.ok, data: data.data, message: data.message };
   }
   const payload = { data: row, createdBy };
-  const { data } = await axiosInstance.post("/stocks", payload);
+  const { data } = await axiosInstance.post("/stocks", payload, { validateStatus: () => true });
   return data; // { success, data }
 };
 
@@ -128,7 +144,7 @@ export const updateStock = async (movementId, patch) => {
     const data = await gasPost(payload);
     return { success: !!data.ok, data: data.data, message: data.message };
   }
-  const { data } = await axiosInstance.patch(`/stocks/${movementId}`, { data: patch });
+  const { data } = await axiosInstance.patch(`/stocks/${movementId}`, { data: patch }, { validateStatus: () => true });
   return data; // { success, data }
 };
 

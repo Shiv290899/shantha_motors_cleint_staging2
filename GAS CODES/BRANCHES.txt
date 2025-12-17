@@ -1,0 +1,387 @@
+// Google Apps Script web app for Branch CRUD on Google Sheets
+// - Deploy as a web app with "Anyone with the link" access
+// - Configure SHEET_ID + optional API_KEY for auth
+
+const SHEET_ID = 'PUT_SPREADSHEET_ID_HERE'
+const SHEET_NAME = 'branches'
+const API_KEY = 'OPTIONAL_SECRET_KEY'
+
+const TYPE_OPTIONS = ['sales', 'service', 'sales & services']
+const STATUS_OPTIONS = ['active', 'inactive', 'under_maintenance']
+const HEADERS = [
+  'id',
+  'code',
+  'name',
+  'type',
+  'phone',
+  'email',
+  'address_line1',
+  'address_line2',
+  'area',
+  'city',
+  'state',
+  'pincode',
+  'location_lng',
+  'location_lat',
+  'manager',
+  'staff',
+  'boys',
+  'mechanics',
+  'status',
+  'openingHours',
+  'metadata',
+  'createdAt',
+  'updatedAt',
+]
+
+function doGet(e) {
+  return handleRequest('GET', e)
+}
+
+function doPost(e) {
+  return handleRequest('POST', e)
+}
+
+function doOptions() {
+  return respond({ success: true }, 204)
+}
+
+function handleRequest(method, e) {
+  try {
+    const body = parseBody(e)
+    if (!isAuthorized(e, body)) return respond({ success: false, message: 'Unauthorized' }, 401)
+    const action = (method === 'GET' ? e?.parameter?.action : body.action || e?.parameter?.action) || 'list'
+    switch (action) {
+      case 'get':
+        return handleGet(e?.parameter)
+      case 'bulkGet':
+        return handleBulkGet(e?.parameter)
+      case 'create':
+        return handleCreate(body.payload || body)
+      case 'update':
+        return handleUpdate(body.id || body.payload?.id, body.payload || body)
+      case 'delete':
+        return handleDelete(body.id || e?.parameter?.id)
+      case 'upsert':
+        return handleUpsert(body.payload || body)
+      case 'list':
+      default:
+        return handleList(e?.parameter)
+    }
+  } catch (err) {
+    return respond({ success: false, message: err && err.message ? err.message : 'Internal error' }, 500)
+  }
+}
+
+function isAuthorized(e, body) {
+  if (!API_KEY) return true
+  const headerKey = (e?.headers && (e.headers['x-api-key'] || e.headers['X-Api-Key'])) || ''
+  const paramKey = e?.parameter?.apiKey || e?.parameter?.key || ''
+  const bodyKey = body?.apiKey || ''
+  return API_KEY && (API_KEY === headerKey || API_KEY === paramKey || API_KEY === bodyKey)
+}
+
+function respond(payload, status) {
+  var out = ContentService.createTextOutput(JSON.stringify(payload || {}))
+  out.setMimeType(ContentService.MimeType.JSON)
+  // Apps Script's TextOutput does not support setHeader; web app CORS is managed by Apps Script.
+  // If you need strict CORS headers, wrap this in an HTML output with meta refresh or handle in client.
+  if (typeof out.setResponseCode === 'function') {
+    out.setResponseCode(status || 200)
+  }
+  return out
+}
+
+function parseBody(e) {
+  if (!e || !e.postData || !e.postData.contents) return {}
+  try {
+    return JSON.parse(e.postData.contents)
+  } catch (err) {
+    return {}
+  }
+}
+
+function sheet() {
+  const ss = SpreadsheetApp.openById(SHEET_ID)
+  const sh = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME)
+  const headerRow = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0]
+  if (headerRow.join('') !== HEADERS.join('')) {
+    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS])
+  }
+  return sh
+}
+
+function normalizeType(type) {
+  const norm = String(type || '').trim().toLowerCase()
+  const direct = TYPE_OPTIONS.find((t) => t.toLowerCase() === norm)
+  if (direct) return direct
+  const relaxed = TYPE_OPTIONS.find((t) => t.replace(/[^a-z]/g, '') === norm.replace(/[^a-z]/g, ''))
+  return relaxed || 'sales & services'
+}
+
+function normalizeStatus(status) {
+  const norm = String(status || '').trim().toLowerCase()
+  const direct = STATUS_OPTIONS.find((t) => t.toLowerCase() === norm)
+  return direct || 'active'
+}
+
+function parseArray(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      if (Array.isArray(parsed)) return parsed
+    } catch (err) {
+      // fall back to comma split
+    }
+    return value
+      .split(',')
+      .map(function (v) { return v.trim() })
+      .filter(function (v) { return v })
+  }
+  return []
+}
+
+function parseJson(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback
+  if (typeof value === 'object') return value
+  try {
+    return JSON.parse(value)
+  } catch (err) {
+    return fallback
+  }
+}
+
+function generateObjectId() {
+  return Utilities.getUuid().replace(/-/g, '').slice(0, 24)
+}
+
+function rowToBranch(row) {
+  var obj = {}
+  HEADERS.forEach(function (key, idx) {
+    obj[key] = row[idx]
+  })
+  var branch = {
+    id: String(obj.id || generateObjectId()),
+    code: String(obj.code || '').trim().toUpperCase(),
+    name: obj.name || '',
+    type: normalizeType(obj.type),
+    phone: obj.phone || '',
+    email: (obj.email || '').toLowerCase(),
+    address: {
+      line1: obj.address_line1 || '',
+      line2: obj.address_line2 || '',
+      area: obj.area || '',
+      city: obj.city || '',
+      state: obj.state || '',
+      pincode: obj.pincode || '',
+    },
+    location: (obj.location_lng || obj.location_lat)
+      ? { type: 'Point', coordinates: [Number(obj.location_lng) || 0, Number(obj.location_lat) || 0] }
+      : null,
+    manager: obj.manager || null,
+    staff: parseArray(obj.staff),
+    boys: parseArray(obj.boys),
+    mechanics: parseArray(obj.mechanics),
+    status: normalizeStatus(obj.status),
+    openingHours: parseJson(obj.openingHours, null),
+    metadata: parseJson(obj.metadata, null),
+    createdAt: obj.createdAt || new Date().toISOString(),
+    updatedAt: obj.updatedAt || obj.createdAt || new Date().toISOString(),
+  }
+  branch.activeStaffCount = branch.staff.length
+  branch.activeBoysCount = branch.boys.length
+  branch.activeMechanicsCount = branch.mechanics.length
+  branch.isSales = branch.type === 'sales' || branch.type === 'sales & services'
+  branch.isService = branch.type === 'service' || branch.type === 'sales & services'
+  return branch
+}
+
+function branchToRow(branch) {
+  return [
+    branch.id,
+    branch.code,
+    branch.name,
+    normalizeType(branch.type),
+    branch.phone || '',
+    branch.email || '',
+    branch.address && branch.address.line1 ? branch.address.line1 : '',
+    branch.address && branch.address.line2 ? branch.address.line2 : '',
+    branch.address && branch.address.area ? branch.address.area : '',
+    branch.address && branch.address.city ? branch.address.city : '',
+    branch.address && branch.address.state ? branch.address.state : '',
+    branch.address && branch.address.pincode ? branch.address.pincode : '',
+    branch.location && branch.location.coordinates ? branch.location.coordinates[0] : '',
+    branch.location && branch.location.coordinates ? branch.location.coordinates[1] : '',
+    branch.manager || '',
+    JSON.stringify(branch.staff || []),
+    JSON.stringify(branch.boys || []),
+    JSON.stringify(branch.mechanics || []),
+    normalizeStatus(branch.status),
+    branch.openingHours ? JSON.stringify(branch.openingHours) : '',
+    branch.metadata ? JSON.stringify(branch.metadata) : '',
+    branch.createdAt || new Date().toISOString(),
+    branch.updatedAt || new Date().toISOString(),
+  ]
+}
+
+function readAllBranches() {
+  var values = sheet().getDataRange().getValues()
+  var rows = values.slice(1) // drop header
+  return rows.map(rowToBranch)
+}
+
+function validateBranchPayload(payload, opts) {
+  var options = opts || {}
+  var existing = options.existing || {}
+  var address = payload.address || {}
+  var branch = {
+    id: String(payload.id || payload._id || existing.id || generateObjectId()),
+    code: String(payload.code || existing.code || '').trim().toUpperCase(),
+    name: String(payload.name || existing.name || '').trim(),
+    type: normalizeType(payload.type || existing.type),
+    phone: payload.phone || existing.phone || '',
+    email: (payload.email || existing.email || '').toLowerCase(),
+    address: {
+      line1: address.line1 || existing.address?.line1 || '',
+      line2: address.line2 || existing.address?.line2 || '',
+      area: address.area || existing.address?.area || '',
+      city: address.city || existing.address?.city || '',
+      state: address.state || existing.address?.state || '',
+      pincode: address.pincode || existing.address?.pincode || '',
+    },
+    location: payload.location
+      ? payload.location
+      : payload.lat != null && payload.lng != null
+        ? { type: 'Point', coordinates: [Number(payload.lng), Number(payload.lat)] }
+        : existing.location || null,
+    manager: payload.manager || payload.manager === null ? payload.manager : (existing.manager || null),
+    staff: payload.staff != null ? parseArray(payload.staff) : (existing.staff || []),
+    boys: payload.boys != null ? parseArray(payload.boys) : (existing.boys || []),
+    mechanics: payload.mechanics != null ? parseArray(payload.mechanics) : (existing.mechanics || []),
+    status: normalizeStatus(payload.status || existing.status),
+    openingHours: payload.hasOwnProperty('openingHours') ? parseJson(payload.openingHours, null) : (existing.openingHours || null),
+    metadata: payload.hasOwnProperty('metadata') ? parseJson(payload.metadata, null) : (existing.metadata || null),
+    createdAt: payload.createdAt || existing.createdAt || new Date().toISOString(),
+    updatedAt: payload.updatedAt || new Date().toISOString(),
+  }
+
+  if (!branch.code) throw new Error('code is required')
+  if (!branch.name) throw new Error('name is required')
+  if (!branch.address.city) throw new Error('address.city is required')
+
+  return branch
+}
+
+function handleList(params) {
+  var q = params && params.q ? String(params.q).toLowerCase() : ''
+  var city = params && params.city ? String(params.city).toLowerCase() : ''
+  var status = params && params.status ? String(params.status).toLowerCase() : ''
+  var type = params && params.type ? String(params.type).toLowerCase() : ''
+  var limit = params && params.limit ? parseInt(params.limit, 10) : 100
+  var page = params && params.page ? parseInt(params.page, 10) : 1
+  limit = isNaN(limit) ? 100 : limit
+  page = isNaN(page) ? 1 : page
+
+  var branches = readAllBranches()
+  var filtered = branches.filter(function (b) {
+    var matchesQ = true
+    if (q) {
+      var qrx = q
+      matchesQ =
+        (b.code && b.code.toLowerCase().indexOf(qrx) >= 0) ||
+        (b.name && b.name.toLowerCase().indexOf(qrx) >= 0) ||
+        (b.phone && String(b.phone).toLowerCase().indexOf(qrx) >= 0) ||
+        (b.email && b.email.toLowerCase().indexOf(qrx) >= 0) ||
+        (b.address.city && b.address.city.toLowerCase().indexOf(qrx) >= 0) ||
+        (b.address.area && b.address.area.toLowerCase().indexOf(qrx) >= 0)
+    }
+    var matchesCity = !city || (b.address.city && b.address.city.toLowerCase() === city)
+    var matchesStatus = !status || (b.status && b.status.toLowerCase() === status)
+    var matchesType = !type || (b.type && b.type.toLowerCase() === type)
+    return matchesQ && matchesCity && matchesStatus && matchesType
+  })
+
+  filtered.sort(function (a, b) {
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
+
+  var total = filtered.length
+  var start = Math.max((page - 1) * limit, 0)
+  var items = filtered.slice(start, start + limit)
+
+  return respond({ success: true, data: { items: items, total: total } })
+}
+
+function handleGet(params) {
+  var id = params && params.id ? String(params.id) : ''
+  var code = params && params.code ? String(params.code).toUpperCase() : ''
+  if (!id && !code) return respond({ success: false, message: 'id or code is required' }, 400)
+  var branches = readAllBranches()
+  var item = branches.find(function (b) { return (id && b.id === id) || (code && b.code === code) })
+  if (!item) return respond({ success: false, message: 'Branch not found' }, 404)
+  return respond({ success: true, data: item })
+}
+
+function handleBulkGet(params) {
+  var idsParam = params && params.ids ? params.ids : ''
+  if (!idsParam) return respond({ success: true, data: { items: [], total: 0 } })
+  var ids = idsParam.split(',').map(function (v) { return v.trim() }).filter(function (v) { return v })
+  var branches = readAllBranches()
+  var items = branches.filter(function (b) { return ids.indexOf(b.id) >= 0 })
+  return respond({ success: true, data: { items: items, total: items.length } })
+}
+
+function handleCreate(payload) {
+  var branch = validateBranchPayload(payload, {})
+  var branches = readAllBranches()
+  var duplicate = branches.find(function (b) { return b.code === branch.code || b.id === branch.id })
+  if (duplicate) return respond({ success: false, message: 'Branch already exists' }, 409)
+  sheet().appendRow(branchToRow(branch))
+  return respond({ success: true, data: branch })
+}
+
+function handleUpdate(id, payload) {
+  if (!id) return respond({ success: false, message: 'id is required' }, 400)
+  var sh = sheet()
+  var values = sh.getDataRange().getValues()
+  var idx = values.findIndex(function (row, i) { return i > 0 && String(row[0]) === String(id) })
+  if (idx < 0) return respond({ success: false, message: 'Branch not found' }, 404)
+  var existing = rowToBranch(values[idx])
+  var branch = validateBranchPayload(Object.assign({}, existing, payload, { id: id }), { existing: existing })
+  sh.getRange(idx + 1, 1, 1, HEADERS.length).setValues([branchToRow(branch)])
+  return respond({ success: true, data: branch })
+}
+
+function handleUpsert(payload) {
+  var sh = sheet()
+  var values = sh.getDataRange().getValues()
+  var targetId = String(payload.id || payload._id || '')
+  var targetCode = String(payload.code || '').trim().toUpperCase()
+  var matchIdx = values.findIndex(function (row, i) {
+    if (i === 0) return false
+    var rowId = String(row[0])
+    var rowCode = String(row[1]).toUpperCase()
+    return (targetId && rowId === targetId) || (targetCode && rowCode === targetCode)
+  })
+  if (matchIdx > 0) {
+    var existing = rowToBranch(values[matchIdx])
+    var merged = validateBranchPayload(Object.assign({}, existing, payload), { existing: existing })
+    sh.getRange(matchIdx + 1, 1, 1, HEADERS.length).setValues([branchToRow(merged)])
+    return respond({ success: true, data: merged })
+  }
+  var branch = validateBranchPayload(payload, {})
+  sh.appendRow(branchToRow(branch))
+  return respond({ success: true, data: branch })
+}
+
+function handleDelete(id) {
+  if (!id) return respond({ success: false, message: 'id is required' }, 400)
+  var sh = sheet()
+  var values = sh.getDataRange().getValues()
+  var idx = values.findIndex(function (row, i) { return i > 0 && String(row[0]) === String(id) })
+  if (idx < 0) return respond({ success: false, message: 'Branch not found' }, 404)
+  sh.deleteRow(idx + 1)
+  return respond({ success: true, message: 'Deleted' })
+}

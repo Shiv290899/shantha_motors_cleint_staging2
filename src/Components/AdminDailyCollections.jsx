@@ -3,6 +3,7 @@ import { Table, Space, Button, Select, message, Segmented, Grid, Modal, Form, In
 
 import { saveJobcardViaWebhook } from '../apiCalls/forms';
 import { listUsersPublic } from '../apiCalls/adminUsers';
+import { exportToCsv } from '../utils/csvExport';
 
 const { Text } = Typography;
 
@@ -377,6 +378,66 @@ export default function AdminDailyCollections() {
     }
   };
 
+  const handleExportCsv = () => {
+    const isSummary = viewMode === 'summary';
+    const headers = isSummary
+      ? [
+          { key: 'branch', label: 'Branch' },
+          { key: 'staff', label: 'Staff' },
+          { key: 'cash', label: cashLabel },
+          { key: 'online', label: onlineLabel },
+          { key: 'total', label: totalLabel },
+        ]
+      : [
+          { key: 'date', label: 'DateTime' },
+          { key: 'staff', label: 'Staff' },
+          { key: 'branch', label: 'Branch' },
+          { key: 'mode', label: 'Mode' },
+          { key: 'cashAmount', label: cashLabel },
+          { key: 'onlineAmount', label: onlineLabel },
+          { key: 'cashPending', label: 'Cash Pending' },
+          { key: 'onlinePending', label: 'Online Pending' },
+          { key: 'utr', label: 'UTR / Ref' },
+          { key: 'customer', label: 'Customer' },
+          { key: 'mobile', label: 'Mobile' },
+          { key: 'source', label: 'Source' },
+        ];
+    const source = isSummary ? staffAgg : ledgerRowsFiltered;
+    if (!source.length) {
+      message.info('No rows to export for current filters');
+      return;
+    }
+    const rowsForCsv = isSummary
+      ? staffAgg.map((r) => ({
+          branch: r.branch,
+          staff: r.staff,
+          cash: r.cash,
+          online: r.online,
+          total: r.total,
+        }))
+      : ledgerRowsFiltered.map((r) => {
+          const amounts = getDisplayAmounts(r);
+          const pending = deriveAmounts(r);
+          return {
+            date: fmtLocalShort(r.dateTimeIso || r.date),
+            staff: r.staff,
+            branch: r.branch,
+            mode: r.paymentMode,
+            cashAmount: amounts.cash,
+            onlineAmount: amounts.online,
+            cashPending: pending.cashPending,
+            onlinePending: pending.onlinePending,
+            utr: r.utr,
+            customer: r.customerName,
+            mobile: r.customerMobile,
+            source: `${String(r.sourceType || '').toUpperCase()} ${r.sourceId || ''}`.trim(),
+          };
+        });
+    const filename = isSummary ? 'daily-collections-summary.csv' : 'daily-collections-transactions.csv';
+    exportToCsv({ filename, headers, rows: rowsForCsv });
+    message.success(`Exported ${rowsForCsv.length} ${isSummary ? 'rows' : 'transactions'}`);
+  };
+
   return (
     <div>
       <Space style={{ marginBottom: 12, width:'100%', justifyContent:'space-between', flexWrap:'wrap' }}>
@@ -403,6 +464,7 @@ export default function AdminDailyCollections() {
           />
         </Space>
         <Space>
+          <Button onClick={handleExportCsv}>Export CSV</Button>
           <Button onClick={fetchLedger} loading={ledgerLoading}>Refresh</Button>
           <Button type='primary' ghost onClick={()=>setPrevDueOpen(true)}>Assign Previous Due</Button>
         </Space>

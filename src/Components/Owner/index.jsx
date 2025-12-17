@@ -13,6 +13,7 @@ import useAnnouncementBadge from '../../hooks/useAnnouncementBadge'
 import Users from '../Admin/Users'
 import AdminDailyCollections from '../AdminDailyCollections'
 import VehicleSearch from '../VehicleSearch'
+import VehicleCatalogManager from '../VehicleCatalogManager'
 
 // Announcements tab/banner removed as requested
 
@@ -71,6 +72,7 @@ export default function OwnerIndex() {
     { key: 'jobcards', label: 'Job Cards', children: <Jobcards /> },
     { key: 'bookings', label: 'Bookings', children: <Bookings /> },
     { key: 'vehiclesearch', label: 'Vehicle Search', children: <VehicleSearch /> },
+    
     // 4) Stock Update, 5) In-Stock Update
     { key: 'stock', label: 'Stock Movements', children: <StockUpdate /> },
     { key: 'instock', label: 'Display Vehicles', children: <InStockUpdate /> },
@@ -81,6 +83,7 @@ export default function OwnerIndex() {
     { key: 'branches', label: 'Branches', children: <Branches readOnly /> },
     { key: 'users', label: 'Users', children: <Users readOnly /> },
     { key: 'announcements', label: (<><style>{`@keyframes annPulse{0%{transform:scale(1);}60%{transform:scale(1.05);}100%{transform:scale(1);}}`}</style><span>Announcements<NewPill/></span></>), children: <Announcements /> },
+    { key: 'vehiclecatalog', label: 'Vehicle Catalog', children: <VehicleCatalogManager csvFallbackUrl={import.meta.env.VITE_VEHICLE_SHEET_CSV_URL || "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv"} /> },
     // 9) Analytics & Reports, 10) Branch-level Sales, 11) Multi-branch Compare, 12) Sales Performance
     /* { key: 'analytics', label: 'Analytics & Reports', children: <AnalyticsReports /> },
     { key: 'branch', label: 'Branch-level Sales', children: <BranchSales /> },

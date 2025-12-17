@@ -112,7 +112,8 @@ const phoneRule = [
 
 // CSV published from Google Sheets (same as in Quotation.jsx)
 const SHEET_CSV_URL =
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQsXcqX5kmqG1uKHuWUnBCjMXBugJn7xljgBsRPIm2gkk2PpyRnEp8koausqNflt6Q4Gnqjczva82oN/pub?output=csv";
+  import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv";
 
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
 const BOOKING_GAS_URL =
@@ -229,10 +230,12 @@ export default function BookingForm({
   // Payments-only update mode (after Fetch Details)
   const [paymentsOnlyMode, setPaymentsOnlyMode] = useState(Boolean(startPaymentsOnly));
   const [editRef, setEditRef] = useState(() => editRefDefault || ({ bookingId: null, mobile: null }));
+  const [hasFetchedBookingFlag, setHasFetchedBookingFlag] = useState(false);
   const [dynamicBranches, setDynamicBranches] = useState([]);
   const [dynamicExecutives, setDynamicExecutives] = useState([]);
   const [dynamicLoading, setDynamicLoading] = useState(false);
   const [chassisLocked, setChassisLocked] = useState(false);
+  const [activeBranchSet, setActiveBranchSet] = useState(null); // lower-case branch names
 
   // User context for auto-filling Executive and Branch
   const currentUser = useMemo(() => {
@@ -426,17 +429,23 @@ export default function BookingForm({
     setActionCooldownUntil(until);
     setTimeout(() => setActionCooldownUntil(0), ms + 50);
   };
+  const hasFetchedBooking = useMemo(
+    () => Boolean(hasFetchedBookingFlag || editRef?.bookingId || editRef?.mobile),
+    [hasFetchedBookingFlag, editRef]
+  );
 
   const handlePrint = async () => {
-    if (Date.now() < actionCooldownUntil) return;
-    startActionCooldown(6000);
+    // Only allow print after a booking has been fetched/applied
+    if (!hasFetchedBooking) {
+      message.warning("Save the booking, fetch it, then print.");
+      return;
+    }
     setPrinting(true);
     try {
-      // Ensure spinner paints before heavy work
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0)); // paint spinner
       await handleSmartPrint(printRef.current);
     } catch {
-      // ignore
+      // ignore; any render/print error would surface in console
     } finally {
       setPrinting(false);
     }
@@ -575,6 +584,36 @@ export default function BookingForm({
   const [stockItems, setStockItems] = useState([]);
   const [loadingStocks, setLoadingStocks] = useState(false);
 
+  // Keep an active branch whitelist for chassis/stock picks
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await listBranchesPublic({ status: "active", limit: 500 });
+        if (cancelled) return;
+        if (res?.success) {
+          const names = (res.data?.items || [])
+            .map((b) => String(b?.name || "").trim().toLowerCase())
+            .filter(Boolean);
+          setActiveBranchSet(new Set(names));
+        } else {
+          setActiveBranchSet(new Set());
+        }
+      } catch {
+        if (!cancelled) setActiveBranchSet(new Set());
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const isActiveStock = (item) => {
+    if (!activeBranchSet || activeBranchSet.size === 0) return true; // fallback if not loaded
+    const b = String(item?.branch || item?.sourceBranch || "").trim().toLowerCase();
+    if (!b) return false;
+    return activeBranchSet.has(b);
+  };
+
   const checkChassis = async (v) => {
     const q = String(v || "").trim().toUpperCase();
     if (q === "__ALLOT__") {
@@ -596,6 +635,11 @@ export default function BookingForm({
         (r) =>
           String(r.chassisNo || r.chassis || "").toUpperCase() === q
       );
+      if (found && !isActiveStock(found)) {
+        setChassisStatus("not_found");
+        setChassisInfo(null);
+        return;
+      }
       if (found) {
         setChassisStatus("found");
         setChassisInfo({
@@ -622,8 +666,7 @@ export default function BookingForm({
       checkChassis(chassisNo);
     }, 600);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chassisNo]);
+  }, [chassisNo, activeBranchSet]);
 
   // Keep affidavit charges zero when not in 'additional' mode
   useEffect(() => {
@@ -864,7 +907,8 @@ export default function BookingForm({
       try {
         const resp = await listCurrentStocksPublic({ limit: 2000 });
         const list = Array.isArray(resp?.data) ? resp.data : [];
-        if (!cancelled) setStockItems(list);
+        const filtered = list.filter((item) => isActiveStock(item));
+        if (!cancelled) setStockItems(filtered);
       } catch {
         if (!cancelled) setStockItems([]);
       } finally {
@@ -875,13 +919,20 @@ export default function BookingForm({
     return () => {
       cancelled = true;
     };
-  }, [selectedCompany, selectedModel, selectedVariant]);
+  }, [selectedCompany, selectedModel, selectedVariant, isActiveStock]);
+
+  // Refilter cached stock items when active branches load
+  useEffect(() => {
+    if (!activeBranchSet || activeBranchSet.size === 0) return;
+    setStockItems((prev) => prev.filter((item) => isActiveStock(item)));
+  }, [activeBranchSet, isActiveStock]);
 
   // Derive colors and chassis from stockItems based on selection
   const availableColors = useMemo(() => {
     const norm = (s) => String(s || "").trim().toLowerCase();
     const uniq = new Set();
     stockItems.forEach((s) => {
+      if (!isActiveStock(s)) return;
       if (
         norm(s.company) === norm(selectedCompany) &&
         norm(s.model) === norm(selectedModel) &&
@@ -898,6 +949,7 @@ export default function BookingForm({
     const norm = (s) => String(s || "").trim().toLowerCase();
     const out = [];
     stockItems.forEach((s) => {
+      if (!isActiveStock(s)) return;
       if (
         norm(s.company) === norm(selectedCompany) &&
         norm(s.model) === norm(selectedModel) &&
@@ -975,10 +1027,19 @@ export default function BookingForm({
       }
     });
 
-  const onFinish = async (values) => {
+  const onFinish = async (values, opts = {}) => {
+    const {
+      skipReset = false,
+      silent = false,
+      skipCooldown = false,
+      skipSubmittingState = false,
+      fromPrint = false,
+    } = opts;
     try {
-      if (Date.now() < actionCooldownUntil) return;
-      startActionCooldown(6000);
+      if (!skipCooldown) {
+        if (Date.now() < actionCooldownUntil) return;
+        startActionCooldown(6000);
+      }
 
       // In normal mode require a document; in payments-only mode allow optional
       if (!paymentsOnlyMode) {
@@ -988,7 +1049,7 @@ export default function BookingForm({
         }
       }
 
-      setSubmitting(true);
+      if (!skipSubmittingState) setSubmitting(true);
 
       // Upload selected file if present (optional in payments-only mode)
       let file = undefined;
@@ -1246,8 +1307,8 @@ export default function BookingForm({
         );
       }
 
-      message.success("Booking saved successfully");
-      if (typeof onSuccess === "function") {
+      if (!silent) message.success("Booking saved successfully");
+      if (!fromPrint && typeof onSuccess === "function") {
         try {
           onSuccess({ response: resp?.data || resp, payload });
         } catch {
@@ -1258,31 +1319,34 @@ export default function BookingForm({
       // File already sent in main payload; GAS appends appropriately on update
 
       // Reset form after confirmed success
-      form.resetFields();
-      writeJson(DRAFT_KEY, null);
-      form.setFieldsValue({
-        executive: executiveDefault || "",
-        branch: branchDefault || "",
-      });
-      // Exit payments-only mode after save
-      setPaymentsOnlyMode(false);
-      setEditRef({ bookingId: null, mobile: null });
-      setChassisLocked(false);
-      setAddressProofFiles([]);
-      setSelectedCompany("");
-      setSelectedModel("");
-      setChassisStatus("idle");
-      setChassisInfo(null);
-      setStockItems([]);
-      try {
-        window.dispatchEvent(new Event("reload-bookings"));
-      } catch {
-        // ignore
+      if (!skipReset) {
+        form.resetFields();
+        writeJson(DRAFT_KEY, null);
+        form.setFieldsValue({
+          executive: executiveDefault || "",
+          branch: branchDefault || "",
+        });
+        // Exit payments-only mode after save
+        setPaymentsOnlyMode(false);
+        setEditRef({ bookingId: null, mobile: null });
+        setChassisLocked(false);
+        setAddressProofFiles([]);
+        setSelectedCompany("");
+        setSelectedModel("");
+        setChassisStatus("idle");
+        setChassisInfo(null);
+        setStockItems([]);
+        try {
+          window.dispatchEvent(new Event("reload-bookings"));
+        } catch {
+          // ignore
+        }
       }
     } catch (e) {
       message.error(String(e?.message || e || "Submission failed"));
+      if (fromPrint) throw e;
     } finally {
-      setSubmitting(false);
+      if (!skipSubmittingState) setSubmitting(false);
     }
   };
 
@@ -2062,6 +2126,22 @@ export default function BookingForm({
               <Form.Item
                 label={`Amount ${idx} - Cash (₹)`}
                 name={`bookingAmount${idx}Cash`}
+                dependencies={idx === 1 ? [`bookingAmount${idx}Online`] : undefined}
+                rules={
+                  idx === 1
+                    ? [
+                        {
+                          validator: (_, value) => {
+                            const cash = Number(value || 0) || 0;
+                            const online = Number(form.getFieldValue(`bookingAmount${idx}Online`) || 0) || 0;
+                            return cash > 0 || online > 0
+                              ? Promise.resolve()
+                              : Promise.reject(new Error("Enter Amount 1 (cash or online)"));
+                          },
+                        },
+                      ]
+                    : []
+                }
               >
                 <InputNumber
                   size={ctlSize}
@@ -2156,17 +2236,25 @@ export default function BookingForm({
           >
             Save Booking
           </Button>
-          <Button
-            className="no-print"
-            icon={<PrinterOutlined />}
-            size={isMobile ? "middle" : "large"}
-            onClick={handlePrint}
-            disabled={actionCooldownUntil > Date.now() || printing}
-            loading={printing}
-          >
-            Print Booking Slip
-          </Button>
+          {hasFetchedBooking && (
+            <Button
+              className="no-print"
+              icon={<PrinterOutlined />}
+              size={isMobile ? "middle" : "large"}
+              onClick={handlePrint}
+              disabled={printing}
+              loading={printing}
+            >
+              Print Booking Slip
+            </Button>
+          )}
         </div>
+        {!hasFetchedBooking && (
+          <div style={{ marginTop: 6, color: "#b91c1c", fontSize: 12 }}>
+            Save first, then fetch booking to enable printing.
+            {" "}ಮುದ್ರಣಕ್ಕೆ ಮೊದಲಿಗೆ ಉಳಿಸಿ, ನಂತರ ಫೆಚ್ ಮಾಡಿ.
+          </div>
+        )}
       </Form.Item>
     </Form>
   );
@@ -2224,6 +2312,7 @@ export default function BookingForm({
                 onApplied={({ bookingId, mobile, vehicle }) => {
                   setPaymentsOnlyMode(true);
                   setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
+                  setHasFetchedBookingFlag(true);
                   const availability = String(vehicle?.availability || '').toLowerCase();
                   const chassisVal = vehicle?.chassisNo || form.getFieldValue('chassisNo');
                   const isAllot = availability === 'allot' || String(chassisVal || '') === '__ALLOT__';
