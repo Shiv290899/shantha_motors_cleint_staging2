@@ -1,5 +1,5 @@
 // BookingForm.jsx
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   Form,
   Input,
@@ -607,12 +607,17 @@ export default function BookingForm({
     return () => { cancelled = true; };
   }, []);
 
-  const isActiveStock = (item) => {
-    if (!activeBranchSet || activeBranchSet.size === 0) return true; // fallback if not loaded
-    const b = String(item?.branch || item?.sourceBranch || "").trim().toLowerCase();
-    if (!b) return false;
-    return activeBranchSet.has(b);
-  };
+  const isActiveStock = useCallback(
+    (item) => {
+      if (!activeBranchSet || activeBranchSet.size === 0) return true; // fallback if not loaded
+      const b = String(item?.branch || item?.sourceBranch || "")
+        .trim()
+        .toLowerCase();
+      if (!b) return false;
+      return activeBranchSet.has(b);
+    },
+    [activeBranchSet]
+  );
 
   const checkChassis = async (v) => {
     const q = String(v || "").trim().toUpperCase();
