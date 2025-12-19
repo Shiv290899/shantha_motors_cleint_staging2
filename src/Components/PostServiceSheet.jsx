@@ -34,7 +34,7 @@ const PostServiceSheet = forwardRef(function PostServiceSheet({ active, vals, to
   const kmVal = parseKm(vals?.km);
   const nextServiceKm = kmVal != null ? kmVal + 2000 : null;
   const branch = String(vals?.branch || "").trim();
-  const isNH = branch === "Byadarahalli"; // Switch branding for Byadarahalli
+  const isNH = branch.toLowerCase().includes("byadarahalli"); // Switch branding for Byadarahalli (tolerant casing/phrasing)
   const mobileDigits = useMemo(() => {
     const d = String(vals?.custMobile || "").replace(/\D/g, "").slice(-10);
     return d || "";
