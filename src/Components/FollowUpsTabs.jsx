@@ -1,0 +1,49 @@
+import React from 'react';
+import { Tabs } from 'antd';
+import { FileTextOutlined, ToolOutlined, CalendarOutlined } from '@ant-design/icons';
+import FollowUps from './FollowUps';
+
+export default function FollowUpsTabs() {
+  const tabLabel = (icon, text) => (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      {icon}
+      <span>{text}</span>
+    </span>
+  );
+
+  const DEFAULT_QUOT_URL =
+    'https://script.google.com/macros/s/AKfycbxXtfRVEFeaKu10ijzfQdOVlgkZWyH1q1t4zS3PHTX9rQQ7ztRJdpFV5svk98eUs3UXuw/exec';
+  const DEFAULT_JC_URL =
+    'https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec';
+  const QUOT_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
+  const JC_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
+  const DEFAULT_BOOKING_URL =
+    import.meta.env.VITE_BOOKING_GAS_URL || 'https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec';
+
+  const items = [
+    {
+      key: 'quotation',
+      label: tabLabel(<FileTextOutlined />, 'Quotation'),
+      children: <FollowUps mode="quotation" webhookUrl={QUOT_URL} />,
+    },
+    {
+      key: 'jobcard',
+      label: tabLabel(<ToolOutlined />, 'Job Card'),
+      children: <FollowUps mode="jobcard" webhookUrl={JC_URL} />,
+    },
+    {
+      key: 'booking',
+      label: tabLabel(<CalendarOutlined />, 'Booking'),
+      children: <FollowUps mode="booking" webhookUrl={DEFAULT_BOOKING_URL} />,
+    },
+    
+  ];
+
+  return (
+    <Tabs
+      defaultActiveKey="quotation"
+      items={items}
+      destroyInactiveTabPane
+    />
+  );
+}

@@ -1,0 +1,407 @@
+// Google Apps Script drop-in for Stock Movements + Current Snapshot
+// Mirrors the Node/Mongo logic in server/routes/stocksRoutes.js using two sheets:
+//   - StockMovements: immutable-ish movement log (one row per add/transfer/return/invoice)
+//   - StockSnapshot: one row per chassis capturing current branch/status
+//
+// Deploy as a Web App:
+//   - Publish → Deploy as web app → execute as Me → allow anyone with the link
+//   - doGet/doPost are action-driven (see ACTION SWITCHES below)
+//
+// Sheet schemas (headers must be on row 1):
+// StockMovements headers:
+//   movementId, timestamp, chassisNo, company, model, variant, color,
+//   action, sourceBranch, sourceBranchKey, targetBranch, targetBranchKey,
+//   returnTo, customerName, transferStatus, notes,
+//   createdByName, createdById, resolvedByName, resolvedById, resolvedAt,
+//   deleted
+//
+// StockSnapshot headers:
+//   chassisNo, company, model, variant, color,
+//   sourceBranch, sourceBranchKey, lastSourceBranch,
+//   status, lastMovementId, updatedAt
+
+const CONFIG = {
+  MOVEMENTS_SHEET: 'StockMovements',
+  SNAPSHOT_SHEET: 'StockSnapshot',
+  DEFAULT_LIMIT: 500,
+  // If this Apps Script is NOT bound to a spreadsheet, set this to your sheet ID.
+  // Example: '1AbC...xyz' from https://docs.google.com/spreadsheets/d/<ID>/edit
+  SPREADSHEET_ID: '',
+};
+
+const MOVEMENT_HEADERS = [
+  'movementId', 'timestamp', 'chassisNo', 'company', 'model', 'variant', 'color',
+  'action', 'sourceBranch', 'sourceBranchKey', 'targetBranch', 'targetBranchKey',
+  'returnTo', 'customerName', 'transferStatus', 'notes',
+  'createdByName', 'createdById', 'resolvedByName', 'resolvedById', 'resolvedAt',
+  'deleted',
+];
+
+const SNAPSHOT_HEADERS = [
+  'chassisNo', 'company', 'model', 'variant', 'color',
+  'sourceBranch', 'sourceBranchKey', 'lastSourceBranch',
+  'status', 'lastMovementId', 'updatedAt',
+];
+
+// ---- Entry points ----
+
+function doGet(e) {
+  // Make it safe when run from the editor (e can be undefined)
+  const params = e && e.parameter ? e.parameter : {};
+  const action = String(params.action || 'list').toLowerCase();
+
+  if (action === 'current') return respond(handleCurrent(params));
+  if (action === 'pending') return respond(handlePendingTransfers(params));
+  return respond(handleList(params));
+}
+
+function doPost(e) {
+  const body = parseBody(e);
+  const queryParams = e && e.parameter ? e.parameter : {};
+  const action = String(body.action || queryParams.action || 'create').toLowerCase();
+
+  if (action === 'create') return respond(handleCreate(body));
+  if (action === 'admit') return respond(handleAdmitReject(body, 'admitted'));
+  if (action === 'reject') return respond(handleAdmitReject(body, 'rejected'));
+  if (action === 'update') return respond(handleUpdate(body));
+  if (action === 'delete') return respond(handleDelete(body));
+  return respond({ ok: false, message: 'Unknown action' });
+}
+
+// ---- Core handlers ----
+
+function handleCreate(body) {
+  const now = new Date();
+  const from = body.data || body || {};
+  const movement = {
+    movementId: from.movementId || Utilities.getUuid(),
+    chassisNo: upper(from.Chassis_No || from.chassisNo || ''),
+    company: trim(from.Company || from.company),
+    model: trim(from.Model || from.model),
+    variant: trim(from.Variant || from.variant),
+    color: trim(from.Color || from.color),
+    action: (from.Action || from.action || 'transfer').toString().toLowerCase(),
+    sourceBranch: trim(from.Source_Branch || from.sourceBranch || ''),
+    targetBranch: trim(from.Target_Branch || from.targetBranch || ''),
+    returnTo: trim(from.Return_To || from.returnTo || ''),
+    customerName: trim(from.Customer_Name || from.customerName || ''),
+    transferStatus: 'completed',
+    notes: trim(from.Notes || from.notes || ''),
+    createdByName: trim(body.createdBy || from.createdByName || ''),
+    createdById: trim(from.createdById || ''),
+    resolvedByName: '',
+    resolvedById: '',
+    resolvedAt: '',
+    deleted: false,
+    timestamp: now.toISOString(),
+  };
+
+  if (!movement.chassisNo) return { ok: false, message: 'Chassis number is required' };
+
+  movement.sourceBranchKey = normalizeKey(movement.sourceBranch);
+  movement.targetBranchKey = normalizeKey(movement.targetBranch);
+
+  const movements = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS);
+  const snapshot = readTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS);
+  const currentSnap = snapshot.find((r) => upper(r.chassisNo) === movement.chassisNo && String(r.status || '').toLowerCase() === 'in_stock');
+
+  // Auto-convert ADD to TRANSFER if chassis already in another branch
+  if (movement.action === 'add' && currentSnap) {
+    if (currentSnap.sourceBranch && currentSnap.sourceBranch !== movement.sourceBranch) {
+      movement.action = 'transfer';
+      movement.targetBranch = movement.sourceBranch || movement.targetBranch || '';
+      movement.targetBranchKey = normalizeKey(movement.targetBranch);
+      movement.sourceBranch = currentSnap.sourceBranch;
+      movement.sourceBranchKey = normalizeKey(movement.sourceBranch);
+      movement.notes = movement.notes ? movement.notes + ' (auto: add→transfer)' : '(auto: add→transfer)';
+    } else {
+      return { ok: false, code: 409, message: 'Chassis already exists in this branch' };
+    }
+  }
+
+  if (movement.action === 'transfer') {
+    if (!movement.targetBranch) return { ok: false, message: 'Target branch is required for transfer' };
+    if (movement.sourceBranch && movement.sourceBranch === movement.targetBranch) {
+      return { ok: false, message: 'Source and target branch cannot be the same' };
+    }
+    movement.transferStatus = 'pending';
+    const pending = movements.find((m) =>
+      !truthy(m.deleted) &&
+      lower(m.action) === 'transfer' &&
+      lower(m.transferStatus) === 'pending' &&
+      upper(m.chassisNo) === movement.chassisNo
+    );
+    if (pending) return { ok: false, code: 409, message: 'A pending transfer already exists for this chassis' };
+  } else {
+    movement.transferStatus = 'completed';
+  }
+
+  movements.push(movement);
+  writeTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS, movements);
+  applyMovementToSnapshot(movement);
+  return { ok: true, data: movement };
+}
+
+function handleAdmitReject(body, nextStatus) {
+  const id = trim(body.movementId || body.id || '');
+  if (!id) return { ok: false, message: 'movementId is required' };
+  const movements = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS);
+  const idx = movements.findIndex((m) => m.movementId === id);
+  if (idx === -1) return { ok: false, message: 'Transfer not found' };
+  const mv = movements[idx];
+  if (lower(mv.action) !== 'transfer') return { ok: false, message: 'Not a transfer' };
+  if (lower(mv.transferStatus) !== 'pending') return { ok: false, message: 'Transfer already resolved' };
+  mv.transferStatus = nextStatus;
+  mv.resolvedAt = new Date().toISOString();
+  mv.resolvedByName = trim(body.resolvedByName || body.user || '');
+  mv.resolvedById = trim(body.resolvedById || '');
+  const note = trim(body.notes || body.reason || '');
+  if (note) mv.notes = mv.notes ? mv.notes + ' | ' + (nextStatus === 'admitted' ? 'Admit: ' : 'Reject: ') + note : (nextStatus === 'admitted' ? 'Admit: ' : 'Reject: ') + note;
+  movements[idx] = mv;
+  writeTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS, movements);
+  applyMovementToSnapshot(mv);
+  return { ok: true, data: mv };
+}
+
+function handleUpdate(body) {
+  const id = trim(body.movementId || body.id || '');
+  if (!id) return { ok: false, message: 'movementId is required' };
+  const movements = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS);
+  const idx = movements.findIndex((m) => m.movementId === id);
+  if (idx === -1) return { ok: false, message: 'Movement not found' };
+  const mv = movements[idx];
+  const patch = body.data || body.patch || body;
+  MOVEMENT_HEADERS.forEach((h) => {
+    if (patch[h] !== undefined) mv[h] = patch[h];
+  });
+  mv.sourceBranchKey = normalizeKey(mv.sourceBranch);
+  mv.targetBranchKey = normalizeKey(mv.targetBranch);
+  movements[idx] = mv;
+  writeTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS, movements);
+  recomputeSnapshotForChassis(mv.chassisNo, movements);
+  return { ok: true, data: mv };
+}
+
+function handleDelete(body) {
+  const id = trim(body.movementId || body.id || '');
+  if (!id) return { ok: false, message: 'movementId is required' };
+  const movements = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS);
+  const idx = movements.findIndex((m) => m.movementId === id);
+  if (idx === -1) return { ok: false, message: 'Movement not found' };
+  movements[idx].deleted = true;
+  writeTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS, movements);
+  recomputeSnapshotForChassis(movements[idx].chassisNo, movements);
+  return { ok: true };
+}
+
+function handleList(params) {
+  const branch = trim(params.branch || '');
+  const mode = lower(params.mode || 'any'); // source|target|any
+  const limit = clampInt(params.limit, CONFIG.DEFAULT_LIMIT);
+  const page = Math.max(parseInt(params.page || '1', 10), 1);
+  const skip = (page - 1) * limit;
+  const branchKey = normalizeKey(branch);
+  const rows = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS)
+    .filter((m) => !truthy(m.deleted))
+    .filter((m) => {
+      if (!branchKey) return true;
+      if (mode === 'source') return normalizeKey(m.sourceBranch) === branchKey;
+      if (mode === 'target') return normalizeKey(m.targetBranch) === branchKey;
+      return normalizeKey(m.sourceBranch) === branchKey || normalizeKey(m.targetBranch) === branchKey;
+    })
+    .sort((a, b) => toDate(b.timestamp) - toDate(a.timestamp));
+  const paged = rows.slice(skip, skip + limit);
+  return { ok: true, total: rows.length, count: paged.length, data: paged };
+}
+
+function handleCurrent(params) {
+  const branch = trim(params.branch || '');
+  const branchKey = normalizeKey(branch);
+  const limit = clampInt(params.limit, CONFIG.DEFAULT_LIMIT);
+  const page = Math.max(parseInt(params.page || '1', 10), 1);
+  const skip = (page - 1) * limit;
+  const rows = readTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS)
+    .filter((r) => lower(r.status) === 'in_stock')
+    .filter((r) => (!branchKey ? true : normalizeKey(r.sourceBranch) === branchKey))
+    .sort((a, b) => toDate(b.updatedAt) - toDate(a.updatedAt));
+  const paged = rows.slice(skip, skip + limit);
+  return { ok: true, total: rows.length, count: paged.length, data: paged };
+}
+
+function handlePendingTransfers(params) {
+  const branch = trim(params.branch || '');
+  const branchKey = normalizeKey(branch);
+  const limit = clampInt(params.limit, CONFIG.DEFAULT_LIMIT);
+  const rows = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS)
+    .filter((m) => !truthy(m.deleted))
+    .filter((m) => lower(m.action) === 'transfer' && lower(m.transferStatus) === 'pending')
+    .filter((m) => (!branchKey ? true : normalizeKey(m.targetBranch) === branchKey))
+    .sort((a, b) => toDate(a.timestamp) - toDate(b.timestamp))
+    .slice(0, limit);
+  return { ok: true, count: rows.length, data: rows };
+}
+
+// ---- Snapshot logic (mirrors applyMovementToStock + recompute) ----
+
+function applyMovementToSnapshot(movement) {
+  const snapshots = readTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS);
+  const idx = snapshots.findIndex((s) => upper(s.chassisNo) === upper(movement.chassisNo));
+  const act = lower(movement.action);
+  const transferStatus = lower(movement.transferStatus || 'completed');
+  const transferAdmitted = transferStatus === 'admitted' || transferStatus === 'completed';
+  const baseVehicle = {
+    company: movement.company || '',
+    model: movement.model || '',
+    variant: movement.variant || '',
+    color: movement.color || '',
+  };
+  let next = null;
+
+  if (act === 'add') {
+    next = {
+      ...baseVehicle,
+      sourceBranch: movement.sourceBranch || '',
+      sourceBranchKey: normalizeKey(movement.sourceBranch),
+      lastSourceBranch: '',
+      status: 'in_stock',
+      lastMovementId: movement.movementId,
+      updatedAt: new Date().toISOString(),
+    };
+  } else if (act === 'transfer') {
+    const prev = idx >= 0 ? snapshots[idx] : null;
+    const prevBranch = prev?.sourceBranch || movement.sourceBranch || '';
+    const stayBranch = movement.sourceBranch || prevBranch;
+    const nextBranch = transferAdmitted ? (movement.targetBranch || prevBranch || '') : stayBranch;
+    next = {
+      ...baseVehicle,
+      sourceBranch: nextBranch,
+      sourceBranchKey: normalizeKey(nextBranch),
+      lastSourceBranch: prevBranch,
+      status: 'in_stock',
+      lastMovementId: movement.movementId,
+      updatedAt: new Date().toISOString(),
+    };
+  } else if (act === 'return' || act === 'invoice') {
+    next = {
+      ...baseVehicle,
+      sourceBranch: '',
+      sourceBranchKey: '',
+      lastSourceBranch: movement.sourceBranch || '',
+      status: 'out',
+      lastMovementId: movement.movementId,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  if (!next) return;
+  if (idx >= 0) {
+    snapshots[idx] = { ...snapshots[idx], ...next, chassisNo: movement.chassisNo };
+  } else {
+    snapshots.push({ chassisNo: movement.chassisNo, ...next });
+  }
+  writeTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS, snapshots);
+}
+
+function recomputeSnapshotForChassis(chassisNo, movementsInput) {
+  const ch = upper(chassisNo);
+  const movements = movementsInput || readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS);
+  const latest = movements
+    .filter((m) => upper(m.chassisNo) === ch && !truthy(m.deleted))
+    .sort((a, b) => toDate(b.timestamp) - toDate(a.timestamp))[0];
+  const snapshots = readTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS);
+  const idx = snapshots.findIndex((s) => upper(s.chassisNo) === ch);
+  if (!latest) {
+    if (idx >= 0) {
+      snapshots.splice(idx, 1);
+      writeTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS, snapshots);
+    }
+    return;
+  }
+  applyMovementToSnapshot(latest);
+}
+
+// ---- Sheet helpers ----
+
+function parseBody(e) {
+  if (!e || !e.postData || !e.postData.contents) return {};
+  try { return JSON.parse(e.postData.contents); } catch (err) { return {}; }
+}
+
+function respond(obj) {
+  // TextOutput cannot set headers in Apps Script Web Apps; we rely on Web App CORS settings.
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSpreadsheet() {
+  if (CONFIG.SPREADSHEET_ID) {
+    return SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('No active spreadsheet. Set CONFIG.SPREADSHEET_ID.');
+  return ss;
+}
+
+function getSheet(name) {
+  const ss = getSpreadsheet();
+  let sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+  }
+  return sh;
+}
+
+function ensureHeaders(sheet, headers) {
+  const range = sheet.getRange(1, 1, 1, headers.length);
+  const current = range.getValues()[0];
+  let changed = false;
+  headers.forEach((h, i) => {
+    if (current[i] !== h) {
+      current[i] = h;
+      changed = true;
+    }
+  });
+  if (changed) range.setValues([current]);
+}
+
+function readTable(sheetName, headers) {
+  const sh = getSheet(sheetName);
+  ensureHeaders(sh, headers);
+  const values = sh.getDataRange().getValues();
+  if (values.length <= 1) return [];
+  const head = values[0];
+  return values.slice(1).map((row) => {
+    const obj = {};
+    head.forEach((h, i) => { obj[h] = row[i]; });
+    return obj;
+  });
+}
+
+function writeTable(sheetName, headers, rows) {
+  const sh = getSheet(sheetName);
+  sh.clearContents();
+  ensureHeaders(sh, headers);
+  if (!rows || !rows.length) return;
+  const data = rows.map((row) => headers.map((h) => row[h] === undefined ? '' : row[h]));
+  sh.getRange(2, 1, data.length, headers.length).setValues(data);
+}
+
+// ---- Utils ----
+
+function normalizeKey(s) {
+  return String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+}
+
+function upper(s) { return String(s || '').trim().toUpperCase(); }
+function lower(s) { return String(s || '').trim().toLowerCase(); }
+function trim(s) { return String(s || '').trim(); }
+function truthy(v) { return String(v).toLowerCase() === 'true' || v === true; }
+function clampInt(v, max) {
+  const n = parseInt(v || CONFIG.DEFAULT_LIMIT, 10);
+  if (!Number.isFinite(n) || n <= 0) return CONFIG.DEFAULT_LIMIT;
+  return Math.min(n, max || CONFIG.DEFAULT_LIMIT);
+}
+function toDate(v) {
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? new Date(0) : d;
+}

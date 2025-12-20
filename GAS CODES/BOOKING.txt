@@ -1,0 +1,1506 @@
+function doPost(e) {
+  try {
+    const ct = (e && e.postData && e.postData.type) || '';
+    const params = (e && e.parameter) || {};
+
+    // Multipart upload (FormData)
+    if (/multipart\/form-data/i.test(ct)) {
+      if (WRITE_SECRET && params.secret !== WRITE_SECRET) {
+        return json_({ ok: false, error: 'unauthorized' });
+      }
+      const action = String(params.action || '').toLowerCase();
+      if (action === 'upload') {
+        return json_(uploadFile_(e));
+      }
+      return json_({ ok: false, error: 'bad_multipart_action' });
+    }
+
+    // JSON body
+    const raw = (e && e.postData && e.postData.contents) || '{}';
+    const body = parseJson_(raw, {});
+    if (WRITE_SECRET && body.secret !== WRITE_SECRET) {
+      return json_({ success: false, error: 'unauthorized' });
+    }
+
+    let act = String(body.action || '').toLowerCase();
+
+    // Defaulting: only force update if bookingId or editMobile present.
+    // Else if it looks like a create (customer + vehicle), create.
+    if (!act) {
+      if (body.bookingId || body.editMobile) {
+        act = 'update';
+      } else if (looksLikeCreate_(body)) {
+        act = 'create';
+      }
+    }
+
+    if (act === 'upload_base64') {
+      return json_(uploadBase64_(body));
+    }
+
+    if (act === 'update') {
+      // Route dashboard “patch” updates (Actions on Bookings page)
+      if (body.patch && (body.bookingId || body.mobile || body.editMobile)) {
+        const bookingId = String(body.bookingId || '').trim();
+        const mobile = String(body.mobile || body.editMobile || '').replace(/\D/g, '').slice(-10);
+        return json_(updateBooking_(bookingId, body.patch || {}, mobile));
+      }
+      // Otherwise treat as full-body update (payments, fields, optional file)
+      return json_(updateExistingByBody_(body));
+    }
+
+    if (act === 'remark') {
+      const bookingId = String(body.bookingId || '').trim();
+      const level = String(body.level || '').toLowerCase(); // ok|warning|alert
+      const text = String(body.text || '').trim();
+      const by = String(body.by || '').trim();
+      return json_(updateRemark_(bookingId, level, text, by));
+    }
+
+    if (act === 'attach') {
+      const bookingId = String(body.bookingId || '').trim();
+      const mobile = String(body.mobile || '').replace(/\D/g, '').slice(-10);
+      const file = {
+        name: body.name || '',
+        url: body.url || '',
+        fileId: body.fileId || ''
+      };
+      const type = String(body.type || '');
+      const append = false; // Force replacement; do not accumulate comma-separated links
+      const ts = new Date().toISOString();
+      return json_(attachDocument_(bookingId, mobile, file, type, append, ts));
+    }
+
+    if (act === 'create' || looksLikeCreate_(body)) {
+      return json_(createOrUpdateBooking_(body));
+    }
+
+    return json_({ success: false, error: 'invalid_action_or_payload' });
+  } catch (err) {
+    return json_({ success: false, error: String(err) });
+  }
+}
+
+function doGet(e) {
+  try {
+    const p = (e && e.parameter) || {};
+    if (READ_SECRET && p.secret !== READ_SECRET) return json_({ ok: false, error: 'unauthorized' });
+    const action = String(p.action || 'list').toLowerCase();
+
+    if (action === 'search') {
+      const mode = String(p.mode || '').toLowerCase(); // booking|mobile
+      const query = String(p.query || '').trim();
+      return json_(searchBookings_(mode, query));
+    }
+
+    if (action === 'check_duplicate') {
+      const mobile = String(p.mobile || '').replace(/\D/g, '').slice(-10);
+      const bookingId = String(p.bookingId || '').trim();
+      return json_(checkDuplicate_(mobile, bookingId));
+    }
+
+    return json_(listBookings_(p));
+  } catch (err) {
+    return json_({ ok: false, error: String(err) });
+  }
+}
+
+// ===================== CONFIG / HEADERS =====================
+
+const SHEET_NAME = 'Sheet1';
+const SPREADSHEET_ID = ''; // leave '' if bound to spreadsheet
+const DRIVE_FOLDER_ID = '1VMnnv-2zYwX4j3k4JSC_Qc6Il7xYaRsT';
+
+const READ_SECRET = '';  // optional
+const WRITE_SECRET = ''; // optional
+
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // <= 5 MB
+const ALLOWED_MIME = 'application/pdf';
+
+const HEADERS = [
+  'Booking ID', 'Submitted At', 'Branch', 'Executive', 'Customer Name', 'Mobile Number',
+  'Company', 'Model', 'Variant', 'Color', 'Chassis Number',
+  'Chassis Availability', 'Availability Branch',
+  'Purchase Mode', 'Financier', 'RTO Office', 'Address',
+  'Address Proof Mode', 'Address Proof Types', 'Booking Amount',
+  'File Name', 'File URL', 'File Type', 'File Size',
+  'Status', 'Notes',
+  'Invoice Status', 'Invoice File URL',
+  'Insurance Status', 'Insurance File URL',
+  'RTO Status', 'Vehicle No',
+  'RemarkLevel', 'RemarkText',
+  'Raw Payload'
+];
+
+// 🔴 Master DailyCollections spreadsheet (one for all modules)
+const DC_MASTER_SPREADSHEET_ID = '1oYOaFhEr7PgdF0BDC5A4V2zfPPoFtnhbxcP16jMqiGs';
+
+// ===================== CREATE / UPDATE =====================
+
+function looksLikeCreate_(data) {
+  const hasCustomer = !!(data.customerName || data.name);
+  const hasMobile = !!String(data.mobileNumber || data.mobile || '').replace(/\D/g, '').slice(-10);
+  const v = data.vehicle || {};
+  const hasVehicle = !!(data.company || data.model || data.variant || v.company || v.model || v.variant);
+  return (hasCustomer || hasMobile) && hasVehicle;
+}
+
+function createOrUpdateBooking_(data) {
+  const mobile = String(data.mobileNumber || data.mobile || '').replace(/\D/g, '').slice(-10);
+  const bookingId = String(data.bookingId || '').trim();
+  const existingRow = findExistingBooking_(mobile, bookingId);
+  if (existingRow.found) return updateExistingBooking_(existingRow, data);
+  return createNewBooking_(data);
+}
+
+function updateExistingByBody_(data) {
+  const mobile = String(data.editMobile || data.mobileNumber || data.mobile || '').replace(/\D/g, '').slice(-10);
+  const bookingId = String(data.bookingId || '').trim();
+  const existing = findExistingBooking_(mobile, bookingId);
+  if (!existing.found) return { success: false, error: 'not_found' };
+  return updateExistingBooking_(existing, data);
+}
+
+function findExistingBooking_(mobile, bookingId) {
+  const sh = getSheet_();
+  const headers = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  const last = sh.getLastRow();
+  if (last < 2) return { found: false, rowIndex: -1, rowData: null };
+
+  const idCol = headers.indexOf('Booking ID') + 1;
+  const mobileCol = headers.indexOf('Mobile Number') + 1;
+  const range = sh.getRange(2, 1, last - 1, HEADERS.length).getValues();
+
+  if (bookingId && idCol > 0) {
+    for (let i = 0; i < range.length; i++) {
+      if (String(range[i][idCol - 1]) === bookingId) {
+        return { found: true, rowIndex: i + 2, rowData: range[i], matchType: 'bookingId' };
+      }
+    }
+  }
+
+  if (mobile && mobileCol > 0) {
+    for (let i = range.length - 1; i >= 0; i--) {
+      const cellMobile = String(range[i][mobileCol - 1] || '').replace(/\D/g, '').slice(-10);
+      if (cellMobile && cellMobile === mobile) {
+        return { found: true, rowIndex: i + 2, rowData: range[i], matchType: 'mobile' };
+      }
+    }
+  }
+
+  return { found: false, rowIndex: -1, rowData: null };
+}
+
+function updateExistingBooking_(existing, data) {
+  const sh = getSheet_();
+  const headers = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+
+  const cells = headers.map((_, i) => existing.rowData[i] || '');
+
+  const v = data.vehicle || {};
+  const company = data.company || v.company || '';
+  const model = data.model || data.bikeModel || v.model || '';
+  const variant = data.variant || v.variant || '';
+  const color = data.color || v.color || '';
+  const chassisNo = data.chassisNo || v.chassisNo || '';
+  const availability = String(data.availability || v.availability || '');
+  const availabilityBranch = (v && v.availabilityInfo && v.availabilityInfo.branch) ? v.availabilityInfo.branch : '';
+
+  const branch = data.branch || '';
+  const executive = data.executive || '';
+  const customerName = data.customerName || data.name || '';
+  const mobileNumber = data.mobileNumber || data.mobile || '';
+  const rtoOffice = data.rtoOffice || '';
+  const purchaseMode = data.purchaseMode || data.purchaseType || '';
+  const financier = data.financier || data.nohpFinancier || '';
+  const address = data.address || '';
+  const addressProofMode = data.addressProofMode || data.addressProof || '';
+  const addressProofTypes = Array.isArray(data.addressProofTypes) ? data.addressProofTypes.join(', ') : (data.addressProofTypes || '');
+
+  // Booking Amount from payments[] if not provided
+  var payments = Array.isArray(data.payments) ? data.payments : [];
+  var bookingAmount = data.bookingAmount || '';
+  if ((!bookingAmount || String(bookingAmount).trim() === '') && payments.length) {
+    try {
+      var sum = 0;
+      for (var i = 0; i < payments.length; i++) {
+        var a = Number(payments[i] && payments[i].amount ? payments[i].amount : 0) || 0;
+        sum += a;
+      }
+      bookingAmount = String(sum);
+    } catch (e) { /* ignore */ }
+  }
+
+  // Merge Raw Payload (strip base64, cap big strings)
+  let payload = {};
+  try { payload = JSON.parse(String(cells[idx(headers, 'Raw Payload')] || '{}')); } catch (e) { payload = {}; }
+  payload.branch = branch || payload.branch || '';
+  payload.executive = executive || payload.executive || '';
+  payload.customerName = customerName || payload.customerName || '';
+  payload.mobileNumber = mobileNumber || payload.mobileNumber || '';
+  payload.vehicle = payload.vehicle || {};
+  payload.vehicle.company = company || payload.vehicle.company || '';
+  payload.vehicle.model = model || payload.vehicle.model || '';
+  payload.vehicle.variant = variant || payload.vehicle.variant || '';
+  payload.vehicle.color = color || payload.vehicle.color || '';
+  payload.vehicle.chassisNo = chassisNo || payload.vehicle.chassisNo || '';
+  if (addressProofMode) payload.addressProofMode = addressProofMode;
+  if (Array.isArray(data.addressProofTypes)) payload.addressProofTypes = data.addressProofTypes;
+  if (payments && payments.length) payload.payments = payments;
+  if (bookingAmount) payload.bookingAmount = bookingAmount;
+
+  // Optional file replace (ALWAYS keep only latest link)
+  const incomingFile =
+    data.file ||
+    (Array.isArray(data.files) && data.files[0]) ||
+    (Array.isArray(data.addressProofFiles) && data.addressProofFiles[0]) ||
+    null;
+
+  const savedFile = saveOneFileToDrive_(incomingFile);
+  collapseAttachment_(payload, cells, headers, savedFile && savedFile.url ? {
+    name: savedFile.name,
+    url: savedFile.url,
+    fileId: '',
+    type: savedFile.type,
+    size: savedFile.size,
+    ts: new Date().toISOString()
+  } : null);
+
+  // Update columns (only if provided)
+  cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
+  if (branch) cells[idx(headers, 'Branch')] = branch;
+  if (executive) cells[idx(headers, 'Executive')] = executive;
+  if (customerName) cells[idx(headers, 'Customer Name')] = customerName;
+  if (mobileNumber) cells[idx(headers, 'Mobile Number')] = mobileNumber;
+
+  if (company) cells[idx(headers, 'Company')] = company;
+  if (model) cells[idx(headers, 'Model')] = model;
+  if (variant) cells[idx(headers, 'Variant')] = variant;
+  if (color) cells[idx(headers, 'Color')] = color;
+  if (chassisNo) cells[idx(headers, 'Chassis Number')] = chassisNo;
+
+  if (availability) cells[idx(headers, 'Chassis Availability')] = availability;
+  if (availabilityBranch) cells[idx(headers, 'Availability Branch')] = availabilityBranch;
+
+  if (purchaseMode) cells[idx(headers, 'Purchase Mode')] = purchaseMode;
+  if (financier) cells[idx(headers, 'Financier')] = financier;
+  if (rtoOffice) cells[idx(headers, 'RTO Office')] = rtoOffice;
+  if (address) cells[idx(headers, 'Address')] = address;
+
+  if (addressProofMode) cells[idx(headers, 'Address Proof Mode')] = addressProofMode;
+  if (addressProofTypes) cells[idx(headers, 'Address Proof Types')] = addressProofTypes;
+  if (bookingAmount) cells[idx(headers, 'Booking Amount')] = bookingAmount;
+
+  // Actions (optional)
+  if (data.status != null) cells[idx(headers, 'Status')] = String(data.status);
+  if (data.notes != null) cells[idx(headers, 'Notes')] = String(data.notes);
+  if (data.invoiceStatus != null) cells[idx(headers, 'Invoice Status')] = String(data.invoiceStatus);
+  if (data.invoiceFileUrl != null) cells[idx(headers, 'Invoice File URL')] = String(data.invoiceFileUrl);
+  if (data.insuranceStatus != null) cells[idx(headers, 'Insurance Status')] = String(data.insuranceStatus);
+  if (data.insuranceFileUrl != null) cells[idx(headers, 'Insurance File URL')] = String(data.insuranceFileUrl);
+  if (data.rtoStatus != null) cells[idx(headers, 'RTO Status')] = String(data.rtoStatus);
+  const vehNo = data.vehicleNo || data.regNo;
+  if (vehNo != null) cells[idx(headers, 'Vehicle No')] = String(vehNo);
+
+  // Sanitize Raw Payload
+  try {
+    if (payload && payload.file && payload.file.base64) delete payload.file.base64;
+    if (payload && typeof payload.rawPayload === 'string' && payload.rawPayload.length > 20000) {
+      payload.rawPayload = payload.rawPayload.slice(0, 20000) + '…';
+    }
+  } catch (e) {}
+
+  const rawStr = JSON.stringify(payload || {});
+  cells[idx(headers, 'Raw Payload')] = rawStr.length > 45000
+    ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, payments: (payload.payments || []).slice(0, 5), note: 'payload truncated' })
+    : rawStr;
+
+  sh.getRange(existing.rowIndex, 1, 1, HEADERS.length).setValues([cells]);
+
+  const id = String(cells[idx(headers, 'Booking ID')] || '');
+
+  // Update DailyCollections with ONLY the additional amount added on edit
+  // (First create is already handled in createNewBooking_)
+  try {
+    // Previous snapshot from existing row (before we overwrote it)
+    var prevPayload = {};
+    var rawIdx0 = headers.indexOf('Raw Payload');
+    try { prevPayload = JSON.parse(String(rawIdx0 >= 0 ? (existing.rowData[rawIdx0] || '{}') : '{}')); } catch (_) { prevPayload = {}; }
+
+    var toNum = function(x){ var n = Number(x || 0); return isNaN(n) ? 0 : n; };
+    var prevBookIdx = headers.indexOf('Booking Amount');
+    var prevSum = toNum(prevPayload && prevPayload.bookingAmount);
+    if (!(prevSum > 0)) prevSum = toNum(prevBookIdx >= 0 ? existing.rowData[prevBookIdx] : 0);
+
+    var prevPays = Array.isArray(prevPayload && prevPayload.payments) ? prevPayload.payments : [];
+    var prevCash = prevPays.filter(function(p){ return String(p && p.mode || '').toLowerCase() === 'cash'; })
+      .reduce(function(s,p){ return s + toNum(p && p.amount); }, 0);
+    var prevOnline = prevPays.filter(function(p){ return String(p && p.mode || '').toLowerCase() === 'online'; })
+      .reduce(function(s,p){ return s + toNum(p && p.amount); }, 0);
+
+    var newSum = toNum(bookingAmount);
+    var newCashTotal = toNum(data && data.cashCollected);
+    var newOnlineTotal = toNum(data && data.onlineCollected);
+    if (!(newCashTotal > 0) && !(newOnlineTotal > 0)) {
+      newCashTotal = payments
+        .filter(function(p){ return String(p && p.mode || '').toLowerCase() === 'cash'; })
+        .reduce(function(s,p){ return s + toNum(p && p.amount); }, 0);
+      newOnlineTotal = payments
+        .filter(function(p){ return String(p && p.mode || '').toLowerCase() === 'online'; })
+        .reduce(function(s,p){ return s + toNum(p && p.amount); }, 0);
+    }
+
+    var delta = newSum - prevSum;
+    if (delta > 0) {
+      var deltaCash = Math.max(0, newCashTotal - prevCash);
+      var deltaOnline = Math.max(0, newOnlineTotal - prevOnline);
+      if (!(deltaCash + deltaOnline > 0)) {
+        if (newCashTotal > 0 && newOnlineTotal <= 0) deltaCash = delta;
+        else if (newOnlineTotal > 0 && newCashTotal <= 0) deltaOnline = delta;
+        else if (newCashTotal > 0 && newOnlineTotal > 0) {
+          var tot = newCashTotal + newOnlineTotal;
+          deltaCash = Math.round(delta * (newCashTotal / tot));
+          deltaOnline = delta - deltaCash;
+        } else {
+          deltaCash = delta; // default fallback
+        }
+      }
+
+      var bIdx = headers.indexOf('Branch');
+      var eIdx = headers.indexOf('Executive');
+      var branchUse = String(branch || (bIdx >= 0 ? cells[bIdx] : '') || '').trim();
+      var execUse = String(executive || (eIdx >= 0 ? cells[eIdx] : '') || '').trim();
+      if (branchUse && execUse) {
+        var custIdx = headers.indexOf('Customer Name');
+        var mobIdx = headers.indexOf('Mobile Number');
+        var customerNameUse = String(customerName || (custIdx >= 0 ? cells[custIdx] : '') || payload.customerName || payload.name || '').trim();
+        var customerMobileUse = String(mobileNumber || (mobIdx >= 0 ? cells[mobIdx] : '') || payload.mobileNumber || payload.mobile || '')
+          .replace(/\D/g, '')
+          .slice(-10);
+        var paymentModeUse = String(data.paymentMode || data.purchaseMode || payload.paymentMode || '').toLowerCase();
+        var ledgerCtx = {
+          sourceType: 'booking',
+          sourceId: id || '',
+          bookingId: id || '',
+          customerName: customerNameUse,
+          customerMobile: customerMobileUse,
+          paymentMode: paymentModeUse,
+          payments: payments,
+          deltaAmount: delta,
+          deltaCash: deltaCash,
+          deltaOnline: deltaOnline
+        };
+        updateDailyCollection_(branchUse, execUse, delta, 'booking', {
+          cashCollected: deltaCash,
+          onlineCollected: deltaOnline,
+          staffLedgerContext: ledgerCtx,
+        });
+      }
+    }
+  } catch (_) { /* ignore DC errors on update */ }
+
+  return { success: true, bookingId: id, action: 'updated' };
+}
+
+function createNewBooking_(data) {
+  const v = data.vehicle || {};
+  const company = data.company || v.company || '';
+  const model = data.model || data.bikeModel || v.model || '';
+  const variant = data.variant || v.variant || '';
+  const color = data.color || v.color || '';
+  const chassisNo = data.chassisNo || v.chassisNo || '';
+  const availability = String(data.availability || v.availability || '');
+  const availabilityBranch = (v && v.availabilityInfo && v.availabilityInfo.branch) ? v.availabilityInfo.branch : '';
+
+  const branch = data.branch || '';
+  const executive = data.executive || '';
+  const customerName = data.customerName || data.name || '';
+  const mobileNumber = data.mobileNumber || data.mobile || '';
+  const rtoOffice = data.rtoOffice || '';
+  const purchaseMode = data.purchaseMode || data.purchaseType || '';
+  const financier = data.financier || data.nohpFinancier || '';
+  const address = data.address || '';
+  const addressProofMode = data.addressProofMode || data.addressProof || '';
+  const addressProofTypes = Array.isArray(data.addressProofTypes) ? data.addressProofTypes.join(', ') : (data.addressProofTypes || '');
+  let bookingAmount = data.bookingAmount || '';
+
+  const payments = Array.isArray(data.payments) ? data.payments : [];
+  if ((!bookingAmount || String(bookingAmount).trim() === '') && payments.length) {
+    try {
+      let sum = 0;
+      for (let i = 0; i < payments.length; i++) {
+        const a = Number(payments[i] && payments[i].amount ? payments[i].amount : 0) || 0;
+        sum += a;
+      }
+      bookingAmount = String(sum);
+    } catch (e) {}
+  }
+  const bookingAmountNum = Number(bookingAmount || 0) || 0;
+
+  const incomingFile =
+    data.file ||
+    (Array.isArray(data.files) && data.files[0]) ||
+    (Array.isArray(data.addressProofFiles) && data.addressProofFiles[0]) ||
+    null;
+
+  const savedFile = saveOneFileToDrive_(incomingFile);
+
+  const bookingId = 'BK-' + new Date().getTime();
+  const ts = formatTs_(new Date());
+
+  const row = new Array(HEADERS.length).fill('');
+
+  row[idx(HEADERS, 'Booking ID')] = bookingId;
+  row[idx(HEADERS, 'Submitted At')] = ts;
+  row[idx(HEADERS, 'Branch')] = branch;
+  row[idx(HEADERS, 'Executive')] = executive;
+  row[idx(HEADERS, 'Customer Name')] = customerName;
+  row[idx(HEADERS, 'Mobile Number')] = mobileNumber;
+
+  row[idx(HEADERS, 'Company')] = company;
+  row[idx(HEADERS, 'Model')] = model;
+  row[idx(HEADERS, 'Variant')] = variant;
+  row[idx(HEADERS, 'Color')] = color;
+  row[idx(HEADERS, 'Chassis Number')] = chassisNo;
+
+  row[idx(HEADERS, 'Chassis Availability')] = availability;
+  row[idx(HEADERS, 'Availability Branch')] = availabilityBranch;
+
+  row[idx(HEADERS, 'Purchase Mode')] = purchaseMode;
+  row[idx(HEADERS, 'Financier')] = financier;
+  row[idx(HEADERS, 'RTO Office')] = rtoOffice;
+  row[idx(HEADERS, 'Address')] = address;
+
+  row[idx(HEADERS, 'Address Proof Mode')] = addressProofMode;
+  row[idx(HEADERS, 'Address Proof Types')] = addressProofTypes;
+  row[idx(HEADERS, 'Booking Amount')] = bookingAmount;
+
+  row[idx(HEADERS, 'File Name')] = savedFile.name || '';
+  row[idx(HEADERS, 'File URL')] = savedFile.url || '';
+  row[idx(HEADERS, 'File Type')] = savedFile.type || '';
+  row[idx(HEADERS, 'File Size')] = savedFile.size || '';
+
+  row[idx(HEADERS, 'Status')] = 'pending';
+  row[idx(HEADERS, 'Notes')] = '';
+
+  const payload = JSON.parse(JSON.stringify(data || {}));
+  try { if (payload && payload.file && payload.file.base64) delete payload.file.base64; } catch(e){}
+  collapseAttachment_(payload, row, HEADERS, savedFile && savedFile.url ? {
+    name: savedFile.name,
+    url: savedFile.url,
+    fileId: '',
+    type: savedFile.type,
+    size: savedFile.size,
+    ts: new Date().toISOString()
+  } : null);
+  const rawStr = JSON.stringify(payload || {});
+  row[idx(HEADERS, 'Raw Payload')] = rawStr.length > 45000
+    ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, note: 'payload truncated' })
+    : rawStr;
+
+  const sh = getSheet_();
+  sh.appendRow(row);
+
+  // 🔴 Log Booking Amount into master DailyCollections (with cash/online split)
+  try {
+    if (branch && executive && bookingAmountNum > 0) {
+      let cashCollected = Number(data.cashCollected || 0) || 0;
+      let onlineCollected = Number(data.onlineCollected || 0) || 0;
+
+      const pays = Array.isArray(data.payments) ? data.payments : [];
+      if (!(cashCollected > 0) && !(onlineCollected > 0) && pays.length) {
+        cashCollected = pays
+          .filter(p => String(p.mode||'').toLowerCase()==='cash')
+          .reduce((s,p)=> s + (Number(p.amount)||0), 0);
+        onlineCollected = pays
+          .filter(p => String(p.mode||'').toLowerCase()==='online')
+          .reduce((s,p)=> s + (Number(p.amount)||0), 0);
+      }
+
+      const ledgerCtx = {
+        sourceType: 'booking',
+        sourceId: bookingId,
+        bookingId: bookingId,
+        customerName,
+        customerMobile: String(mobileNumber||'').replace(/\D/g,'').slice(-10),
+        paymentMode: String(data.paymentMode || data.purchaseMode || '').toLowerCase(),
+        payments: pays
+      };
+      updateDailyCollection_(branch, executive, bookingAmountNum, 'booking', {
+        cashCollected,
+        onlineCollected,
+        staffLedgerContext: ledgerCtx
+      });
+    }
+  } catch (e) {}
+
+  return { success: true, bookingId, action: 'created' };
+}
+
+function checkDuplicate_(mobile, bookingId) {
+  const existing = findExistingBooking_(mobile, bookingId);
+  return {
+    ok: true,
+    duplicate: existing.found,
+    existingRecord: existing.found ? {
+      bookingId: existing.rowData[0] || '',
+      customerName: existing.rowData[4] || '',
+      mobile: existing.rowData[5] || '',
+      timestamp: existing.rowData[1] || '',
+      matchType: existing.matchType
+    } : null
+  };
+}
+
+// Patch-style small updates (status, invoice link, etc.)
+function updateBooking_(bookingId, patch, mobileOpt) {
+  const sh = getSheet_();
+  const headers = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  const rowIndex = findRowIndexBy_(sh, headers, bookingId, mobileOpt);
+  if (rowIndex < 2) return { success: false, error: 'not_found' };
+
+  const cur = sh.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0];
+  const cells = headers.map((_, i) => cur[i] || '');
+
+  if (patch.status != null) cells[idx(headers, 'Status')] = String(patch.status);
+  if (patch.notes != null) cells[idx(headers, 'Notes')] = String(patch.notes);
+
+  if (patch.invoiceStatus != null) cells[idx(headers, 'Invoice Status')] = String(patch.invoiceStatus);
+  if (patch.invoiceFileUrl != null) cells[idx(headers, 'Invoice File URL')] = String(patch.invoiceFileUrl);
+
+  if (patch.insuranceStatus != null) cells[idx(headers, 'Insurance Status')] = String(patch.insuranceStatus);
+  if (patch.insuranceFileUrl != null) cells[idx(headers, 'Insurance File URL')] = String(patch.insuranceFileUrl);
+
+  if (patch.rtoStatus != null) cells[idx(headers, 'RTO Status')] = String(patch.rtoStatus);
+
+  const vehNo = patch.vehicleNo || patch.regNo;
+  if (vehNo != null) cells[idx(headers, 'Vehicle No')] = String(vehNo);
+
+  cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
+  sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([cells]);
+
+  return { success: true, updated: true, bookingId: String(cells[idx(headers, 'Booking ID')] || '') };
+}
+
+function findRowIndexBy_(sh, headers, bookingId, mobileOpt) {
+  const last = sh.getLastRow();
+  if (last < 2) return -1;
+
+  const idCol = headers.indexOf('Booking ID') + 1;
+  const mobileCol = headers.indexOf('Mobile Number') + 1;
+  const range = sh.getRange(2, 1, last - 1, headers.length).getValues();
+
+  if (bookingId && idCol > 0) {
+    for (var i = 0; i < range.length; i++) {
+      if (String(range[i][idCol - 1]) === String(bookingId)) return i + 2;
+    }
+  }
+
+  const mob = String(mobileOpt || '').replace(/\D/g, '').slice(-10);
+  if (mob && mobileCol > 0) {
+    for (var j = range.length - 1; j >= 0; j--) {
+      const cell = String(range[j][mobileCol - 1] || '').replace(/\D/g, '').slice(-10);
+      if (cell && cell === mob) return j + 2;
+    }
+  }
+  return -1;
+}
+
+// Attach document helper (append/replace + Raw Payload attachments[])
+function attachDocument_(bookingId, mobileOpt, file, docType, append, tsIso) {
+  const sh = getSheet_();
+  const headers = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  const rowIndex = findRowIndexBy_(sh, headers, bookingId, mobileOpt);
+  if (rowIndex < 2) return { success: false, error: 'not_found' };
+
+  const range = sh.getRange(rowIndex, 1, 1, HEADERS.length);
+  const cells = range.getValues()[0];
+
+  const fileNameIdx = idx(headers, 'File Name');
+  const fileUrlIdx = idx(headers, 'File URL');
+  const rawIdx = idx(headers, 'Raw Payload');
+
+  const curName = String(cells[fileNameIdx] || '').trim();
+  const curUrl = String(cells[fileUrlIdx] || '').trim();
+
+  const newName = file.name || 'Document.pdf';
+  const newUrl = file.url || (file.fileId ? 'https://drive.google.com/file/d/' + file.fileId + '/view' : '');
+  if (!newUrl) return { success: false, error: 'missing_url' };
+
+  // Always replace with latest document (append flag intentionally ignored)
+  const nowIso = tsIso || new Date().toISOString();
+  var payload = {};
+  try { payload = JSON.parse(String(cells[rawIdx] || '{}')); } catch (e) { payload = {}; }
+  payload.attachments = [{
+    type: docType || 'Other',
+    name: newName,
+    url: newUrl,
+    fileId: file.fileId || '',
+    ts: nowIso
+  }];
+  cells[fileNameIdx] = newName;
+  cells[fileUrlIdx] = newUrl;
+  cells[idx(headers, 'File Type')] = cells[idx(headers, 'File Type')] || '';
+  cells[idx(headers, 'File Size')] = cells[idx(headers, 'File Size')] || '';
+  cells[rawIdx] = JSON.stringify(payload);
+
+  cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
+  range.setValues([cells]);
+
+  const id = String(cells[idx(headers, 'Booking ID')] || '');
+  return { success: true, bookingId: id, appended: false, replaced: true };
+}
+
+// ===================== LIST / SEARCH =====================
+
+function listBookings_(p) {
+  const page = Math.max(1, _toInt(p && p.page, 1));
+  const pageSize = Math.min(100, Math.max(1, _toInt(p && p.pageSize, 10)));
+
+  const q = _lc((p && p.q) || '');
+  const branch = _lc((p && p.branch) || '');
+  const status = _lc((p && p.status) || '');
+  const start = p && p.start ? +p.start : null;
+  const end = p && p.end ? +p.end : null;
+
+  const sh = getSheet_();
+  const values = sh.getDataRange().getValues();
+  if (!values || values.length <= 1) return { ok: true, data: [], total: 0 };
+
+  const headers = values[0];
+  const idxMap = {
+    bookingId: headers.indexOf('Booking ID'),
+    submittedAt: headers.indexOf('Submitted At'),
+    branch: headers.indexOf('Branch'),
+    name: headers.indexOf('Customer Name'),
+    mobile: headers.indexOf('Mobile Number'),
+    company: headers.indexOf('Company'),
+    model: headers.indexOf('Model'),
+    variant: headers.indexOf('Variant'),
+    chassis: headers.indexOf('Chassis Number'),
+    status: headers.indexOf('Status'),
+    remarkLevel: headers.indexOf('RemarkLevel'),
+    remarkText: headers.indexOf('RemarkText'),
+    raw: headers.indexOf('Raw Payload'),
+  };
+
+  const allRows = [];
+  for (var i = 1; i < values.length; i++) {
+    const rowObj = {};
+    for (var j = 0; j < headers.length; j++) rowObj[headers[j]] = values[i][j];
+
+    // Prefer dedicated remark columns; fall back to payload.remark
+    var remarkLevelFromCol = idxMap.remarkLevel >= 0 ? String(values[i][idxMap.remarkLevel] || '') : '';
+    var remarkTextFromCol = idxMap.remarkText >= 0 ? String(values[i][idxMap.remarkText] || '') : '';
+    if (!remarkLevelFromCol && idxMap.raw >= 0) {
+      var payload = {};
+      try { payload = JSON.parse(String(values[i][idxMap.raw] || '{}')); } catch (e) { payload = {}; }
+      var pr = payload && payload.remark ? payload.remark : null;
+      remarkLevelFromCol = pr && pr.level ? String(pr.level).toUpperCase() : '';
+      remarkTextFromCol = pr && pr.text ? String(pr.text) : '';
+    }
+    rowObj.RemarkLevel = remarkLevelFromCol;
+    rowObj.RemarkText = remarkTextFromCol;
+
+    var tsMs = 0;
+    if (idxMap.submittedAt >= 0) {
+      var v = values[i][idxMap.submittedAt];
+      if (v instanceof Date) tsMs = v.getTime();
+      else if (v) { var d = new Date(v); if (!isNaN(d.getTime())) tsMs = d.getTime(); }
+    }
+    rowObj.__tsMs = tsMs;
+
+    allRows.push(rowObj);
+  }
+
+  let rows = allRows.filter(function (r) {
+    if (branch && !_contains(r['Branch'], branch)) return false;
+    if (status && _lc(r['Status']) !== status) return false;
+    if (start && end) {
+      var t = r.__tsMs || 0;
+      if (!t || t < start || t > end) return false;
+    }
+    if (q) {
+      var hay = [
+        r['Booking ID'], r['Customer Name'], r['Mobile Number'], r['Company'],
+        r['Model'], r['Variant'], r['Chassis Number'], r['Branch']
+      ];
+      var hit = false;
+      for (var k = 0; k < hay.length; k++) { if (_contains(hay[k], q)) { hit = true; break; } }
+      if (!hit) return false;
+    }
+    return true;
+  });
+
+  rows.sort(function (a, b) { return (b.__tsMs || 0) - (a.__tsMs || 0); });
+
+  const total = rows.length;
+  const startIdx = (page - 1) * pageSize;
+  const data = rows.slice(startIdx, startIdx + pageSize);
+
+  for (var r = 0; r < data.length; r++) { delete data[r].__tsMs; }
+
+  return { ok: true, data: data, total: total };
+}
+
+function searchBookings_(mode, query) {
+  if (!query) return { ok: true, rows: [] };
+  const sh = getSheet_();
+  const values = sh.getDataRange().getValues();
+  const out = [];
+
+  if (values && values.length > 1) {
+    const headers = values[0];
+    const idxMap = {
+      bookingId: headers.indexOf('Booking ID'),
+      mobile: headers.indexOf('Mobile Number'),
+      vehicle: headers.indexOf('Vehicle No'),
+      raw: headers.indexOf('Raw Payload'),
+    };
+
+    for (var i = 1; i < values.length; i++) {
+      const id = idxMap.bookingId >= 0 ? String(values[i][idxMap.bookingId]) : '';
+      const mobile = idxMap.mobile >= 0 ? String(values[i][idxMap.mobile]) : '';
+      const vehicle = idxMap.vehicle >= 0 ? normReg_(values[i][idxMap.vehicle]) : '';
+      const raw = idxMap.raw >= 0 ? String(values[i][idxMap.raw]) : '';
+
+      const isBookingId = mode === 'booking';
+      const isVehicle = mode === 'vehicle' || mode === 'reg';
+      const qMobile = String(query).replace(/\D/g, '').slice(-10);
+      const qReg = normReg_(query);
+
+      let hit = false;
+      if (isBookingId) {
+        hit = id === query;
+      } else if (isVehicle) {
+        const regFromRaw = normReg_((function(){
+          try {
+            const pj = JSON.parse(raw || '{}');
+            return pj && pj.vehicle && (pj.vehicle.regNo || pj.vehicle.registrationNumber || pj.vehicleNo || pj.regNo) || '';
+          } catch (_) { return ''; }
+        })());
+        hit = qReg && (vehicle === qReg || regFromRaw === qReg);
+      } else {
+        hit = mobile.replace(/\D/g, '').slice(-10) === qMobile;
+      }
+      if (!hit) continue;
+
+      var payload = {};
+      try { payload = JSON.parse(raw || '{}'); } catch (e) { payload = {}; }
+
+      if (!payload.branch) payload.branch = getCell_(headers, values[i], 'Branch');
+      if (!payload.executive) payload.executive = getCell_(headers, values[i], 'Executive');
+      if (!payload.customerName && !payload.name) payload.customerName = getCell_(headers, values[i], 'Customer Name');
+      if (!payload.mobileNumber && !payload.mobile) payload.mobileNumber = getCell_(headers, values[i], 'Mobile Number');
+
+      if (!payload.vehicle) payload.vehicle = {};
+      payload.vehicle.company = payload.vehicle.company || getCell_(headers, values[i], 'Company');
+      payload.vehicle.model = payload.vehicle.model || getCell_(headers, values[i], 'Model');
+      payload.vehicle.variant = payload.vehicle.variant || getCell_(headers, values[i], 'Variant');
+      payload.vehicle.color = payload.vehicle.color || getCell_(headers, values[i], 'Color');
+      payload.vehicle.chassisNo = payload.vehicle.chassisNo || getCell_(headers, values[i], 'Chassis Number');
+
+      payload.rtoOffice = payload.rtoOffice || getCell_(headers, values[i], 'RTO Office');
+      payload.address = payload.address || getCell_(headers, values[i], 'Address');
+      payload.purchaseMode = payload.purchaseMode || payload.purchaseType || getCell_(headers, values[i], 'Purchase Mode');
+      payload.financier = payload.financier || getCell_(headers, values[i], 'Financier');
+      // Surface invoice/insurance links from sheet for UI consumers
+      const invoiceUrl = getCell_(headers, values[i], 'Invoice File URL') || '';
+      const insuranceUrl = getCell_(headers, values[i], 'Insurance File URL') || '';
+      if (invoiceUrl) payload.invoiceFileUrl = payload.invoiceFileUrl || invoiceUrl;
+      if (insuranceUrl) payload.insuranceFileUrl = payload.insuranceFileUrl || insuranceUrl;
+
+      var fileName = getCell_(headers, values[i], 'File Name') || '';
+      var fileUrl = getCell_(headers, values[i], 'File URL') || '';
+      collapseAttachment_(payload, values[i], headers, null);
+
+      out.push({ payload });
+    }
+  }
+  return { ok: true, rows: out };
+}
+
+// ===================== HELPERS =====================
+
+function uploadFile_(e) {
+  const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+  const files = (e && e.files) || {};
+  const keys = Object.keys(files);
+  if (!keys.length) return { ok: false, error: 'no_file' };
+
+  const key = keys[0];
+  const blob = files[key];
+  if (!blob) return { ok: false, error: 'bad_blob' };
+
+  const mime = String(blob.getContentType() || '').toLowerCase();
+  if (mime !== ALLOWED_MIME) return { ok: false, error: 'invalid_type_only_pdf_allowed' };
+
+  var bytes = blob.getBytes();
+  if (!bytes) return { ok: false, error: 'empty_file' };
+  if (bytes.length > MAX_FILE_BYTES) return { ok: false, error: 'file_too_large_>5MB' };
+
+  const file = folder.createFile(blob);
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (err) {}
+
+  const id = file.getId();
+  return {
+    ok: true,
+    fileId: id,
+    url: 'https://drive.google.com/file/d/' + id + '/view',
+    downloadUrl: 'https://drive.google.com/uc?export=download&id=' + id,
+    name: file.getName(),
+    mimeType: file.getMimeType(),
+    size: file.getSize(),
+  };
+}
+
+function uploadBase64_(body) {
+  try {
+    const name = String(body.name || 'document.pdf');
+    const b64 = String(body.base64 || '');
+    if (!b64) return { ok: false, success: false, error: 'missing_base64' };
+
+    const bytes = Utilities.base64Decode(b64);
+    if (!bytes || !bytes.length) return { ok: false, success: false, error: 'empty_file' };
+    if (bytes.length > MAX_FILE_BYTES) return { ok: false, success: false, error: 'file_too_large_>5MB' };
+
+    const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+    const blob = Utilities.newBlob(bytes, ALLOWED_MIME, name);
+    const file = folder.createFile(blob);
+    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+
+    const id = file.getId();
+    return {
+      ok: true,
+      success: true,
+      fileId: id,
+      url: 'https://drive.google.com/file/d/' + id + '/view',
+      downloadUrl: 'https://drive.google.com/uc?export=download&id=' + id,
+      name: file.getName(),
+      mimeType: file.getMimeType(),
+      size: file.getSize(),
+    };
+  } catch (err) {
+    return { ok: false, success: false, error: String(err) };
+  }
+}
+
+function getSpreadsheet_() {
+  return SPREADSHEET_ID ? SpreadsheetApp.openById(SPREADSHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function getSheet_() {
+  const ss = getSpreadsheet_();
+  let sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) {
+    sh = ss.insertSheet(SHEET_NAME);
+    ensureHeaderRow_(sh);
+  } else {
+    const first = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+    if (!first || first[0] !== HEADERS[0]) {
+      sh.clear();
+      ensureHeaderRow_(sh);
+    }
+  }
+  return sh;
+}
+
+function ensureHeaderRow_(sh) {
+  const need = HEADERS.length;
+  const have = sh.getMaxColumns();
+  if (have < need) sh.insertColumnsAfter(have, need - have);
+  sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  sh.setFrozenRows(1);
+}
+
+function saveOneFileToDrive_(f) {
+  if (!f) return { name: '', url: '', type: '', size: '' };
+  try {
+    const name = f.name || '';
+    const type = (f.mimeType || f.type || '').toLowerCase() || ALLOWED_MIME;
+    const size = f.size || '';
+
+    if (type !== ALLOWED_MIME) return { name: '', url: '', type: '', size: '', error: 'invalid_type_only_pdf_allowed' };
+
+    if (f.fileId) {
+      const file = DriveApp.getFileById(f.fileId);
+      try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+      if (file.getSize() > MAX_FILE_BYTES) return { name: '', url: '', type: '', size: '', error: 'file_too_large_>5MB' };
+      return {
+        name: file.getName(),
+        url: 'https://drive.google.com/file/d/' + f.fileId + '/view',
+        type: file.getMimeType(),
+        size: size || file.getSize()
+      };
+    }
+    if (f.url || f.fileUrl) {
+      const url = f.url || f.fileUrl;
+      return { name: name, url: url, type: type, size: size };
+    }
+
+    if (f.base64) {
+      const bytes = Utilities.base64Decode(f.base64);
+      if (bytes.length > MAX_FILE_BYTES) return { name: '', url: '', type: '', size: '', error: 'file_too_large_>5MB' };
+      const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
+      const blob = Utilities.newBlob(bytes, type, name || 'document.pdf');
+      const newFile = folder.createFile(blob);
+      try { newFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) {}
+      return {
+        name: newFile.getName(),
+        url: 'https://drive.google.com/file/d/' + newFile.getId() + '/view',
+        type: type,
+        size: size || bytes.length
+      };
+    }
+
+    return { name: name, url: '', type: type, size: size };
+  } catch (e) {
+    return {
+      name: (f && f.name) || '(error)',
+      url: '',
+      type: (f && (f.mimeType || f.type)) || '',
+      size: (f && f.size) || ''
+    };
+  }
+}
+
+// Normalize attachments to a single latest entry and rewrite sheet/file columns
+function collapseAttachment_(payload, cells, headers, overrideAtt) {
+  var nameIdx = idx(headers, 'File Name');
+  var urlIdx = idx(headers, 'File URL');
+  var typeIdx = idx(headers, 'File Type');
+  var sizeIdx = idx(headers, 'File Size');
+
+  var nowIso = new Date().toISOString();
+  var att = null;
+
+  if (overrideAtt && overrideAtt.url) {
+    att = {
+      name: overrideAtt.name || 'Document',
+      url: overrideAtt.url,
+      fileId: overrideAtt.fileId || '',
+      type: overrideAtt.type || '',
+      size: overrideAtt.size || '',
+      ts: overrideAtt.ts || nowIso
+    };
+  }
+
+  if (!att && Array.isArray(payload && payload.attachments) && payload.attachments.length) {
+    var last = payload.attachments[payload.attachments.length - 1] || {};
+    var urlFromAtt = last.url || (last.fileId ? ('https://drive.google.com/file/d/' + last.fileId + '/view') : '');
+    if (urlFromAtt) {
+      att = {
+        name: last.name || 'Document',
+        url: urlFromAtt,
+        fileId: last.fileId || '',
+        type: last.type || '',
+        size: last.size || '',
+        ts: last.ts || nowIso
+      };
+    }
+  }
+
+  if (!att) {
+    var curName = String(cells[nameIdx] || '');
+    var curUrl = String(cells[urlIdx] || '');
+    var urls = curUrl.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    var names = curName.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (urls.length) {
+      var u = urls[urls.length - 1];
+      var n = names.length ? names[Math.min(names.length - 1, urls.length - 1)] : '';
+      att = {
+        name: n || 'Document',
+        url: u,
+        fileId: '',
+        type: String(cells[typeIdx] || ''),
+        size: cells[sizeIdx] || '',
+        ts: nowIso
+      };
+    }
+  }
+
+  if (!att || !att.url) {
+    payload.attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(-1) : [];
+    return;
+  }
+
+  cells[nameIdx] = att.name || '';
+  cells[urlIdx] = att.url;
+  cells[typeIdx] = att.type || '';
+  cells[sizeIdx] = att.size || '';
+  payload.attachments = [{
+    type: att.type || 'BookingDoc',
+    name: att.name || 'Document',
+    url: att.url,
+    fileId: att.fileId || '',
+    ts: att.ts || nowIso
+  }];
+}
+
+function formatTs_(d) {
+  return Utilities.formatDate(d, Session.getScriptTimeZone() || 'Asia/Kolkata', 'yyyy-MM-dd HH:mm:ss');
+}
+
+function json_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getCell_(headers, row, key) {
+  const i = headers.indexOf(key);
+  return i >= 0 ? row[i] : '';
+}
+
+function parseJson_(raw, def) {
+  try { return JSON.parse(raw || '{}'); } catch (e) { return def; }
+}
+
+function normReg_(s) {
+  return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function idx(arr, key) {
+  const i = arr.indexOf(key);
+  if (i < 0) throw new Error('Missing header: ' + key);
+  return i;
+}
+
+/* ========== Remarks (sheet-only) ========== */
+function updateRemark_(bookingId, level, text, by) {
+  if (!bookingId) return { success: false, error: 'bookingId required' };
+  var lv = String(level || '').toLowerCase();
+  if (!/(^ok$|^warning$|^alert$)/.test(lv)) return { success: false, error: 'level must be ok|warning|alert' };
+
+  var sh = getSheet_();
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn() || HEADERS.length).getValues()[0];
+  // Ensure remark columns exist even on old sheets
+  var remarkCols = ensureRemarkCols_(sh, headers);
+  headers = remarkCols.headers;
+  var idCol = remarkCols.idxBookingId + 1;
+  var payloadCol = remarkCols.idxRaw + 1;
+  var remarkLevelCol = remarkCols.idxRemarkLevel + 1;
+  var remarkTextCol = remarkCols.idxRemarkText + 1;
+
+  var last = sh.getLastRow();
+  if (last < 2) return { success: false, error: 'empty_sheet' };
+
+  var range = sh.getRange(2, 1, last - 1, headers.length).getValues();
+  var targetRow = -1;
+  for (var i = range.length - 1; i >= 0; i--) {
+    var id = String(range[i][idCol - 1] || '').trim();
+    if (id === bookingId) { targetRow = i + 2; break; }
+  }
+  if (targetRow < 0) return { success: false, error: 'not_found' };
+
+  var raw = sh.getRange(targetRow, payloadCol).getValue();
+  var payload = {};
+  try { payload = JSON.parse(String(raw || '{}')); } catch (e) { payload = {}; }
+
+  var nowIso = new Date().toISOString();
+  payload.remark = {
+    level: lv,
+    text: String(text || '').slice(0, 240),
+    by: String(by || '').slice(0, 120),
+    at: nowIso
+  };
+
+  // Persist to dedicated columns for resilience (Jobcards parity)
+  sh.getRange(targetRow, remarkLevelCol).setValue(String(lv).toUpperCase());
+  sh.getRange(targetRow, remarkTextCol).setValue(String(text || '').slice(0, 240));
+  // Mirror in payload for backward compatibility
+  sh.getRange(targetRow, payloadCol).setValue(JSON.stringify(payload));
+  return {
+    success: true,
+    updated: true,
+    row: targetRow,
+    bookingId: bookingId,
+    level: lv,
+    text: String(text || '')
+  };
+}
+
+function _toInt(v, d) { var n = parseInt(v, 10); return isNaN(n) ? d : n; }
+function _lc(s) { return String(s || '').toLowerCase(); }
+function _contains(hay, needle) { return _lc(hay || '').indexOf(_lc(needle || '')) !== -1; }
+
+// Guarantee remark columns exist and return indexes
+function ensureRemarkCols_(sh, headersArr) {
+  var headers = headersArr.slice();
+  var idxBookingId = headers.indexOf('Booking ID');
+  var idxRaw = headers.indexOf('Raw Payload');
+  var idxRemarkLevel = headers.indexOf('RemarkLevel');
+  var idxRemarkText = headers.indexOf('RemarkText');
+
+  var appendCols = [];
+  if (idxRemarkLevel < 0) { appendCols.push('RemarkLevel'); }
+  if (idxRemarkText < 0) { appendCols.push('RemarkText'); }
+  if (appendCols.length) {
+    var start = headers.length + 1;
+    sh.getRange(1, start, 1, appendCols.length).setValues([appendCols]);
+    headers = headers.concat(appendCols);
+    idxRemarkLevel = headers.indexOf('RemarkLevel');
+    idxRemarkText = headers.indexOf('RemarkText');
+  }
+  return {
+    headers: headers,
+    idxBookingId: idxBookingId,
+    idxRaw: idxRaw,
+    idxRemarkLevel: idxRemarkLevel,
+    idxRemarkText: idxRemarkText
+  };
+}
+
+/* ============== DAILY COLLECTIONS (BOOKING AMOUNT) ============== */
+
+const DC_SHEET = 'DailyCollections';
+const DC_HEADERS = [
+  'Date','Branch','Staff',
+  'Booking Amount','JC Amount','Minor Sales Amount',
+  'Total', // legacy total
+  'Cash Amount','Online Amount','Total Collected',
+  'Opening Balance','Due Today','Collected Today','Closing Balance',
+  'Settlement Done','Settlement At','Updated At','Notes','Raw Payload'
+];
+
+function dcTodayStrIndia_() {
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+}
+
+function dcTsIndia_() {
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+}
+
+function dcToNum_(x) {
+  const n = Number(x || 0);
+  return isNaN(n) ? 0 : n;
+}
+
+// 🔴 use master spreadsheet, not local bookings file
+function dcGetSheet_() {
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string'
+    ? DC_MASTER_SPREADSHEET_ID
+    : '';
+  const ss = masterId
+    ? SpreadsheetApp.openById(masterId)
+    : getSpreadsheet_(); // fallback
+
+  let sh = ss.getSheetByName(DC_SHEET);
+  if (!sh) sh = ss.insertSheet(DC_SHEET);
+
+  const w = Math.max(sh.getLastColumn(), DC_HEADERS.length);
+  const first = sh.getRange(1,1,1,w).getValues()[0];
+  const hasAny = first.some(v => String(v||'').trim().length);
+  if (!hasAny) sh.getRange(1,1,1,DC_HEADERS.length).setValues([DC_HEADERS]);
+
+  return sh;
+}
+
+// tolerant column finder
+function dcFindCol_(headers, names) {
+  const H = headers.map(h => String(h||'').trim().toLowerCase());
+  for (var i = 0; i < names.length; i++) {
+    var j = H.indexOf(String(names[i]||'').trim().toLowerCase());
+    if (j >= 0) return j;
+  }
+  return -1;
+}
+
+// tolerant index map (supports “Minor Sales Amt” too)
+function dcIdx_(headers) {
+  return {
+    Date:    dcFindCol_(headers, ['Date']),
+    Branch:  dcFindCol_(headers, ['Branch']),
+    Staff:   dcFindCol_(headers, ['Staff']),
+    Booking: dcFindCol_(headers, ['Booking Amount']),
+    JC:      dcFindCol_(headers, ['JC Amount']),
+    Minor:   dcFindCol_(headers, ['Minor Sales Amount', 'Minor Sales Amt']),
+    Total:   dcFindCol_(headers, ['Total']),
+    Cash:    dcFindCol_(headers, ['Cash Amount']),
+    Online:  dcFindCol_(headers, ['Online Amount']),
+    TotalCollected: dcFindCol_(headers, ['Total Collected']),
+    Opening:  dcFindCol_(headers, ['Opening Balance']),
+    Due:      dcFindCol_(headers, ['Due Today']),
+    CollectedToday: dcFindCol_(headers, ['Collected Today']),
+    Closing:  dcFindCol_(headers, ['Closing Balance']),
+    Done:    dcFindCol_(headers, ['Settlement Done']),
+    At:      dcFindCol_(headers, ['Settlement At']),
+    UpdatedAt: dcFindCol_(headers, ['Updated At']),
+    Raw:     dcFindCol_(headers, ['Raw Payload']),
+    width: headers.length
+  };
+}
+
+// Normalize any date cell to yyyy-MM-dd
+function dcNormDate_(val) {
+  var tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  if (val instanceof Date) return Utilities.formatDate(val, tz, 'yyyy-MM-dd');
+  var s = String(val || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  return s;
+}
+
+/**
+ * updateDailyCollection_(branch, staff, amount, type, opt?)
+ * type = 'booking' | 'jc' | 'minorsales'
+ * opt  = { cashCollected?: number, onlineCollected?: number }
+ */
+function updateDailyCollection_(branch, staff, amount, type, opt) {
+  const b = String(branch || '').trim();
+  const s = String(staff || '').trim();
+  const amt = dcToNum_(amount);
+  const cashInc = dcToNum_(opt && opt.cashCollected);
+  const onlineInc = dcToNum_(opt && opt.onlineCollected);
+
+  if (!b || !s || !(amt > 0)) {
+    return { success:false, message:'missing branch/staff or amount<=0' };
+  }
+
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const dateStr = dcTodayStrIndia_();
+
+  const last = sh.getLastRow();
+  let hit = -1;
+
+  // Find existing unsettled row
+  if (last > 1) {
+    const rows = sh.getRange(2,1,last-1,I.width).getValues();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const sameDate   = dcNormDate_(r[I.Date]) === dateStr;
+      const sameBranch = String(r[I.Branch] || '').trim().toLowerCase() === b.toLowerCase();
+      const sameStaff  = String(r[I.Staff]  || '').trim().toLowerCase() === s.toLowerCase();
+      const notDone    = String(r[I.Done]   || '').toLowerCase() !== 'true';
+      if (sameDate && sameBranch && sameStaff && notDone) {
+        hit = i + 2;
+        break;
+      }
+    }
+  }
+
+  if (hit < 0) {
+    // Create new row
+    const row = new Array(I.width).fill('');
+    row[I.Date]   = dateStr;
+    row[I.Branch] = b;
+    row[I.Staff]  = s;
+
+    row[I.Booking] = 0;
+    row[I.JC]      = 0;
+    row[I.Minor]   = 0;
+
+    if (type === 'booking')         row[I.Booking] = amt;
+    else if (type === 'jc')         row[I.JC]      = amt;
+    else if (type === 'minorsales') row[I.Minor]   = amt;
+
+    row[I.Total] = dcToNum_(row[I.Booking]) + dcToNum_(row[I.JC]) + dcToNum_(row[I.Minor]);
+    if (I.TotalCollected >= 0) row[I.TotalCollected] = dcToNum_(row[I.Cash]) + dcToNum_(row[I.Online]);
+
+    if (I.Cash >= 0)   row[I.Cash]   = cashInc;
+    if (I.Online >= 0) row[I.Online] = onlineInc;
+
+    row[I.Done]  = false;
+    row[I.At]    = '';
+    row[I.Raw]   = JSON.stringify({ createdAt: dcTsIndia_(), type, amount: amt, cash: cashInc, online: onlineInc });
+
+    sh.appendRow(row);
+    hit = sh.getLastRow();
+  } else {
+    // Update existing row
+    const cur = sh.getRange(hit,1,1,I.width).getValues()[0];
+
+    if (type === 'booking')         cur[I.Booking] = dcToNum_(cur[I.Booking]) + amt;
+    else if (type === 'jc')         cur[I.JC]      = dcToNum_(cur[I.JC]) + amt;
+    else if (type === 'minorsales') cur[I.Minor]   = dcToNum_(cur[I.Minor]) + amt;
+
+    cur[I.Total] = dcToNum_(cur[I.Booking]) + dcToNum_(cur[I.JC]) + dcToNum_(cur[I.Minor]);
+    if (I.TotalCollected >= 0) cur[I.TotalCollected] = dcToNum_(cur[I.Cash]) + dcToNum_(cur[I.Online]);
+
+    if (I.Cash >= 0)   cur[I.Cash]   = dcToNum_(cur[I.Cash])   + cashInc;
+    if (I.Online >= 0) cur[I.Online] = dcToNum_(cur[I.Online]) + onlineInc;
+
+    if (I.Raw >= 0) {
+      let raw = {};
+      try { raw = JSON.parse(String(cur[I.Raw] || '{}')); } catch (_) { raw = {}; }
+      if (!Array.isArray(raw.logs)) raw.logs = [];
+      raw.logs.push({ at: dcTsIndia_(), type, amount: amt, cash: cashInc, online: onlineInc });
+      try { cur[I.Raw] = JSON.stringify(raw); } catch (_) { /* ignore */ }
+    }
+
+    // Write only the columns that actually exist to avoid shape issues
+    try { if (I.Booking >= 0) sh.getRange(hit, I.Booking + 1).setValue(cur[I.Booking]); } catch(_) {}
+    try { if (I.JC      >= 0) sh.getRange(hit, I.JC      + 1).setValue(cur[I.JC]); } catch(_) {}
+    try { if (I.Minor   >= 0) sh.getRange(hit, I.Minor   + 1).setValue(cur[I.Minor]); } catch(_) {}
+    try { if (I.Cash    >= 0) sh.getRange(hit, I.Cash    + 1).setValue(cur[I.Cash]); } catch(_) {}
+    try { if (I.Online  >= 0) sh.getRange(hit, I.Online  + 1).setValue(cur[I.Online]); } catch(_) {}
+    try { if (I.Total   >= 0) sh.getRange(hit, I.Total   + 1).setValue(cur[I.Total]); } catch(_) {}
+  }
+
+  // NEW: Append to StaffLedger (non-breaking)
+  try {
+    staffLedgerAppendFromDailyUpdate_(b, s, amt, type, opt);
+  } catch (_){ /* ignore ledger errors to preserve current flow */ }
+
+  const out = sh.getRange(hit,1,1,I.width).getValues()[0];
+
+  return {
+    success:true,
+    updatedRow: {
+      date:   out[I.Date],
+      branch: out[I.Branch],
+      staff:  out[I.Staff],
+      booking: dcToNum_(out[I.Booking]),
+      jc:      dcToNum_(out[I.JC]),
+      minor:   dcToNum_(out[I.Minor]),
+      cashAmount: (I.Cash>=0 ? dcToNum_(out[I.Cash]) : 0),
+      onlineAmount: (I.Online>=0 ? dcToNum_(out[I.Online]) : 0),
+      total:   dcToNum_(out[I.Total]),
+      settled: String(out[I.Done]).toLowerCase() === 'true',
+      settledAt: out[I.At] || ''
+    }
+  };
+}
+
+/* ============================
+   StaffLedger (NEW HELPERS)
+============================ */
+const STAFF_LEDGER_SHEET = 'StaffLedger';
+const STAFF_LEDGER_HEADERS = [
+  'DateTime ISO','Date','Branch','Staff',
+  'Source Type','Source ID',
+  'Customer Name','Customer Mobile',
+  'Payment Mode','Cash Amount','Online Amount','UTR / Ref No',
+  'Collected Total','Settled Cash','Settled Online','Settled Total',
+  'Settled Flag','Settled At','Settled By','Raw Payload'
+];
+
+function slNowIsoIndia_(){
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+}
+function slDateIndia_(d){
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(d || new Date(), tz, 'yyyy-MM-dd');
+}
+
+function staffLedgerGetSheet_(){
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string' ? DC_MASTER_SPREADSHEET_ID : '';
+  const ss = masterId ? SpreadsheetApp.openById(masterId) : getSpreadsheet_();
+  let sh = ss.getSheetByName(STAFF_LEDGER_SHEET);
+  if (!sh) sh = ss.insertSheet(STAFF_LEDGER_SHEET);
+  const width = Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length);
+  const first = width ? sh.getRange(1,1,1,width).getValues()[0] : [];
+  const hasAny = first.some(v => String(v||'').trim().length);
+  if (!hasAny) sh.getRange(1,1,1,STAFF_LEDGER_HEADERS.length).setValues([STAFF_LEDGER_HEADERS]);
+  return sh;
+}
+
+function staffLedgerIdx_(headers){
+  const H = headers.map(h => String(h||'').trim().toLowerCase());
+  const find = (name) => H.indexOf(String(name||'').trim().toLowerCase());
+  return {
+    DateTimeISO: find('datetime iso'),
+    Date: find('date'),
+    Branch: find('branch'),
+    Staff: find('staff'),
+    SrcType: find('source type'),
+    SrcId: find('source id'),
+    CustName: find('customer name'),
+    CustMobile: find('customer mobile'),
+    PayMode: find('payment mode'),
+    Cash: find('cash amount'),
+    Online: find('online amount'),
+    UTR: find('utr / ref no'),
+    Total: find('collected total'),
+    SCash: find('settled cash'),
+    SOnline: find('settled online'),
+    STotal: find('settled total'),
+    SFlag: find('settled flag'),
+    SAt: find('settled at'),
+    SBy: find('settled by'),
+    Raw: find('raw payload'),
+    width: headers.length
+  };
+}
+
+function appendStaffLedgerTransaction_(rowObj){
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const row = new Array(I.width).fill('');
+  const put = (i,v)=>{ if (i>=0) row[i] = (v==null?'':v); };
+  put(I.DateTimeISO, rowObj.dateTimeIso || slNowIsoIndia_());
+  put(I.Date, rowObj.date || slDateIndia_(new Date()));
+  put(I.Branch, rowObj.branch || '');
+  put(I.Staff, rowObj.staff || '');
+  put(I.SrcType, rowObj.sourceType || '');
+  put(I.SrcId, rowObj.sourceId || '');
+  put(I.CustName, rowObj.customerName || '');
+  put(I.CustMobile, rowObj.customerMobile || '');
+  put(I.PayMode, rowObj.paymentMode || '');
+  put(I.Cash, Number(rowObj.cashAmount||0)||0);
+  put(I.Online, Number(rowObj.onlineAmount||0)||0);
+  put(I.UTR, rowObj.utr || '');
+  const cash = Number(rowObj.cashAmount||0)||0;
+  const online = Number(rowObj.onlineAmount||0)||0;
+  put(I.Total, cash + online);
+  put(I.SCash, 0);
+  put(I.SOnline, 0);
+  put(I.STotal, 0);
+  put(I.SFlag, false);
+  put(I.SAt, '');
+  put(I.SBy, '');
+  try { put(I.Raw, JSON.stringify(rowObj.rawPayload || {})); } catch(_){ put(I.Raw, ''); }
+  sh.appendRow(row);
+  return { row: sh.getLastRow() };
+}
+
+function staffLedgerAppendFromDailyUpdate_(branch, staff, amount, type, opt){
+  try{
+    const b = String(branch||'').trim();
+    const s = String(staff||'').trim();
+    const amt = dcToNum_(amount);
+    if (!b || !s || !(amt>0)) return { skipped:true };
+    const ctx = (opt && opt.staffLedgerContext) || {};
+    let cash = dcToNum_(opt && opt.cashCollected);
+    let online = dcToNum_(opt && opt.onlineCollected);
+    if (!(cash>0) && !(online>0) && Array.isArray(ctx.payments)){
+      try {
+        cash = ctx.payments.filter(p=>String(p.mode||'').toLowerCase()==='cash').reduce((a,p)=>a+(Number(p.amount)||0),0);
+        online = ctx.payments.filter(p=>String(p.mode||'').toLowerCase()==='online').reduce((a,p)=>a+(Number(p.amount)||0),0);
+      } catch(_) {}
+    }
+    if (!(cash>0) && !(online>0)){
+      const pm = String(ctx.paymentMode || '').toLowerCase();
+      if (pm === 'cash') cash = amt; else if (pm) online = amt; else cash = amt;
+    }
+    const pmode = (cash>0 && online>0) ? 'mixed' : (cash>0 ? 'cash' : (online>0 ? 'online' : ''));
+    let utr = String(ctx.utr||'').trim();
+    if (!utr && Array.isArray(ctx.payments)){
+      try {
+        const p = ctx.payments.find(p=>String(p.mode||'').toLowerCase()==='online');
+        utr = String(p && (p.utr || p.ref || p.reference || p.txnId || p.txn || p.upiRef || '')).trim();
+      } catch(_) {}
+    }
+    const obj = {
+      branch: b,
+      staff: s,
+      sourceType: String(type||'').toLowerCase(),
+      sourceId: String(ctx.sourceId||ctx.bookingId||'').trim(),
+      customerName: ctx.customerName || '',
+      customerMobile: String(ctx.customerMobile || '').replace(/\D/g,'').slice(-10),
+      paymentMode: pmode,
+      cashAmount: cash,
+      onlineAmount: online,
+      utr: utr,
+      rawPayload: { from: 'updateDailyCollection_', ctx }
+    };
+    return appendStaffLedgerTransaction_(obj);
+  }catch(err){ return { error: String(err) }; }
+}
