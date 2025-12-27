@@ -119,7 +119,7 @@ const SHEET_CSV_URL =
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
+  "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
 
 const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 
@@ -174,7 +174,7 @@ const HEADERS = {
   company: ["Company", "Company Name"],
   model: ["Model", "Model Name"],
   variant: ["Variant"],
-  price: ["On-Road Price", "On Road Price", "Price"],
+  price: ["On-Road Price", "On Road Price", "OnRoadPrice", "Price"],
 };
 
 const pick = (row, keys) =>
@@ -1836,7 +1836,7 @@ export default function BookingForm({
                 step={500}
                 prefix={<CreditCardOutlined />}
                 placeholder="Enter amount"
-                disabled={false}
+                disabled={paymentsOnlyMode || hasFetchedBooking}
               />
             </Form.Item>
           </Col>

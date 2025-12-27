@@ -256,20 +256,20 @@ export default function StockUpdate() {
         message.warning(resp.message === 'Token Invalid' ? 'Session expired. Please log in again to admit/reject transfers.' : resp.message);
       }
       const list = Array.isArray(resp?.data) ? resp.data : [];
-      const rows = list.map((r, idx) => ({
-        key: r.movementId || idx + 1,
-        movementId: r.movementId || '',
-        chassis: r.chassisNo || '',
-        company: r.company || '',
-        model: r.model || '',
-        variant: r.variant || '',
-        color: r.color || '',
-        sourceBranch: r.sourceBranch || '',
-        targetBranch: r.targetBranch || '',
-        notes: r.notes || '',
-        createdByName: r.createdByName || '',
-        ts: r.timestamp || r.createdAt || '',
-      }));
+        const rows = list.map((r, idx) => ({
+          key: r.movementId || idx + 1,
+          movementId: r.movementId || '',
+          chassis: r.chassisNo || '',
+          company: r.company || '',
+          model: r.model || '',
+          variant: r.variant || '',
+          color: r.color || '',
+          sourceBranch: r.sourceBranch || '',
+          targetBranch: r.targetBranch || '',
+          notes: r.notes || '',
+          createdByName: r.createdByName || '',
+          ts: pickTs(r),
+        }));
       setPendingTransfers(rows);
     } catch {
       setPendingTransfers([]);
@@ -374,7 +374,7 @@ export default function StockUpdate() {
           }
           return {
             key: idx + 1,
-            ts: r.timestamp || r.createdAt || '',
+            ts: pickTs(r),
             chassis: r.chassisNo || '',
             company: r.company || '',
             model: r.model || '',
@@ -530,65 +530,108 @@ export default function StockUpdate() {
 
  
 
-  // Core columns (excluding Source so we can place it differently per role)
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const chassisLineStyle = { whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip', wordBreak: 'break-all' };
+  const pickTs = (r) => (
+    r?.timestamp ||
+    r?.createdAt ||
+    r?.updatedAt ||
+    r?.updated_at ||
+    r?.lastUpdated ||
+    r?.lastMovementAt ||
+    r?.time ||
+    r?.date ||
+    r?.Timestamp ||
+    r?.Time ||
+    r?.Date ||
+    r?.ts ||
+    ''
+  );
+  const formatTs = (raw) => {
+    if (!raw) return '—';
+    const num = Number(raw);
+    if (!Number.isNaN(num)) {
+      const dNum = dayjs(num);
+      if (dNum.isValid()) return dNum.format('YYYY-MM-DD HH:mm');
+    }
+    const d = dayjs(raw);
+    return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : String(raw);
+  };
+  const actionTag = (v, row) => {
+    const t = String(v || "").toLowerCase();
+    const status = String(row?.transferStatus || '').toLowerCase();
+    let color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
+    let display = t === 'invoice' ? 'Book' : (v || '-');
+    if (t === 'transfer') {
+      if (status === 'pending') { color = 'orange'; display = 'Transfer (Pending)'; }
+      else if (status === 'rejected') { color = 'red'; display = 'Transfer (Rejected)'; }
+      else if (status === 'admitted') { color = 'green'; display = 'Transfer (Admitted)'; }
+    }
+    return <Tag color={color} style={{ fontSize: 11, lineHeight: 1.1 }}>{display}</Tag>;
+  };
+
+  // Core columns
   const baseColsCore = [
-    { title: "Timestamp", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v) => {
-      if (!v) return '—';
-      const d = dayjs(v);
-      return d.isValid() ? d.format('YYYY-MM-DD HH:mm:ss') : String(v);
-    } },
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 20, ellipsis: false, render: (v)=> (
-      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
+    { title: "Time / Source", key: "timeSource", width: 90, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{formatTs(pickTs(r))}</div>
+        <div style={lineStyle}><span style={{ color: '#6b7280' }}>{r.sourceBranch || '—'}</span></div>
+      </div>
     ) },
-    { title: "Company", dataIndex: "company", key: "company", width: 20, ellipsis: false },
-    { title: "Model", dataIndex: "model", key: "model", width: 20, ellipsis: false },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 20, ellipsis: false },
-    { title: "Color", dataIndex: "color", key: "color", width: 10, ellipsis: false },
-    { title: "Action", dataIndex: "action", key: "action", width: 20, render: (v, row) => {
-      const t = String(v || "").toLowerCase();
-      const status = String(row?.transferStatus || '').toLowerCase();
-      let color = t === 'transfer' ? 'geekblue' : t === 'return' ? 'volcano' : t === 'invoice' ? 'green' : t === 'add' ? 'purple' : 'default';
-      let display = t === 'invoice' ? 'Book' : (v || '-');
-      if (t === 'transfer') {
-        if (status === 'pending') { color = 'orange'; display = 'Transfer (Pending)'; }
-        else if (status === 'rejected') { color = 'red'; display = 'Transfer (Rejected)'; }
-        else if (status === 'admitted') { color = 'green'; display = 'Transfer (Admitted)'; }
-      }
-      return <Tag color={color}>{display}</Tag>;
-    } },
+    { title: "Chassis / Company || Model", key: "chassisCompanyModel", width: 100, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={chassisLineStyle}>
+          <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{r.chassis || '-'}</span>
+        </div>
+        <div style={lineStyle}>{`${r.company || '—'} || ${r.model || '—'}`}</div>
+      </div>
+    ) },
+    { title: "Variant + Color || Action", key: "variantColorAction", width: 130, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.variant || '—'}</div>
+        <div style={lineStyle}>
+          <Space size={6}>
+            <span>{`${r.color || '—'} ||`}</span>
+            {actionTag(r.action, r)}
+          </Space>
+        </div>
+      </div>
+    ) },
   ];
-  const sourceCol = { title: "Source", dataIndex: "sourceBranch", key: "sourceBranch", width: 20, ellipsis: false };
-  // Staff: hide Timestamp column
-  const baseColsCoreStaff = baseColsCore.filter((c) => c.dataIndex !== 'ts');
   const adminExtras = [
-    { title: "Target/Return/Customer", key: "dest", ellipsis: true, render: (_, r) => r.targetBranch || r.returnTo || r.customerName || "—" },
-    { title: "Notes", dataIndex: "notes", key: "notes", ellipsis: true },
+    { title: "Target/Return/Customer + Notes", key: "destNotes", width: 250, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.targetBranch || r.returnTo || r.customerName || "—"}</div>
+        <div style={lineStyle}>{r.notes || "—"}</div>
+      </div>
+    ) },
   ];
   const actionsCol = {
     title: "Actions",
     key: "actions",
-    width: isAdminOwner ? 50 : 10,
+    width: 150,
     render: (_, r) => (
-      <Space size="small">
+      <Space size={4} wrap={false} style={{ whiteSpace: 'nowrap' }}>
         {!isOwner && (
           <>
-            <Button size="small" onClick={() => openWithAction(r, 'transfer')}>Transfer</Button>
-            <Button size="small" onClick={() => openWithAction(r, 'return')}>Return</Button>
+            <Button size="small" onClick={() => openWithAction(r, 'transfer')} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Transfer</Button>
+            <Button size="small" onClick={() => openWithAction(r, 'return')} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Return</Button>
           </>
         )}
-        <Button size="small" type="primary" onClick={() => openWithAction(r, 'invoice')}>Book</Button>
+        <Button size="small" type="primary" onClick={() => openWithAction(r, 'invoice')} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Book</Button>
         {isAdminOwner && (
-          <Button size="small" onClick={() => onEditRow(r)}>Edit</Button>
+          <Button size="small" onClick={() => onEditRow(r)} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Edit</Button>
         )}
       </Space>
     )
   };
   const isStaffLike = ['staff','mechanic','employees'].includes(myRole);
-  // Staff order: Chassis, Company, Model, Variant, Color, Action, Actions, Source (timestamp hidden)
-  // Admin/Owner order: Timestamp, Chassis, Company, Model, Variant, Color, Action, Actions, Source, Target/Return/Customer, Notes
+  // Staff order: Time/Source, Chassis/Company/Model, Variant/Color/Action, Actions
+  // Admin/Owner order: Time/Source, Chassis/Company/Model, Variant/Color/Action, Actions, Target/Return/Customer+Notes
   const columns = isStaffLike
-    ? [...baseColsCoreStaff, actionsCol, sourceCol]
-    : [...baseColsCore, actionsCol, sourceCol, ...adminExtras];
+    ? [...baseColsCore, actionsCol]
+    : [...baseColsCore, actionsCol, ...adminExtras];
 
   // Client-side filtering (for admin/owner). Staff view already scoped to branch.
   const filteredItems = useMemo(() => {
@@ -800,8 +843,10 @@ export default function StockUpdate() {
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
-        size={isMobile ? "small" : "middle"}
-        scroll={{ x: 'max-content' }}
+        size="small"
+        className="stock-movements-table"
+        tableLayout="fixed"
+        scroll={{ y: isMobile ? 420 : 600 }}
         rowKey={(r) => `${r.ts}-${r.chassis}-${r.key}`}
       />
 

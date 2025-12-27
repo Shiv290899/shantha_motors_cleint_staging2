@@ -406,7 +406,34 @@ async function fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode })
   const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'GET', payload });
   const js = resp?.data || resp || {};
   if (!js?.success) throw new Error('Failed');
-  return Array.isArray(js.rows) ? js.rows : [];
+  const rows = Array.isArray(js.rows) ? js.rows : [];
+  // De-dupe identical ledger rows (same source + payment details)
+  const normKey = (v) => String(v ?? '').trim().toLowerCase();
+  const rowTs = (r) => {
+    const raw = r?.dateTimeIso || r?.date;
+    const n = Number(new Date(String(raw)));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const rowGroupKey = (r) => ([
+    normKey(r?.branch),
+    normKey(r?.staff),
+    normKey(r?.sourceType),
+    normKey(r?.sourceId),
+    normKey(r?.customerMobile),
+    normKey(r?.paymentMode),
+    normKey(r?.cashAmount ?? r?.cashPending),
+    normKey(r?.onlineAmount ?? r?.onlinePending),
+    normKey(r?.utr),
+  ]).join('|');
+  const map = new Map();
+  rows.forEach((r) => {
+    const key = rowGroupKey(r);
+    const prev = map.get(key);
+    if (!prev || rowTs(r) >= rowTs(prev)) {
+      map.set(key, r);
+    }
+  });
+  return Array.from(map.values());
 }
 
 // (openTx defined inside component)

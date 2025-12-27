@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography, Modal, Upload, DatePicker } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography, Modal, Upload, DatePicker, AutoComplete } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from 'dayjs';
@@ -7,6 +7,7 @@ import BookingPrintQuickModal from "./BookingPrintQuickModal";
 import BookingInlineModal from "./BookingInlineModal";
 import BookingForm from "./BookingForm";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
+import { createStock, listCurrentStocksPublic } from "../apiCalls/stocks";
 import { listBranchesPublic } from "../apiCalls/branches";
 import { listUsersPublic } from "../apiCalls/adminUsers";
 import { exportToCsv } from "../utils/csvExport";
@@ -25,6 +26,7 @@ const HEAD = {
   company: ["Company"],
   model: ["Model"],
   variant: ["Variant"],
+  color: ["Color", "Colour", "Vehicle Color", "Vehicle Colour"],
   chassis: ["Chassis Number", "Chassis No", "Chassis"],
   file: ["File URL", "File", "Document URL"],
   status: ["Status", "Booking Status", "State"],
@@ -67,8 +69,16 @@ export default function Bookings() {
   const [executiveOptions, setExecutiveOptions] = useState([]);
   const [dropdownLoading, setDropdownLoading] = useState(false);
   const [filterSourceRows, setFilterSourceRows] = useState([]);
+  const [stockItems, setStockItems] = useState([]);
+  const [stockLoading, setStockLoading] = useState(false);
+  const [stockLoadedAt, setStockLoadedAt] = useState(0);
+  const [stockLoadedBranch, setStockLoadedBranch] = useState('');
+  const [editingChassisId, setEditingChassisId] = useState(null);
+  const [chassisDraft, setChassisDraft] = useState('');
+  const [chassisSaving, setChassisSaving] = useState(false);
 
   // User + branch scoping
+  const [currentUser, setCurrentUser] = useState(null);
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
   useEffect(() => {
@@ -76,6 +86,7 @@ export default function Bookings() {
       const raw = localStorage.getItem('user');
       if (!raw) return;
       const u = JSON.parse(raw);
+      setCurrentUser(u);
       setUserRole(String(u?.role || '').toLowerCase());
       const list = [];
       const pb = u?.formDefaults?.branchName || u?.primaryBranch?.name || '';
@@ -135,7 +146,7 @@ export default function Bookings() {
 
   // Reuse the same GAS URL for list + print so search works
   const DEFAULT_BOOKING_GAS_URL =
-    "https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
+    "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
   const GAS_URL_STATIC = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const GAS_SECRET_STATIC = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
 
@@ -152,6 +163,12 @@ export default function Bookings() {
         ? (o['Raw Payload'] || {})
         : JSON.parse(String(o['Raw Payload'] || o.rawPayload || o.payload || '{}'));
     } catch { payload = {}; }
+    const payloadColor =
+      payload?.color ||
+      payload?.vehicle?.color ||
+      payload?.vehicleColor ||
+      payload?.formValues?.color ||
+      '';
     const remarkLevelRaw = (payload?.remark?.level || o.RemarkLevel || o.remarkLevel || '').toString();
     const remarkTextRaw = payload?.remark?.text || o.RemarkText || o.remarkText || '';
     const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
@@ -165,6 +182,7 @@ export default function Bookings() {
       company: pick(o, HEAD.company),
       model: pick(o, HEAD.model),
       variant: pick(o, HEAD.variant),
+      color: pick(o, HEAD.color) || String(payloadColor || '').trim(),
       chassis: pick(o, HEAD.chassis),
       fileUrl: pick(o, HEAD.file),
       branch: pick(o, HEAD.branch),
@@ -304,10 +322,10 @@ export default function Bookings() {
         const t = r.tsMs ?? parseTsMs(r.ts);
         if (!t || t < start || t > end) return false;
       }
-      if (debouncedQ) {
-        const s = debouncedQ.toLowerCase();
-        if (![
-          r.bookingId, r.name, r.mobile, r.company, r.model, r.variant, r.chassis, r.branch,
+        if (debouncedQ) {
+          const s = debouncedQ.toLowerCase();
+          if (![
+          r.bookingId, r.name, r.mobile, r.company, r.model, r.variant, r.color, r.chassis, r.branch,
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
@@ -390,6 +408,63 @@ export default function Bookings() {
     }
   };
 
+  const STOCK_CACHE_MS = 2 * 60 * 1000;
+
+  const stockBranchHint = useMemo(() => {
+    const isPriv = ["owner","admin","backend"].includes(userRole);
+    if (branchFilter !== 'all') return branchFilter;
+    if (!isPriv && allowedBranches.length === 1) return allowedBranches[0];
+    return '';
+  }, [allowedBranches, branchFilter, userRole]);
+
+  const activeBranchSet = useMemo(
+    () => toKeySet(branchOptions),
+    [branchOptions]
+  );
+
+  const scopedBranchSet = useMemo(() => {
+    if (branchFilter !== 'all') return toKeySet([branchFilter]);
+    const isPriv = ["owner","admin","backend"].includes(userRole);
+    if (!isPriv && allowedBranches.length) return toKeySet(allowedBranches);
+    return null;
+  }, [allowedBranches, branchFilter, userRole]);
+
+  const isStockAllowed = useCallback((item) => {
+    const b = normalizeKey(item?.sourceBranch || item?.branch || '');
+    if (!b) return false;
+    if (activeBranchSet.size && !activeBranchSet.has(b)) return false;
+    if (scopedBranchSet && scopedBranchSet.size && !scopedBranchSet.has(b)) return false;
+    const status = String(item?.status || '').toLowerCase();
+    if (status && status !== 'in_stock' && status !== 'in stock') return false;
+    return true;
+  }, [activeBranchSet, scopedBranchSet]);
+
+  const loadStockItems = useCallback(async (force = false) => {
+    if (stockLoading) return;
+    const branchHint = stockBranchHint || '';
+    const cacheOk =
+      !force &&
+      stockItems.length > 0 &&
+      (Date.now() - stockLoadedAt) < STOCK_CACHE_MS &&
+      stockLoadedBranch === branchHint;
+    if (cacheOk) return;
+    setStockLoading(true);
+    try {
+      const resp = await listCurrentStocksPublic({
+        branch: branchHint || undefined,
+        limit: 2000,
+      });
+      const list = Array.isArray(resp?.data) ? resp.data : [];
+      setStockItems(list);
+      setStockLoadedAt(Date.now());
+      setStockLoadedBranch(branchHint);
+    } catch {
+      message.error('Could not load stock list.');
+    } finally {
+      setStockLoading(false);
+    }
+  }, [stockLoading, stockItems.length, stockLoadedAt, stockLoadedBranch, stockBranchHint]);
+
   const STATUS_COLOR = {
     pending: 'gold',
     seen: 'blue',
@@ -406,9 +481,10 @@ export default function Bookings() {
   const stockColor = (label) => (label === 'In Stock' ? 'green' : 'volcano');
 
   const updateBooking = async (bookingId, patch, mobile) => {
+    let ok = false;
     try {
       setUpdating(bookingId);
-      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
+      const DEFAULT_BOOKING_GAS_URL ="https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
       const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
       const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
       // Mirror patch keys to exact Sheet headers to ensure update reflects
@@ -434,17 +510,24 @@ export default function Bookings() {
         if (patch.insuranceFileUrl || patch.insuranceFile) next.insuranceFileUrl = patch.insuranceFileUrl || patch.insuranceFile;
         if (patch.rtoStatus) next.rtoStatus = patch.rtoStatus;
         if (patch.vehicleNo || patch.regNo) next.vehicleNo = patch.vehicleNo || patch.regNo;
+        if (Object.prototype.hasOwnProperty.call(patch, 'chassis')) next.chassis = patch.chassis;
+        if (Object.prototype.hasOwnProperty.call(patch, 'chassisNo')) next.chassis = patch.chassisNo;
         next._raw = { ...(r._raw || {}), ...patch };
         return next;
       }));
       message.success('Updated');
-    } catch { message.error('Update failed'); }
+      ok = true;
+    } catch {
+      message.error('Update failed');
+      ok = false;
+    }
     finally { setUpdating(null); }
+    return ok;
   };
 
   // Minimal upload helper to GAS (same endpoint used by BookingForm)
   const uploadFileToGAS = async (file) => {
-    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbybD3QLJD6e8yJXpiW1uGVSKB4CGypch51NmlKfjsR32jKvLql8dbV7cGIoFDCLzSysZQ/exec";
+    const DEFAULT_BOOKING_GAS_URL = "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
     const GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
     const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
     if (!GAS_URL) throw new Error('GAS URL not configured');
@@ -518,89 +601,229 @@ export default function Bookings() {
     await updateBooking(row.bookingId, { vehicleNo: v, regNo: v }, row.mobile);
   };
 
+  const stockOptionsForRow = useCallback((row) => {
+    if (!row) return [];
+    const cKey = normalizeKey(row.company);
+    const mKey = normalizeKey(row.model);
+    const vKey = normalizeKey(row.variant);
+    const colorKey = normalizeKey(row.color);
+    const seen = new Set();
+    const out = [];
+    stockItems.forEach((s) => {
+      if (!isStockAllowed(s)) return;
+      if (cKey && normalizeKey(s.company) !== cKey) return;
+      if (mKey && normalizeKey(s.model) !== mKey) return;
+      if (vKey && normalizeKey(s.variant) !== vKey) return;
+      if (colorKey && normalizeKey(s.color) !== colorKey) return;
+      const ch = normalizeChassis(s.chassisNo || s.chassis || '');
+      if (!ch || seen.has(ch)) return;
+      seen.add(ch);
+      const labelParts = [ch];
+      const color = String(s.color || '').trim();
+      const branch = String(s.sourceBranch || s.branch || '').trim();
+      if (color) labelParts.push(color);
+      if (branch) labelParts.push(branch);
+      out.push({ value: ch, label: labelParts.join(' - ') });
+    });
+    return out.sort((a, b) => a.label.localeCompare(b.label));
+  }, [stockItems, isStockAllowed]);
+
+  const findStockMatch = useCallback((row, chassisValue) => {
+    const target = normalizeChassis(chassisValue);
+    if (!target || !row) return null;
+    const cKey = normalizeKey(row.company);
+    const mKey = normalizeKey(row.model);
+    const vKey = normalizeKey(row.variant);
+    const colorKey = normalizeKey(row.color);
+    return stockItems.find((s) => {
+      if (!isStockAllowed(s)) return false;
+      const ch = normalizeChassis(s.chassisNo || s.chassis || '');
+      if (ch !== target) return false;
+      if (cKey && normalizeKey(s.company) !== cKey) return false;
+      if (mKey && normalizeKey(s.model) !== mKey) return false;
+      if (vKey && normalizeKey(s.variant) !== vKey) return false;
+      if (colorKey && normalizeKey(s.color) !== colorKey) return false;
+      return true;
+    }) || null;
+  }, [stockItems, isStockAllowed]);
+
+  const startChassisEdit = (row) => {
+    if (!row?.bookingId) {
+      message.warning('Booking ID missing for this row.');
+      return;
+    }
+    setEditingChassisId(row.bookingId);
+    setChassisDraft(normalizeChassis(row?.chassis || ''));
+    loadStockItems();
+  };
+
+  const cancelChassisEdit = () => {
+    if (chassisSaving) return;
+    setEditingChassisId(null);
+    setChassisDraft('');
+  };
+
+  const handleSaveChassis = async (row) => {
+    if (!row?.bookingId || chassisSaving) return;
+    const nextVal = normalizeChassis(chassisDraft);
+    const currentVal = normalizeChassis(row?.chassis || '');
+    if (nextVal === currentVal) {
+      cancelChassisEdit();
+      return;
+    }
+    setChassisSaving(true);
+    const matched = findStockMatch(row, nextVal);
+    const ok = await updateBooking(row.bookingId, { chassis: nextVal }, row.mobile);
+    if (!ok) {
+      setChassisSaving(false);
+      return;
+    }
+    if (matched && nextVal) {
+      const createdBy = currentUser?.name || currentUser?.email || 'user';
+      const rowData = {
+        Chassis_No: nextVal,
+        Company: matched.company || row.company || '',
+        Model: matched.model || row.model || '',
+        Variant: matched.variant || row.variant || '',
+        Color: matched.color || row.color || '',
+        Action: 'invoice',
+        Customer_Name: row.name || '',
+        Source_Branch: matched.sourceBranch || matched.branch || '',
+        Notes: row.bookingId ? `Allotted to Booking ID ${row.bookingId}` : 'Allotted from bookings',
+      };
+      try {
+        const resp = await createStock({ data: rowData, createdBy });
+        const okStock = !!(resp?.success ?? resp?.ok);
+        if (!okStock) {
+          message.error(resp?.message || 'Saved booking but failed to update stock.');
+        } else {
+          setStockItems((prev) => prev.filter((s) => normalizeChassis(s.chassisNo || s.chassis || '') !== nextVal));
+        }
+      } catch {
+        message.error('Saved booking but failed to update stock.');
+      }
+    }
+    setChassisSaving(false);
+    setEditingChassisId(null);
+    setChassisDraft('');
+  };
+
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const smallLineStyle = { ...lineStyle, fontSize: 11 };
+  const wrapLineStyle = { whiteSpace: 'normal' };
+
   let columns = [
-    { title: 'Date', dataIndex: 'ts', key: 'ts', width: 50, ellipsis: true, render: (v) => {
-      const ms = parseTsMs(v);
-      return ms ? dayjs(ms).format('YY-MM-DD HH:mm') : '—';
+    { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => {
+      const ms = parseTsMs(r.ts);
+      const dt = ms ? dayjs(ms).format('YY-MM-DD HH:mm') : '—';
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>{dt}</div>
+          <div style={lineStyle}><Text type="secondary">{r.branch || '—'}</Text></div>
+        </div>
+      );
     } },
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 50 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 50, ellipsis: true },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 20 },
-    { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
-    { title: 'Variant', dataIndex: 'variant', key: 'variant', width: 20 },
-    { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 50, render: (v, r)=> (
-      <Space size={6}>
-        <LinkCell url={v} />
-        <Button size='small' type='primary' onClick={()=> setPrintModal({ open: true, row: r })} title='Print' aria-label='Print'>🖨️</Button>
-        <Button size='small' onClick={()=> setDetailModal({ open: true, row: r })} title='View details' aria-label='View details'>👁️</Button>
-      </Space>
-    ) },
-    { title: 'Chassis', dataIndex: 'chassis', key: 'chassis', width: 20, ellipsis: false, render: (v)=> (
-      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
-    ) },
-    { title: 'Stk Status', dataIndex: 'availability', key: 'stk', width: 20, render: (v, r)=> {
-      const lbl = stockLabel(r.chassis, v);
-      return (<Tag color={stockColor(lbl)}>{lbl}</Tag>);
+    { title: 'Customer / Mobile / Model / File', key: 'customerVehicleFile', width: 240, render: (_, r) => {
+      const model = String(r.model || '').trim() || '—';
+      const variant = String(r.variant || '').trim() || '—';
+      const color = String(r.color || '').trim();
+      const modelLine = [model, variant, color].filter(Boolean).join(' || ') || '—';
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>{r.name || '—'}</div>
+          <div style={lineStyle}><Text type="secondary">{r.mobile || '—'}</Text></div>
+          <div style={smallLineStyle}>{modelLine}</div>
+          <div style={wrapLineStyle}>
+            <Space size={6} wrap>
+              <LinkCell url={r.fileUrl} />
+              <Button size='small' type='primary' onClick={()=> setPrintModal({ open: true, row: r })} title='Print' aria-label='Print'>🖨️</Button>
+              <Button size='small' onClick={()=> setDetailModal({ open: true, row: r })} title='View details' aria-label='View details'>👁️</Button>
+            </Space>
+          </div>
+        </div>
+      );
     } },
-    { title: 'Status', dataIndex: 'status', key: 'status', width: 20, render: (s)=> <Tag color={STATUS_COLOR[String(s||'').toLowerCase()] || 'default'}>{String(s||'pending').replace(/_/g,' ')}</Tag> },
-  ];
-  if (["backend","admin","owner"].includes(userRole)) {
-    columns.push({ title: 'Remarks', key: 'remarks', width: 60, render: (_, r) => {
-        const rem = remarksMap[r.bookingId];
-        const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';
+    { title: 'Chassis / Stk Status + Actions', key: 'chassisStock', width: 210, render: (_, r) => {
+      const isEditing = editingChassisId === r.bookingId;
+      if (isEditing) {
+        const options = stockOptionsForRow(r);
+        const matched = findStockMatch(r, chassisDraft);
         return (
-          <Space size={6}>
-            <Tag color={color}>{rem?.level ? rem.level.toUpperCase() : '—'}</Tag>
-            <Button size='small' onClick={()=> setRemarkModal({ open: true, refId: r.bookingId, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+          <Space direction="vertical" size={4}>
+            <Space size={6} align="center" wrap>
+              <AutoComplete
+                value={chassisDraft}
+                options={options}
+                allowClear
+                style={{ width: 200 }}
+                placeholder={stockLoading ? 'Loading stock...' : 'Type or pick chassis'}
+                disabled={chassisSaving}
+                onChange={(val) => setChassisDraft(normalizeChassis(val))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSaveChassis(r);
+                  }
+                }}
+                filterOption={(inputValue, option) =>
+                  String(option?.value || '').toLowerCase().includes(String(inputValue || '').toLowerCase()) ||
+                  String(option?.label || '').toLowerCase().includes(String(inputValue || '').toLowerCase())
+                }
+              />
+              <Button size="small" type="primary" loading={chassisSaving} onClick={() => handleSaveChassis(r)}>
+                Save
+              </Button>
+              <Button size="small" disabled={chassisSaving} onClick={cancelChassisEdit}>
+                Cancel
+              </Button>
+            </Space>
+            <Text type="secondary">
+              {matched
+                ? `In stock at ${matched.sourceBranch || matched.branch || 'branch'} - will be allotted on save.`
+                : (options.length ? 'Pick from stock to auto-allot, or type to set manually.' : 'No stock for this model in current branches; type to set manually.')}
+            </Text>
           </Space>
         );
       }
-    });
-  }
-   
-  
-  columns.push({
-      title: 'Actions', key: 'actions', width: 20,
-      render: (_, r) => (
-        <Space size={6}>
-          <Select
-            size='small'
-            defaultValue={r.status || 'pending'}
-            style={{ width: 90 }}
-            onChange={(v)=> updateBooking(r.bookingId, { status: v }, r.mobile)}
-            options={[
-              { value: 'pending', label: 'Pending' },
-              { value: 'seen', label: 'Seen' },
-              { value: 'approved', label: 'Approved' },
-              { value: 'allotted', label: 'Allotted' },
-              { value: 'cancelled', label: 'Cancelled' },
-            ]}
-          />
-          <Select
-            size='small'
-            placeholder='Quick note'
-            style={{ width: 150 }}
-            onChange={(v)=> updateBooking(r.bookingId, { status: r.status || 'seen', notes: v }, r.mobile)}
-            options={[
-              { value: 'Checked – proceed.', label: 'Checked – proceed.' },
-              { value: 'Allot vehicle.', label: 'Allot vehicle.' },
-              { value: 'Please call showroom.', label: 'Please call showroom.' },
-            ]}
-          />
-          {/* Removed per request: Mark Seen button */}
-        </Space>
-      )
-  });
+      const lbl = stockLabel(r.chassis, r.availability);
+      const statusText = String(r.status || 'pending').replace(/_/g, ' ');
+      return (
+        <div style={stackStyle}>
+          <div style={wrapLineStyle}>
+            <Space size={6} align="center" wrap>
+              <span
+                style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', cursor: 'pointer' }}
+                title="Edit chassis"
+                onClick={() => startChassisEdit(r)}
+              >
+                {r.chassis || '-'}
+              </span>
+              <Button size="small" type="link" onClick={() => startChassisEdit(r)}>
+                {r.chassis ? 'Edit' : 'Assign'}
+              </Button>
+            </Space>
+          </div>
+          <div style={wrapLineStyle}>
+            <Space size={6} wrap>
+              <Tag color={stockColor(lbl)}>{lbl}</Tag>
+              <Tag color={STATUS_COLOR[String(r.status || '').toLowerCase()] || 'default'}>{statusText}</Tag>
+            </Space>
+          </div>
+        </div>
+      );
+    } },
+  ];
 
   // Extended actions: Invoice / Insurance / RTO / Vehicle No
   columns.push({
-    title: 'More', key: 'more', width: 60,
+    title: 'More', key: 'more', width: 200,
     render: (_, r) => (
-      <Space size={6} wrap>
+      <Space direction="vertical" size={4} style={{ width: '100%' }}>
         <Select
           size='small'
           placeholder='Invoice'
-          style={{ width: 130 }}
+          style={{ width: '100%' }}
           onChange={(v)=> handleInvoiceChange(r, v)}
           options={[
             { value: 'submit_to_dealer', label: 'Submit to dealer' },
@@ -611,7 +834,7 @@ export default function Bookings() {
         <Select
           size='small'
           placeholder='Insurance'
-          style={{ width: 130 }}
+          style={{ width: '100%' }}
           onChange={(v)=> handleInsuranceChange(r, v)}
           options={[
             { value: 'sent', label: 'Sent insurance' },
@@ -621,7 +844,7 @@ export default function Bookings() {
         <Select
           size='small'
           placeholder='RTO status'
-          style={{ width: 150 }}
+          style={{ width: '100%' }}
           onChange={(v)=> handleRtoChange(r, v)}
           options={[
             { value: 'finance_otp_pending', label: 'Finance Payment pending' },
@@ -629,22 +852,24 @@ export default function Bookings() {
             { value: 'registration_done', label: 'Registration done' },
           ]}
         />
-        <Input
-          size='small'
-          placeholder='KA55HY5666'
-          style={{ width: 140 }}
-          value={vehNoDraft[r.bookingId] ?? (r.vehicleNo || '')}
-          onChange={(e)=> setVehNoDraft((m)=> ({ ...m, [r.bookingId]: normalizeVehNo(e.target.value) }))}
-          onPressEnter={()=> handleSaveVehNo(r)}
-        />
-        <Button size='small' onClick={()=> handleSaveVehNo(r)}>Save</Button>
+        <Space size={6} align="center">
+          <Input
+            size='small'
+            placeholder='KA55HY5666'
+            style={{ width: 120 }}
+            value={vehNoDraft[r.bookingId] ?? (r.vehicleNo || '')}
+            onChange={(e)=> setVehNoDraft((m)=> ({ ...m, [r.bookingId]: normalizeVehNo(e.target.value) }))}
+            onPressEnter={()=> handleSaveVehNo(r)}
+          />
+          <Button size='small' onClick={()=> handleSaveVehNo(r)}>Save</Button>
+        </Space>
       </Space>
     )
   });
 
   // Show snapshot of extended statuses
   columns.push({
-    title: 'Progress', key: 'progress', width: 80,
+    title: 'Progress', key: 'progress', width: 120,
     render: (_, r) => {
       const raw = r._raw || {};
       const inv = raw['Invoice Status'] || raw['invoiceStatus'] || r.invoiceStatus || '';
@@ -653,20 +878,68 @@ export default function Bookings() {
       const insUrl = raw['Insurance File URL'] || raw['Insurance_File_URL'] || raw['insuranceFileUrl'] || r.insuranceFileUrl || '';
       const rto = raw['RTO Status'] || raw['rtoStatus'] || r.rtoStatus || '';
       const vno = raw['Vehicle No'] || raw['Vehicle_No'] || raw['vehicleNo'] || r.vehicleNo || '';
+      const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
       return (
-        <Space size={4} wrap>
-          <Tag color='geekblue' title='Invoice'>{String(inv||'-').replace(/_/g,' ')}</Tag>
-          {invUrl ? <a href={invUrl} target="_blank" rel="noopener noreferrer">📎</a> : null}
-          <Tag color='cyan' title='Insurance'>{String(ins||'-').replace(/_/g,' ')}</Tag>
-          {insUrl ? <a href={insUrl} target="_blank" rel="noopener noreferrer">📎</a> : null}
-          <Tag title='RTO'>{String(rto||'-').replace(/_/g,' ')}</Tag>
-          <Tag title='Vehicle No'>{vno || '-'}</Tag>
-        </Space>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
+          <div style={lineStyle}>
+            <Tag color='geekblue' title='Invoice'>{String(inv||'-').replace(/_/g,' ')}</Tag>
+            {invUrl ? <a href={invUrl} target="_blank" rel="noopener noreferrer">📎</a> : null}
+          </div>
+          <div style={lineStyle}>
+            <Tag color='cyan' title='Insurance'>{String(ins||'-').replace(/_/g,' ')}</Tag>
+            {insUrl ? <a href={insUrl} target="_blank" rel="noopener noreferrer">📎</a> : null}
+          </div>
+          <div style={lineStyle}>
+            <Tag title='RTO'>{String(rto||'-').replace(/_/g,' ')}</Tag>
+          </div>
+          <div style={lineStyle}>
+            <Tag title='Vehicle No'>{vno || '-'}</Tag>
+          </div>
+        </div>
       );
     }
   });
 
-  columns.push({ title: 'Booking ID', dataIndex: 'bookingId', key: 'bookingId', width: 20, ellipsis: true });
+  const showRemarks = ["backend","admin","owner"].includes(userRole);
+
+  columns.push({
+      title: showRemarks ? 'Actions + Remarks' : 'Actions',
+      key: 'actions',
+      width: showRemarks ? 210 : 170,
+      render: (_, r) => (
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Select
+            size='small'
+            defaultValue={r.status || 'pending'}
+            style={{ width: '100%' }}
+            onChange={(v)=> updateBooking(r.bookingId, { status: v }, r.mobile)}
+            options={[
+              { value: 'pending', label: 'Pending' },
+              { value: 'seen', label: 'Seen' },
+              { value: 'approved', label: 'Approved' },
+              { value: 'allotted', label: 'Allotted' },
+              { value: 'cancelled', label: 'Cancelled' },
+            ]}
+          />
+          {/* Removed per request: Mark Seen button */}
+          {showRemarks ? (
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space size={6} wrap>
+                <Tag color={remarksMap[r.bookingId]?.level === 'alert' ? 'red' : remarksMap[r.bookingId]?.level === 'warning' ? 'gold' : remarksMap[r.bookingId]?.level === 'ok' ? 'green' : 'default'}>
+                  {remarksMap[r.bookingId]?.level ? String(remarksMap[r.bookingId].level).toUpperCase() : '—'}
+                </Tag>
+                <Button size='small' onClick={()=> setRemarkModal({ open: true, refId: r.bookingId, level: remarksMap[r.bookingId]?.level || 'ok', text: remarksMap[r.bookingId]?.text || '' })}>
+                  Remark
+                </Button>
+              </Space>
+              <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {remarksMap[r.bookingId]?.text || '—'}
+              </div>
+            </Space>
+          ) : null}
+        </Space>
+      )
+  });
   
 
   const total = USE_SERVER_PAG ? totalCount : rows.length;
@@ -725,7 +998,9 @@ export default function Bookings() {
         dataSource={visibleRows}
         columns={columns}
         loading={loading && !hasCache}
-        size={isMobile ? 'small' : 'middle'}
+        size="small"
+        className="compact-table"
+        tableLayout="fixed"
         pagination={USE_SERVER_PAG ? {
           current: page,
           pageSize,
@@ -743,7 +1018,7 @@ export default function Bookings() {
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         } : false)}
         rowKey={(r) => `${r.bookingId}-${r.mobile}-${r.ts}-${r.key}`}
-        scroll={{ x: 'max-content', y: tableHeight }}
+        scroll={{ y: tableHeight }}
       />
 
       {!USE_SERVER_PAG && renderMode==='loadMore' && visibleRows.length < filtered.length ? (
@@ -950,6 +1225,13 @@ function normalizeLink(u) {
 }
 
 // Normalize vehicle number to KA55HY5666 style: uppercase, strip non-alphanum, limit to 10
+function normalizeChassis(s) {
+  return String(s || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 20);
+}
+
 function normalizeVehNo(s) {
   return String(s || '')
     .toUpperCase()

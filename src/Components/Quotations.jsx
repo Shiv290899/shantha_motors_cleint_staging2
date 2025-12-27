@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
@@ -21,8 +21,10 @@ const HEAD = {
   model: ["Model", "Bike Model"],
   variant: ["Variant"],
   price: ["On-Road Price", "On Road Price", "Price"],
+  offerings: ["Offerings", "Remarks", "Remark", "Quotation Remarks"],
   payload: ["Payload"],
   status: ["Status", "FollowUp Status", "Quotation Status"],
+  followUpNotes: ["Follow-up Notes", "Follow Up Notes", "Followup Notes", "Notes"],
 };
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj[k] ?? "").find((v) => v !== "") || "").trim();
@@ -107,6 +109,20 @@ export default function Quotations() {
     const model = fv.bikeModel || fv.model || pick(obj, HEAD.model);
     const variant = fv.variant || pick(obj, HEAD.variant);
     const price = String(fv.onRoadPrice || pick(obj, HEAD.price) || '').trim();
+    const offerings = String(
+      fv.remarks ||
+      (payload && payload.remarks) ||
+      pick(obj, HEAD.offerings) ||
+      ''
+    ).trim();
+    const followUpNotes = String(
+      (payload && payload.followUp && payload.followUp.notes) ||
+      (payload && payload.closeNotes) ||
+      (payload && payload.followupNotes) ||
+      (payload && payload.notes) ||
+      pick(obj, HEAD.followUpNotes) ||
+      ''
+    ).trim();
     const remarkLevelRaw = (payload && payload.remark && payload.remark.level) || obj.RemarkLevel || obj.remarkLevel || '';
     const remarkTextRaw = (payload && payload.remark && payload.remark.text) || obj.RemarkText || obj.remarkText || '';
     const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
@@ -123,9 +139,11 @@ export default function Quotations() {
       model,
       variant,
       price,
+      offerings,
       mode: mode || (payload && payload.mode) || '',
       brand,
       status,
+      followUpNotes,
       RemarkLevel: remarkLevelRaw || '',
       RemarkText: remarkTextRaw || '',
       _remarkLevel: remarkLevelNorm,
@@ -270,7 +288,7 @@ export default function Quotations() {
       if (debouncedQ) {
         const s = debouncedQ.toLowerCase();
         if (![
-          r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive, r.status
+          r.name, r.mobile, r.serialNo, r.company, r.model, r.variant, r.branch, r.executive, r.status, r.followUpNotes
         ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
       }
       return true;
@@ -371,29 +389,99 @@ export default function Quotations() {
       : 'default';
   };
 
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const smallLineStyle = { ...lineStyle, fontSize: 8 };
+  const twoLineClamp = {
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: 2,
+    overflow: 'hidden',
+    whiteSpace: 'normal',
+    fontSize: 8,
+    lineHeight: 1.2,
+  };
+
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v)=> formatTs(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 50 },
-    { title: "Customer Name", dataIndex: "name", key: "name", width: 50, ellipsis: true },
-    { title: "Mobile No", dataIndex: "mobile", key: "mobile", width: 80 },
-    { title: "Status", dataIndex: "status", key: "status", width: 50, render: (v)=> <Tag color={statusColor(v)}>{String(v||'').replace(/_/g,' ')||'—'}</Tag> },
-    { title: "Model", dataIndex: "model", key: "model", width: 50 },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 50 },
-    { title: "On-Road Price", dataIndex: "price", key: "price", width: 30, align: 'right' },
-    { title: "Mode", dataIndex: "mode", key: "mode", width: 30, align: 'center', render: (v)=> String(v||'').toUpperCase() },
-    { title: "Executive", dataIndex: "executive", key: "executive", width: 30 },
-    { title: "Company", dataIndex: "company", key: "company", width: 30 },
-    { title: "Quotation No", dataIndex: "serialNo", key: "serialNo", width: 50, ellipsis: true },
+    { title: "Time / Branch", key: "timeBranch", width: 120, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{formatTs(r.ts)}</div>
+        <div style={lineStyle}><Text type="secondary">{r.branch || '—'}</Text></div>
+      </div>
+    ) },
+    { title: "Customer / Mobile", key: "customerMobile", width: 100, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.name || '—'}</div>
+        <div style={lineStyle}><Text type="secondary">{r.mobile || '—'}</Text></div>
+      </div>
+    ) },
+    
+    { title: "Offerings", key: "offerings", width: 220, render: (_, r) => {
+      const offerings = String(r.offerings || '').trim();
+      return (
+        <div style={stackStyle}>
+          {offerings ? (
+            <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{offerings}</span>} placement="topLeft">
+              <div style={twoLineClamp}>{offerings}</div>
+            </Tooltip>
+          ) : (
+            <div style={twoLineClamp}></div>
+          )}
+        </div>
+      );
+    } },
+    { title: "Status / Follow-up Notes", key: "statusNotes", width: 250, render: (_, r) => {
+      const notes = String(r.followUpNotes || '').trim();
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>
+            <Tag color={statusColor(r.status)}>{String(r.status || '').replace(/_/g, ' ') || '—'}</Tag>
+          </div>
+          {notes ? (
+            <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{notes}</span>} placement="topLeft">
+              <div style={smallLineStyle}>{notes}</div>
+            </Tooltip>
+          ) : (
+            <div style={smallLineStyle}></div>
+          )}
+        </div>
+      );
+    } },
+    { title: "Model / ORP / Mode / Executive", key: "vehicleMeta", width: 190, render: (_, r) => {
+        const model = String(r.model || '').trim();
+        const variant = String(r.variant || '').trim();
+        const modelVariant = model && variant ? `${model} || ${variant}` : (model || variant || '—');
+        const price = String(r.price || '').trim() || '—';
+        const mode = String(r.mode || '').trim();
+        const exec = String(r.executive || '').trim();
+        const metaLine = [
+          price,
+          mode ? mode.toUpperCase() : '—',
+          exec || '—',
+        ].join(' || ');
+        return (
+          <div style={stackStyle}>
+            <div style={lineStyle}>{modelVariant}</div>
+            <div style={lineStyle}>{metaLine}</div>
+          </div>
+        );
+      }
+    },
   ];
   if (["backend","admin","owner"].includes(userRole)) {
-    columns.push({ title: "Remarks", key: "remarks", width: 60, render: (_, r) => {
+    columns.push({ title: "Remarks / Remark Text", key: "remarks", width: 240, render: (_, r) => {
         const rem = remarksMap[r.serialNo];
         const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';
         return (
-          <Space size={6}>
-            <Tag color={color}>{rem?.level ? rem.level.toUpperCase() : '—'}</Tag>
-            <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.serialNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
-          </Space>
+          <div style={stackStyle}>
+            <div style={lineStyle}>
+              <Space size={6}>
+                <Tag color={color}>{rem?.level ? rem.level.toUpperCase() : '—'}</Tag>
+                <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.serialNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+              </Space>
+            </div>
+            <div style={lineStyle}>{rem?.text || '—'}</div>
+          </div>
         );
       }
     });
@@ -449,8 +537,10 @@ export default function Quotations() {
         dataSource={visibleRows}
         columns={columns}
         loading={loading && !hasCache}
-        size={isMobile ? 'small' : 'middle'}
-        scroll={{ x: 'max-content', y: tableHeight }}
+        size="small"
+        className="compact-table"
+        scroll={{ y: tableHeight }}
+        tableLayout="fixed"
         pagination={USE_SERVER_PAG ? {
           current: page,
           pageSize,

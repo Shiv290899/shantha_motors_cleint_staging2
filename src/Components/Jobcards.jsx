@@ -373,58 +373,74 @@ export default function Jobcards() {
     return () => { cancelled = true; };
   }, []);
 
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const statusColor = (v) => {
+    const s = String(v || '').toLowerCase();
+    if (s === 'completed') return 'green';
+    if (s === 'pending') return 'orange';
+    return 'default';
+  };
+  const statusLabel = (v) => {
+    const s = String(v || '').toLowerCase();
+    if (s === 'completed') return 'Completed';
+    if (s === 'pending') return 'Pending';
+    return String(v || '—') || '—';
+  };
+
   const columns = [
-    { title: "Time", dataIndex: "ts", key: "ts", width: 20, ellipsis: true, render: (v)=> formatTs(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 50 },
-    { title: "Customer Name", dataIndex: "name", key: "name", width: 50, ellipsis: true },
-    { title: "Mobile", dataIndex: "mobile", key: "mobile", width: 50 },
-    { title: "Model", dataIndex: "model", key: "model", width: 20 },
-    { title: "Service Type", dataIndex: "serviceType", key: "serviceType", width: 20, align: 'center', render: (v)=> String(v||'') },
-    { title: "Service Amount", dataIndex: "amount", key: "amount", width: 20, align: 'right' },
-    { title: "Mode of Payment", dataIndex: "paymentMode", key: "paymentMode", width: 20, align: 'center', render: (v)=> String(v||'').toUpperCase() },
-    // Status is shown only for owner/admin/backend via conditional push below; keep slot reference here
-    { title: "Executive", dataIndex: "executive", key: "executive", width: 50 },
-    { title: "Job Card", dataIndex: "jcNo", key: "jcNo", width: 20, ellipsis: true },
-    { title: "Vehicle No.", dataIndex: "regNo", key: "regNo", width: 20 },
-    { title: "Type", dataIndex: "vehicleType", key: "vehicleType", width: 20, align: 'center', render: (v)=> String(v||'') },
+    { title: "Time / Branch", key: "timeBranch", width: 90, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{formatTs(r.ts)}</div>
+        <div style={lineStyle}><Text type="secondary">{r.branch || '—'}</Text></div>
+      </div>
+    ) },
+    { title: "Customer / Mobile", key: "customerMobile", width: 100, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.name || '—'}</div>
+        <div style={lineStyle}><Text type="secondary">{r.mobile || '—'}</Text></div>
+      </div>
+    ) },
+    { title: "Service / Status", key: "serviceStatus", width: 200, render: (_, r) => {
+        const model = String(r.model || '').trim() || '—';
+        const serviceType = String(r.serviceType || '').trim() || '—';
+        const amount = String(r.amount || '').trim() || '—';
+        const paymentMode = String(r.paymentMode || '').trim();
+        const line1 = `${model} || ${serviceType} || ${amount} || ${paymentMode ? paymentMode.toUpperCase() : '—'}`;
+        const exec = String(r.executive || '').trim() || '—';
+        const reg = String(r.regNo || '').trim() || '—';
+        return (
+          <div style={stackStyle}>
+            <div style={lineStyle}>{line1}</div>
+            <div style={lineStyle}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Tag color={statusColor(r.status)}>{statusLabel(r.status)}</Tag>
+                <span>{`|| ${exec} || ${reg}`}</span>
+              </span>
+            </div>
+          </div>
+        );
+      }
+    },
   ];
   if (["backend","admin","owner"].includes(userRole)) {
-    // Insert Status column right after Mode of Payment
-    const statusColor = (v) => {
-      const s = String(v||'').toLowerCase();
-      if (s === 'completed') return 'green';
-      if (s === 'pending') return 'orange';
-      return 'default';
-    };
-    const statusLabel = (v) => {
-      const s = String(v||'').toLowerCase();
-      if (s === 'completed') return 'Completed';
-      if (s === 'pending') return 'Pending';
-      return (String(v||'') || '—');
-    };
-    const idxPayment = columns.findIndex(c => c.key === 'paymentMode');
-    if (idxPayment >= 0) {
-      columns.splice(idxPayment + 1, 0, {
-        title: "Status",
-        dataIndex: "status",
-        key: "status",
-        width: 20,
-        align: 'center',
-        render: (v) => <Tag color={statusColor(v)}>{statusLabel(v)}</Tag>,
-      });
-    }
-    columns.push({ title: "Remarks", key: "remarks", width: 60, render: (_, r) => {
+    columns.push({ title: "Remarks / Remark Text", key: "remarks", width: 250, render: (_, r) => {
         const rem = remarksMap[r.jcNo];
         const level = String(rem?.level || '').toLowerCase();
         const color = level === 'alert' ? 'red' : level === 'warning' ? 'gold' : level === 'ok' ? 'green' : 'default';
         const title = rem?.text ? rem.text : 'No remark yet';
         return (
-          <Space size={6}>
-            <Tooltip title={title}>
-              <Tag color={color}>{level ? level.toUpperCase() : '—'}</Tag>
-            </Tooltip>
-            <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
-          </Space>
+          <div style={stackStyle}>
+            <div style={lineStyle}>
+              <Space size={6}>
+                <Tooltip title={title}>
+                  <Tag color={color}>{level ? level.toUpperCase() : '—'}</Tag>
+                </Tooltip>
+                <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+              </Space>
+            </div>
+            <div style={lineStyle}>{rem?.text || '—'}</div>
+          </div>
         );
       }
     });
@@ -478,7 +494,9 @@ export default function Jobcards() {
         dataSource={visibleRows}
         columns={columns}
         loading={loading && !hasCache}
-        size={isMobile ? 'small' : 'middle'}
+        size="small"
+        className="compact-table"
+        tableLayout="fixed"
         pagination={USE_SERVER_PAG ? {
           current: page,
           pageSize,
@@ -496,7 +514,7 @@ export default function Jobcards() {
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         } : false)}
         rowKey={(r) => `${r.jcNo}-${r.mobile}-${r.ts}-${r.key}`}
-        scroll={{ x: 'max-content', y: tableHeight }}
+        scroll={{ y: tableHeight }}
       />
 
       {!USE_SERVER_PAG && renderMode==='loadMore' && visibleRows.length < filtered.length ? (

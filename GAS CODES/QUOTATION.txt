@@ -429,17 +429,26 @@ function updateFollowup_(serialNo, patch) {
   const cell = sh.getRange(targetRow, cPayload).getValue();
   const payload = safeJson_(cell, {}) || {};
   const fu = payload.followUp || {};
+  const patchObj = (patch && typeof patch === 'object') ? patch : null;
 
-  if (patch && typeof patch === 'object') {
-    if (patch.followUp && typeof patch.followUp === 'object') {
-      const src = patch.followUp;
+  if (patchObj) {
+    if (patchObj.followUp && typeof patchObj.followUp === 'object') {
+      const src = patchObj.followUp;
       if ('at' in src) fu.at = src.at;
       if ('notes' in src) fu.notes = src.notes;
       if ('assignedTo' in src) fu.assignedTo = src.assignedTo;
       if ('branch' in src) fu.branch = src.branch;
       if ('enabled' in src) fu.enabled = !!src.enabled;
+      if ('status' in src) fu.status = String(src.status || '').toLowerCase() || 'pending';
     }
-    if ('status' in patch) fu.status = String(patch.status || '').toLowerCase() || 'pending';
+    if ('status' in patchObj) fu.status = String(patchObj.status || '').toLowerCase() || 'pending';
+    if ('closeReason' in patchObj) payload.closeReason = patchObj.closeReason;
+    if ('closeNotes' in patchObj) payload.closeNotes = patchObj.closeNotes;
+    if ('closedAt' in patchObj) payload.closedAt = patchObj.closedAt;
+    if ('purchasedElsewhere' in patchObj) payload.purchasedElsewhere = patchObj.purchasedElsewhere;
+    if ('notes' in patchObj) payload.notes = patchObj.notes;
+    if ('followupNotes' in patchObj) payload.followupNotes = patchObj.followupNotes;
+    if ('remarks' in patchObj) payload.remarks = patchObj.remarks;
   }
   if (!('status' in fu)) fu.status = 'pending';
   if (!('enabled' in fu)) fu.enabled = true;

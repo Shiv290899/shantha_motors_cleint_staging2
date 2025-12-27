@@ -29,8 +29,7 @@ export default function AdminDailyCollections() {
   const [branchFilter, setBranchFilter] = useState([]); // [] = all branches
   // No date pagination/total when using ledger-only summary
   const [staffFilter, setStaffFilter] = useState([]); // [] = all
-  // Per-row/bulk action spinners
-  const [rowBusy, setRowBusy] = useState({});
+  // Bulk action spinners
   const [bulkBusyMode, setBulkBusyMode] = useState(''); // '' | 'cash' | 'online'
   // Previous due modal state
   const [prevDueOpen, setPrevDueOpen] = useState(false);
@@ -187,6 +186,23 @@ export default function AdminDailyCollections() {
   // (No DailyCollections columns in ledger-only mode)
 
   const num0 = (v) => Number(v || 0) || 0;
+  const normKey = (v) => String(v ?? '').trim().toLowerCase();
+  const rowTs = (r) => {
+    const raw = r?.dateTimeIso || r?.date;
+    const n = Number(new Date(String(raw)));
+    return Number.isFinite(n) ? n : 0;
+  };
+  const rowGroupKey = (r) => ([
+    normKey(r?.branch),
+    normKey(r?.staff),
+    normKey(r?.sourceType),
+    normKey(r?.sourceId),
+    normKey(r?.customerMobile),
+    normKey(r?.paymentMode),
+    normKey(r?.cashAmount ?? r?.cashPending),
+    normKey(r?.onlineAmount ?? r?.onlinePending),
+    normKey(r?.utr),
+  ]).join('|');
   const deriveAmounts = (row) => {
     const cashPending = num0(row?.cashPending);
     const onlinePending = num0(row?.onlinePending);
@@ -224,42 +240,61 @@ export default function AdminDailyCollections() {
       return `${y}-${m}-${day} ${hh}:${mm}`;
     } catch { return String(raw || ''); }
   };
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const mutedStyle = { ...lineStyle, opacity: 0.7 };
+
   const ledgerCols = [
-    { title:'DateTime', dataIndex:'dateTimeIso', key:'dt', render:(v,r)=> fmtLocalShort(v || r.dateTimeIso || r.date) },
-   
-    { title:'Staff', dataIndex:'staff', key:'staff' },
-    { title:'Source', key:'src', render:(_,r)=> `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}` },
-    { title:'Customer', dataIndex:'customerName', key:'cust' },
-    { title:'Mobile', dataIndex:'customerMobile', key:'mob' },
-    { title:'Mode', dataIndex:'paymentMode', key:'mode' },
-    { title:cashLabel, dataIndex:'cashPending', key:'cp', align:'right', render:(_,r)=> (getDisplayAmounts(r).cash).toLocaleString('en-IN') },
-    { title:onlineLabel, dataIndex:'onlinePending', key:'op', align:'right', render:(_,r)=> (getDisplayAmounts(r).online).toLocaleString('en-IN') },
-    { title:'UTR / Ref', dataIndex:'utr', key:'utr', render:(v, r) => {
-      // Hide undefined/null or cash-mode references
+    { title:'DateTime / Branch', key:'dt', width: 150, render:(_,r)=> (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{fmtLocalShort(r.dateTimeIso || r.date)}</div>
+        <div style={mutedStyle}>{r.branch || '—'}</div>
+      </div>
+    ) },
+    { title:'Source / Staff', key:'src', width: 180, render:(_,r)=> {
+      const source = `${String(r.sourceType||'').toUpperCase()} ${r.sourceId||''}`.trim();
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>{source || '—'}</div>
+          <div style={mutedStyle}>{r.staff || '—'}</div>
+        </div>
+      );
+    } },
+    { title:'Customer / Mobile', key:'cust', width: 170, render:(_,r)=> (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.customerName || '—'}</div>
+        <div style={mutedStyle}>{r.customerMobile || '—'}</div>
+      </div>
+    ) },
+    { title:'Mode', dataIndex:'paymentMode', key:'mode', width: 80, render:(v)=> String(v || '—').toUpperCase() },
+    { title:cashLabel, key:'cash', width: 80, align:'right', render:(_,r)=> Number(getDisplayAmounts(r).cash || 0).toLocaleString('en-IN') },
+    { title:onlineLabel, key:'online', width: 80, align:'right', render:(_,r)=> Number(getDisplayAmounts(r).online || 0).toLocaleString('en-IN') },
+    { title:'UTR / Ref', dataIndex:'utr', key:'utr', width: 120, render:(v, r) => {
       const mode = String(r?.paymentMode || '').toLowerCase();
       if (mode === 'cash') return '';
       const s = String(v ?? '').trim();
       if (!s || s.toLowerCase() === 'undefined' || s.toLowerCase() === 'null') return '';
       return s;
     } },
-    { title:'Action', key:'act', render:(_,r)=> {
+    { title:'Action', key:'act', width: 110, render:(_,r)=> {
       const canCash = Number(r.cashPending||0) > 0;
       const canOn = Number(r.onlinePending||0) > 0;
-      const busy = !!rowBusy[r.id];
-      const onClick = async (mode) => {
-        if (busy) return;
-        setRowBusy(prev => ({ ...prev, [r.id]: true }));
-        try { await settleRows([mode], [r.id]); }
-        finally { setRowBusy(prev => ({ ...prev, [r.id]: false })); }
+      const onClick = (mode) => {
+        const key = rowGroupKey(r);
+        const ids = Array.from(new Set((ledgerRows || [])
+          .filter((row) => rowGroupKey(row) === key)
+          .map((row) => row?.id)
+          .filter(Boolean)));
+        if (!ids.length) return;
+        void settleRows([mode], ids);
       };
       return (
-        <Space size={6}>
-          {canCash ? <Button size='small' loading={busy} disabled={busy} onClick={()=>onClick('cash')}>Collect</Button> : null}
-          {canOn ? <Button size='small' loading={busy} disabled={busy} onClick={()=>onClick('online')}>Verify</Button> : null}
+        <Space direction="vertical" size={4}>
+          {canCash ? <Button size='small' onClick={()=>onClick('cash')}>Collect</Button> : null}
+          {canOn ? <Button size='small' onClick={()=>onClick('online')}>Verify</Button> : null}
         </Space>
       );
     } },
-     { title:'Branch', dataIndex:'branch', key:'branch' },
   ];
 
   const prevDueCols = [
@@ -273,11 +308,22 @@ export default function AdminDailyCollections() {
 
   // Staff-wise aggregation from ledger (client-side filters for multi-select)
   const lc = (s) => String(s||'').trim().toLowerCase();
+  const ledgerRowsUnique = useMemo(() => {
+    const map = new Map();
+    (ledgerRows || []).forEach((r) => {
+      const key = rowGroupKey(r);
+      const prev = map.get(key);
+      if (!prev || rowTs(r) >= rowTs(prev)) {
+        map.set(key, r);
+      }
+    });
+    return Array.from(map.values());
+  }, [ledgerRows]);
   const staffAgg = useMemo(() => {
     const wantBranches = new Set((branchFilter||[]).map(lc));
     const wantStaffs = new Set((staffFilter||[]).map(lc));
     const groups = new Map(); // key: branch|staff -> {branch,staff,cash,online}
-    (ledgerRows||[]).forEach(r => {
+    (ledgerRowsUnique||[]).forEach(r => {
       const b = String(r.branch||'');
       const s = String(r.staff||'');
       if (wantBranches.size && !wantBranches.has(lc(b))) return;
@@ -312,21 +358,16 @@ export default function AdminDailyCollections() {
   const ledgerRowsFiltered = useMemo(() => {
     const wantBranches = new Set((branchFilter||[]).map(lc));
     const wantStaffs = new Set((staffFilter||[]).map(lc));
-    const out = (ledgerRows||[]).filter(r => {
+    const out = (ledgerRowsUnique||[]).filter(r => {
       const b = lc(r.branch);
       const s = lc(r.staff);
       if (wantBranches.size && !wantBranches.has(b)) return false;
       if (wantStaffs.size && !wantStaffs.has(s)) return false;
       return true;
     });
-    const ts = (r) => {
-      const raw = r?.dateTimeIso || r?.date;
-      const n = Number(new Date(String(raw)));
-      return Number.isFinite(n) ? n : 0;
-    };
-    out.sort((a,b) => ts(b) - ts(a)); // latest first
+    out.sort((a,b) => rowTs(b) - rowTs(a)); // latest first
     return out;
-  }, [ledgerRows, branchFilter, staffFilter]);
+  }, [ledgerRowsUnique, branchFilter, staffFilter]);
 
   const selected = useMemo(() => {
     const set = new Set(selectedKeys);
@@ -344,9 +385,39 @@ export default function AdminDailyCollections() {
     return { cash, online: on };
   }, [selectedKeys, ledgerRowsFiltered]);
 
-  const settleRows = async (modes, ids) => {
+  const settleRows = async (modes, ids, options = {}) => {
     const mode = modes.includes('cash') && modes.includes('online') ? 'both' : (modes[0] || 'both');
     if (!ids || !ids.length) return;
+    const optimistic = options.optimistic !== false;
+    const showMessage = options.showMessage !== false;
+    const modeSet = new Set(modes);
+    if (optimistic) {
+      const removedIds = new Set();
+      setLedgerRows((prev) => {
+        const nextRows = (prev || [])
+          .map((r) => {
+            if (!ids.includes(r.id)) return r;
+            const next = { ...r };
+            if (modeSet.has('cash') || modeSet.has('both')) next.cashPending = 0;
+            if (modeSet.has('online') || modeSet.has('both')) next.onlinePending = 0;
+            const amt = deriveAmounts(next);
+            if (amt.cashPending <= 0 && amt.onlinePending <= 0) {
+              removedIds.add(next.id);
+              return null;
+            }
+            return next;
+          })
+          .filter(Boolean);
+        try { localStorage.setItem(CACHE_KEY(ledgerStatus), JSON.stringify({ at: Date.now(), rows: nextRows })); } catch {
+          // ignore cache failures
+        }
+        return nextRows;
+      });
+      if (removedIds.size) {
+        setSelectedKeys((prev) => prev.filter((k) => !removedIds.has(k)));
+      }
+      setHasCache(true);
+    }
     try {
       const payload = SECRET
         ? { action:'owner_ledger_settle', mode, ids, secret: SECRET }
@@ -354,27 +425,9 @@ export default function AdminDailyCollections() {
       const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method:'POST', payload });
       const ok = (resp?.data || resp)?.success !== false;
       if (!ok) throw new Error('Failed');
-      message.success('Updated');
-      // Optimistically update or remove rows after success
-      const modeSet = new Set(modes);
-      setLedgerRows((prev) => {
-        return prev
-          .map((r) => {
-            if (!ids.includes(r.id)) return r;
-            const next = { ...r };
-            if (modeSet.has('cash') || modeSet.has('both')) next.cashPending = 0;
-            if (modeSet.has('online') || modeSet.has('both')) next.onlinePending = 0;
-            const amt = deriveAmounts(next);
-            if (amt.cashPending <= 0 && amt.onlinePending <= 0) return null; // remove row when fully settled
-            return next;
-          })
-          .filter(Boolean);
-      });
-      setSelectedKeys((prev) => prev.filter((k) => !ids.includes(k)));
-      fetchLedger();
+      if (showMessage) message.success('Updated');
     } catch {
-      message.error('Update failed');
-      fetchLedger(); // reload to correct optimistic state
+      message.error('Update failed. Refresh to sync.');
     }
   };
 
@@ -518,12 +571,13 @@ export default function AdminDailyCollections() {
           dataSource={ledgerRowsFiltered}
           columns={ledgerCols}
           loading={ledgerLoading && !hasCache}
+          size="small"
+          className="compact-table"
+          tableLayout="fixed"
           rowSelection={{
             selectedRowKeys: selectedKeys,
             onChange: setSelectedKeys
           }}
-          size={isMobile ? 'small' : 'middle'}
-          scroll={{ x: 'max-content' }}
           pagination={{ pageSize: isMobile ? 10 : 20, size: isMobile ? 'small' : 'default' }}
         />
       </>

@@ -1,5 +1,5 @@
 // FetchJobcard.jsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Modal, Input, List, Space, Spin, message, Radio } from "antd";
 import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
@@ -32,6 +32,7 @@ export default function FetchJobcard({
   setFollowUpAt,
   setFollowUpNotes,
   setPostServiceLock,
+  autoSearch,
 }) {
   const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
   const [open, setOpen] = useState(false);
@@ -222,9 +223,10 @@ export default function FetchJobcard({
   };
 
   // ---------- Fetch rows (Webhook only) ----------
-  const fetchRows = async (queryOverride) => {
+  const fetchRows = async (queryOverride, modeOverride) => {
     if (!webhookUrl) throw new Error("Webhook URL not configured");
-    const payloadMode = mode === 'vehicle' ? 'reg' : 'mobile';
+    const modeNow = modeOverride || mode;
+    const payloadMode = modeNow === 'vehicle' ? 'reg' : (modeNow === 'jc' ? 'jc' : 'mobile');
     const qStr = String(queryOverride ?? query ?? '');
     const basePayload = JOB_SECRET
       ? { action: 'search', mode: payloadMode, query: qStr, secret: JOB_SECRET }
@@ -238,7 +240,7 @@ export default function FetchJobcard({
       console.warn('Webhook search failed:', e);
     }
     // If no rows and vehicle mode, try literal "vehicle"
-    if (!rows.length && mode === 'vehicle') {
+    if (!rows.length && modeNow === 'vehicle') {
       try {
         const altPayload = JOB_SECRET
           ? { action: 'search', mode: 'vehicle', query: qStr, secret: JOB_SECRET }
@@ -446,14 +448,15 @@ export default function FetchJobcard({
   };
 
   // ---------- search ----------
-  const runSearch = async () => {
-    const raw = (query || "").trim();
+  const runSearch = async (overrideQuery, modeOverride) => {
+    const modeNow = modeOverride || mode;
+    const raw = (overrideQuery ?? query ?? "").trim();
     if (!raw) {
-      message.warning(mode === "vehicle" ? "Enter vehicle no. (KA03AB1234)" : "Enter a valid 10-digit mobile number.");
+      message.warning(modeNow === "vehicle" ? "Enter vehicle no. (KA03AB1234)" : modeNow === "jc" ? "Enter a valid Job Card number." : "Enter a valid 10-digit mobile number.");
       return;
     }
     let qNorm = raw;
-    if (mode === "vehicle") {
+    if (modeNow === "vehicle") {
       const reg = normalizeReg(raw);
       if (!VEH_RX.test(reg)) {
         message.warning("Enter vehicle no. as KA03AB1234.");
@@ -461,6 +464,9 @@ export default function FetchJobcard({
       }
       qNorm = reg;
       setQuery(reg);
+    } else if (modeNow === "jc") {
+      qNorm = raw;
+      setQuery(raw);
     } else {
       const digits = tenDigits(raw);
       if (!digits || digits.length !== 10) {
@@ -473,7 +479,7 @@ export default function FetchJobcard({
     setNotFoundText("");
     setLoading(true);
     try {
-      const result = await fetchRows(qNorm);
+      const result = await fetchRows(qNorm, modeNow);
       if (!result) throw new Error('No result');
       if (result.mode === 'webhook') {
         const rows = result.rows || [];
@@ -493,7 +499,7 @@ export default function FetchJobcard({
       }
       const rows = result.rows;
       let candidates = [];
-      if (mode === "jc") {
+      if (modeNow === "jc") {
         // exact JC match
         candidates = rows.filter((r) => pick(r, COL.JCNo) === raw);
       } else {
@@ -532,6 +538,18 @@ export default function FetchJobcard({
       setLoading(false);
     }
   };
+
+  const autoRanRef = useRef(false);
+  useEffect(() => {
+    const rawQuery = String(autoSearch?.query || "").trim();
+    if (!rawQuery || autoRanRef.current) return;
+    const nextMode = (autoSearch?.mode === "vehicle" || autoSearch?.mode === "jc") ? autoSearch.mode : "mobile";
+    autoRanRef.current = true;
+    setMode(nextMode);
+    setQuery(rawQuery);
+    setOpen(true);
+    setTimeout(() => { runSearch(rawQuery, nextMode); }, 0);
+  }, [autoSearch]);
 
   return (
     <>
@@ -581,17 +599,20 @@ export default function FetchJobcard({
           >
             <Radio.Button value="mobile">By Mobile</Radio.Button>
             <Radio.Button value="vehicle">By Vehicle No</Radio.Button>
+            <Radio.Button value="jc">By JC No</Radio.Button>
           </Radio.Group>
           <Input
-            placeholder={mode === "vehicle" ? "Enter Vehicle No (KA03AB1234)" : "Enter Mobile (10-digit)"}
+            placeholder={mode === "vehicle" ? "Enter Vehicle No (KA03AB1234)" : mode === "jc" ? "Enter JC No" : "Enter Mobile (10-digit)"}
             value={query}
-            inputMode={mode === "vehicle" ? "text" : "numeric"}
+            inputMode={mode === "vehicle" || mode === "jc" ? "text" : "numeric"}
             onChange={(e) => {
               const val = e.target.value || "";
               if (mode === "vehicle") {
                 const reg = val.toUpperCase().replace(/[^A-Z0-9]/g, "");
                 if (!isVehiclePartial(reg)) return;
                 setQuery(reg);
+              } else if (mode === "jc") {
+                setQuery(String(val || "").toUpperCase());
               } else {
                 const digits = String(val || "").replace(/\D/g, "").slice(0, 10);
                 setQuery(digits);

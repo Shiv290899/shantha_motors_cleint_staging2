@@ -26,10 +26,39 @@ img, video, canvas {
   }
 }
 
+/* Stock movements: compact table to fit one page */
+.stock-movements-table .ant-table-thead > tr > th,
+.stock-movements-table .ant-table-tbody > tr > td {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.stock-movements-table .ant-table-thead > tr > th {
+  font-weight: 600;
+}
+.stock-movements-table .ant-tag {
+  font-size: 11px;
+  line-height: 1.1;
+  padding: 0 4px;
+}
+
+/* Compact tables for quotations/jobcards/bookings/display vehicles */
+.compact-table .ant-table-thead > tr > th,
+.compact-table .ant-table-tbody > tr > td {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.compact-table .ant-table-thead > tr > th {
+  font-weight: 600;
+}
+.compact-table .ant-tag {
+  font-size: 11px;
+  line-height: 1.1;
+  padding: 0 4px;
+}
+
 /* Controls comfortable tap targets on mobile */
 @media (max-width: 480px) {
   .ant-btn, .ant-input, .ant-select-selector, .ant-input-number, .ant-segmented, .ant-radio-group {
     min-height: 36px;
   }
 }
-

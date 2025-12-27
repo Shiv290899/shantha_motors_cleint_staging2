@@ -573,6 +573,17 @@ function updateBooking_(bookingId, patch, mobileOpt) {
 
   if (patch.rtoStatus != null) cells[idx(headers, 'RTO Status')] = String(patch.rtoStatus);
 
+  const chassis = (patch.chassis != null ? patch.chassis : patch.chassisNo);
+  if (patch.chassis != null || patch.chassisNo != null) {
+    cells[idx(headers, 'Chassis Number')] = String(chassis || '');
+    const rawIdx = idx(headers, 'Raw Payload');
+    var payload = {};
+    try { payload = JSON.parse(String(cells[rawIdx] || '{}')); } catch (e) { payload = {}; }
+    payload.vehicle = payload.vehicle || {};
+    payload.vehicle.chassisNo = String(chassis || '');
+    cells[rawIdx] = JSON.stringify(payload);
+  }
+
   const vehNo = patch.vehicleNo || patch.regNo;
   if (vehNo != null) cells[idx(headers, 'Vehicle No')] = String(vehNo);
 

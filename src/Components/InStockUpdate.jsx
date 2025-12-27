@@ -265,6 +265,9 @@ export default function InStockUpdate() {
   
 
   const col = (v) => String(v || "").trim();
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere' };
+  const smallLineStyle = { ...lineStyle, fontSize: 11, color: '#475569' };
   const colorDot = (name) => {
     const n = String(name || "").toLowerCase();
     // Handle specific variants first
@@ -306,24 +309,54 @@ export default function InStockUpdate() {
   };
 
   const baseColumns = [
-    { title: "Chassis", dataIndex: "chassis", key: "chassis", width: 30, ellipsis: false, render: (v)=> (
-      <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{v || '-'}</span>
-    ) },
-    { title: "Company", dataIndex: "company", key: "company", width: 20, ellipsis: false },
-    { title: "Model", dataIndex: "model", key: "model", width: 50, ellipsis: false },
-    { title: "Variant", dataIndex: "variant", key: "variant", width: 50, ellipsis: false },
-    { title: "Color", dataIndex: "color", key: "color", width: 50, render: (v) => colorDot(v) },
-    { title: "Branch", dataIndex: "branch", key: "branch", width: 50 },
-    { title: "Status", dataIndex: "status", key: "status", width: 50, render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag> },
+    {
+      title: "Chassis + Branch",
+      key: "chassisBranch",
+      width: isMobile ? undefined : 180,
+      render: (_, r) => (
+        <div style={stackStyle}>
+          <div style={{ ...lineStyle, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{r.chassis || '-'}</div>
+          <div style={smallLineStyle}>{r.branch || '-'}</div>
+        </div>
+      )
+    },
+    {
+      title: "Company || Model + Variant || Color",
+      key: "modelVariantColor",
+      width: isMobile ? undefined : 220,
+      render: (_, r) => {
+        const company = col(r.company);
+        const model = col(r.model);
+        const variant = col(r.variant);
+        const color = col(r.color);
+        return (
+          <div style={stackStyle}>
+            <div style={lineStyle}>{[company, model].filter(Boolean).join(' || ') || '-'}</div>
+            <div style={smallLineStyle}>
+              <span>{variant || '-'}</span>
+              <span>{variant && color ? ' || ' : ''}</span>
+              {color ? colorDot(color) : '-'}
+            </div>
+          </div>
+        );
+      }
+    },
+    {
+      title: "Status",
+      dataIndex: "status",
+      key: "status",
+      width: isMobile ? undefined : 110,
+      render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag>
+    },
   ];
 
   const actionsColumn = {
     title: "Actions",
     key: "actions",
-    width: 260,
+    width: isMobile ? undefined : 140,
     fixed: isMobile ? undefined : 'right',
     render: (_, r) => (
-      <Space size="small">
+      <Space size="small" direction="vertical">
         <Button size="small" type="primary" onClick={() => {
           const pre = {
             company: r.company || '',
@@ -481,7 +514,9 @@ export default function InStockUpdate() {
         dataSource={filtered}
         columns={columns}
         loading={loading && !hasCache}
-        size={isMobile ? 'small' : 'middle'}
+        size="small"
+        className="compact-table"
+        tableLayout={isMobile ? "auto" : "fixed"}
         pagination={{
           current: page,
           pageSize,
@@ -491,7 +526,6 @@ export default function InStockUpdate() {
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
         rowKey={(r) => r.chassis || r.key}
-        scroll={{ x: 'max-content' }}
       />
 
       {/* Edit Modal (Admin/Owner) */}

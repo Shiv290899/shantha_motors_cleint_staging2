@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip, Popover } from 'antd';
-import { CheckCircleOutlined } from '@ant-design/icons';
+import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip, Popover, Card, Typography, Segmented, Badge, Divider, Avatar, Progress, Grid } from 'antd';
+import { CheckCircleOutlined, ReloadOutlined, FilterOutlined, SearchOutlined, CalendarOutlined, ShopOutlined, PhoneOutlined, FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { GetCurrentUser } from "../apiCalls/users";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
+import { useNavigate } from "react-router-dom";
+import BookingPrintQuickModal from './BookingPrintQuickModal';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -78,6 +80,40 @@ const STATUS_LABEL = {
   // 'lost' removed per request
 };
 
+const { Title, Text } = Typography;
+
+const pillBtn = {
+  height: 32,
+  padding: '0 14px',
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const softCard = {
+  borderRadius: 18,
+  border: '1px solid #eef2f7',
+  boxShadow: '0 10px 34px rgba(15, 23, 42, 0.08)',
+  background: 'linear-gradient(180deg, rgba(255,255,255,0.98), rgba(255,255,255,0.92))',
+};
+
+const softPanel = {
+  borderRadius: 16,
+  border: '1px solid #eef2f7',
+  background: 'rgba(255,255,255,0.9)',
+  boxShadow: '0 10px 26px rgba(15, 23, 42, 0.06)',
+};
+
+const kpiCard = {
+  borderRadius: 16,
+  border: '1px solid #eef2f7',
+  background: 'rgba(255,255,255,0.92)',
+  boxShadow: '0 8px 22px rgba(15, 23, 42, 0.05)',
+};
+
+const kpiNum = { fontSize: 22, fontWeight: 800, lineHeight: 1 };
+const kpiLabel = { fontSize: 11, color: '#64748b', marginTop: 6 };
+
 /**
  * FollowUps list component
  * Props:
@@ -85,17 +121,20 @@ const STATUS_LABEL = {
  * - webhookUrl: GAS URL for the selected mode
  */
 export default function FollowUps({ mode = 'quotation', webhookUrl }) {
+  const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = useState(false);
-  const [rows, setRows] = useState([]);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
+  const [allRows, setAllRows] = useState([]);
   const [hasCache, setHasCache] = useState(false);
   const [filter, setFilter] = useState('all'); // today | overdue | upcoming | all
   // Show follow-ups based on Branch only (not executive)
   // Set to false so we never filter by executive name
   const [mineOnly,] = useState(false);
   const [branchOnly, setBranchOnly] = useState(true);
-  // pagination (controlled to allow changing page size)
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10); // target: 10 rows per page for snappy loads
+  // Fetch all rows in one go for staff follow-ups
+  const LIST_PAGE_SIZE = 10000;
   // Jobcard-only status filter: all | pending | completed
   const [jobStatus, setJobStatus] = useState('all');
   // Jobcard: always show every row for the branch (no completed toggle)
@@ -106,8 +145,15 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
 
   const [reschedule, setReschedule] = useState({ open: false, serial: null, at: null, notes: '' });
   const [closing, setClosing] = useState({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
- 
-  // No inline actions/modal for Jobcard follow-ups as requested
+  const [closingSaving, setClosingSaving] = useState(false);
+  const [printModal, setPrintModal] = useState({ open: false, row: null });
+  const [q, setQ] = useState('');
+  const [dateRange, setDateRange] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
+  const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
+  // Jobcard follow-ups now include a Post Service action
 
   useEffect(() => {
     (async () => {
@@ -155,19 +201,35 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     return await saveBookingViaWebhook({ webhookUrl, method, payload });
   };
 
-  // Cache key (tab + filters + pagination + branch)
+  // Cache key (tab + filters + branch)
   const cacheKey = React.useMemo(() => {
     const keyObj = {
       mode: modeKey,
       filter,
       branchOnly,
       jobStatus,
-      page,
-      pageSize,
       branch: me?.branch || '',
     };
     return `FollowUps:${JSON.stringify(keyObj)}`;
-  }, [modeKey, filter, branchOnly, jobStatus, page, pageSize, me?.branch]);
+  }, [modeKey, filter, branchOnly, jobStatus, me?.branch]);
+
+  const toDayjs = (v) => {
+    if (!v) return null;
+    if (dayjs.isDayjs(v)) return v;
+    const d = dayjs(v);
+    return d.isValid() ? d : null;
+  };
+
+  const hydrateCachedRows = (rows = []) => rows.map((r) => {
+    const followUpAt = toDayjs(r.followUpAt);
+    const dateAt = toDayjs(r.dateAt);
+    return {
+      ...r,
+      followUpAt,
+      dateAt,
+      sortAtMs: r.sortAtMs || (dateAt ? dateAt.valueOf() : 0),
+    };
+  });
 
   // Seed from cache for instant tab switch
   useEffect(() => {
@@ -176,7 +238,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       if (!raw) { setHasCache(false); return; }
       const cached = JSON.parse(raw);
       if (cached && Array.isArray(cached.rows)) {
-        setRows(cached.rows);
+        setAllRows(hydrateCachedRows(cached.rows));
+        if (cached.at) setLastRefreshedAt(dayjs(cached.at));
         setHasCache(true);
       } else { setHasCache(false); }
     } catch { setHasCache(false); }
@@ -280,7 +343,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     try {
       if (!webhookUrl) {
         // Optional: if webhook not configured, show empty list gracefully
-        setRows([]);
+        setAllRows([]);
         setLoading(false);
         message.info('Follow-ups webhook not configured.');
         return;
@@ -293,7 +356,9 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         // Branch-wise followups for Booking too (do not filter by executive)
         const meBranch = (me.branch || allowedBranches[0] || '');
         const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
-        const base = BOOKING_SECRET ? { action: 'list', page, pageSize, secret: BOOKING_SECRET } : { action: 'list', page, pageSize };
+        const base = BOOKING_SECRET
+          ? { action: 'list', page: 1, pageSize: LIST_PAGE_SIZE, secret: BOOKING_SECRET }
+          : { action: 'list', page: 1, pageSize: LIST_PAGE_SIZE };
         return shouldRestrict ? { ...base, branch: meBranch } : base;
       })() : (() => {
         // Jobcard: fetch full list for the branch, not just followups
@@ -302,8 +367,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         return {
           action: 'list',
           branch: shouldRestrict ? meBranch : '',
-          page,
-          pageSize,
+          page: 1,
+          pageSize: LIST_PAGE_SIZE,
         };
       })();
       let resp = await callWebhook({ method: 'GET', payload }).catch(() => null);
@@ -397,11 +462,11 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           // quotation
           return fv.serialNo || p.serialNo || values['Quotation No.'] || values['Quotation No'] || values['Serial'] || '-';
         })();
-        const vehicle = [
-          p.company || fv.company || values.Company,
-          p.model || fv.bikeModel || fv.model || values.Model,
-          p.variant || fv.variant || values.Variant,
-        ].filter(Boolean).join(' ');
+        const company = p.company || fv.company || values.Company || '';
+        const model = p.model || p.vehicle?.model || fv.bikeModel || fv.model || values.Model || '';
+        const variant = p.variant || p.vehicle?.variant || fv.variant || values.Variant || '';
+        const color = p.color || p.vehicle?.color || fv.color || values.Color || values.Colour || values['Vehicle Color'] || values['Vehicle Colour'] || '';
+        const vehicle = [company, model, variant].filter(Boolean).join(' ');
         // Prefer trimmed branch for display; filtering uses `norm`
         const branchDisp = (fv.branch || p.branch || values.Branch || values['Branch Name'] || '-');
         // Determine post-service completion for jobcard
@@ -456,6 +521,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         return {
           key: serial || i,
           serialNo: serial || '-',
+          bookingId: isBooking && serial && serial !== '-' ? serial : '',
           name: fv.custName || fv.name || values.Customer_Name || values['Customer Name'] || values.Customer || values.Name || '-',
           mobile: fv.custMobile || fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
           vehicle,
@@ -464,8 +530,16 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           followUpAt: fu.at ? dayjs(fu.at) : null,
           dateAt: fallbackFuAt || savedAt || null,
           sortAtMs,
-          // Make notes resilient to varying key names from webhook/sheet
-          followUpNotes: fu.notes || p.notes || p.closeNotes || fv.remarks || p.remarks || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Notes'] || '',
+          // Follow-up notes only (do not fall back to remarks)
+          followUpNotes: (
+            fu.notes ??
+            p.followupNotes ??
+            p.followUpNotes ??
+            values['Follow-up Notes'] ??
+            values['Follow Up Notes'] ??
+            values['Followup Notes'] ??
+            ''
+          ),
           closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
           // For jobcard: force 'pending' until post-serviced; once post-serviced, we will hide it
           status: isJobcard ? (postServiced ? 'completed' : 'pending') : (() => {
@@ -477,7 +551,9 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           remarks: fv.remarks || p.remarks || values.Remarks || values.remarks || '',
           jcNo: fv.jcNo || p.jcNo || values['JC No'] || values['JC No.'] || values['Job Card No'] || serial || '-',
           regNo: fv.regNo || values['Vehicle No'] || values['Vehicle_No'] || '',
-          model: fv.model || values.Model || '',
+          model,
+          variant,
+          color,
           amount: fv.amount || values['Collected Amount'] || values.Amount || 0,
           availability: values['Chassis Availability'] || values['Availability'] || values['Stock'] || values['Stock Status'] || (p?.vehicle?.availability || fv?.vehicle?.availability || ''),
           fileUrl: pickFileUrl(p, values),
@@ -497,11 +573,6 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         }
         return arr;
       })() : items.filter((it) => {
-        // For quotation follow-ups, hide rows that are marked done/closed (non-pending)
-        if (!isJobcard && !isBooking) {
-          const st = String(it.status || '').toLowerCase();
-          if (st && st !== 'pending') return false;
-        }
         const itB = norm(it.branch);
         const meB = norm(me.branch || allowedBranches[0] || '');
 
@@ -522,18 +593,21 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         if (filter === 'upcoming') return d.isAfter(endToday);
         return true;
       });
-      // Always show most recent follow-ups first by scheduled time
+      const statusRank = (s) => (String(s || '').toLowerCase() === 'pending' ? 0 : 1);
+      // Pending first, then others; most recent first within each group
       filtered.sort((a, b) => {
+        const ra = statusRank(a.status);
+        const rb = statusRank(b.status);
+        if (ra !== rb) return ra - rb;
         const tb = Number(b.sortAtMs || 0);
         const ta = Number(a.sortAtMs || 0);
         return tb - ta;
       });
-      setRows(filtered);
+      setAllRows(filtered);
+      setLastRefreshedAt(dayjs());
       try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filtered })); } catch {
         //bgahdh
       }
-      //dkl
-      setPage(1); // reset to first page after refresh/filters
     } catch (e) {
       console.warn('followups fetch failed', e);
       message.error('Could not fetch follow-ups. Check the Apps Script.');
@@ -567,207 +641,622 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         const n = withBranch.followUp.notes;
         withBranch.notes = withBranch.notes ?? n;           // top-level alias
         withBranch.followupNotes = withBranch.followupNotes ?? n; // alt key
-        withBranch.remarks = withBranch.remarks ?? n;       // some sheets store as remarks
       }
       if (withBranch?.closeNotes) {
         const cn = withBranch.closeNotes;
         withBranch.notes = withBranch.notes ?? cn;
         withBranch.followupNotes = withBranch.followupNotes ?? cn;
-        withBranch.remarks = withBranch.remarks ?? cn;
       }
       const resp = await callWebhook({ method: 'POST', payload: { action: 'updateFollowup', serialNo, patch: withBranch } });
       const j = resp?.data || resp;
       if (!j?.success) throw new Error('Failed');
       message.success('Updated');
-      fetchFollowUps();
+      await fetchFollowUps();
+      return true;
     } catch  {
       message.error('Update failed');
+      return false;
     }
   };
 
-  // Render up to 3 lines for Notes with CSS line clamp
-  const clamp3 = (text) => (
-    <span
-      style={{
-        display: '-webkit-box',
-        WebkitBoxOrient: 'vertical',
-        WebkitLineClamp: 3,
-        overflow: 'hidden',
-        whiteSpace: 'normal',
-      }}
-    >
-      {String(text || '')}
-    </span>
+  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YY-MM-DD HH:mm') : '—';
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: isMobile ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: isMobile ? 'clip' : 'ellipsis' };
+  const smallLineStyle = { ...lineStyle, fontSize: isMobile ? 11 : 10 };
+  const twoLineClamp = {
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: isMobile ? 4 : 3,
+    overflow: 'hidden',
+    whiteSpace: 'normal',
+    fontSize: isMobile ? 9 : 8,
+    lineHeight: 1,
+  };
+
+  const filteredRows = React.useMemo(() => {
+    let next = Array.isArray(allRows) ? allRows.slice() : [];
+
+    // Date range filter (uses follow-up date when available, else saved date)
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      const start = dateRange[0].startOf('day');
+      const end = dateRange[1].endOf('day');
+      next = next.filter((r) => {
+        const d = r.followUpAt || r.dateAt;
+        if (!d || !d.isValid || !d.isValid()) return false;
+        return !d.isBefore(start) && !d.isAfter(end);
+      });
+    }
+
+    const needle = String(q || '').trim().toLowerCase();
+    if (needle) {
+      next = next.filter((r) => {
+        const parts = [
+          r.serialNo,
+          r.bookingId,
+          r.jcNo,
+          r.name,
+          r.mobile,
+          r.branch,
+          r.executive,
+          r.vehicle,
+          r.model,
+          r.variant,
+          r.color,
+          r.regNo,
+          r.status,
+          r.remarks,
+          r.followUpNotes,
+          r.closeReason,
+        ];
+        const hay = parts.filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(needle);
+      });
+    }
+
+    return next;
+  }, [allRows, dateRange, q]);
+
+  const summary = React.useMemo(() => {
+  const rows = Array.isArray(filteredRows) ? filteredRows : [];
+  const total = rows.length;
+
+  const statusOf = (r) => String(r?.status || '').toLowerCase();
+
+  // Pending = only pending
+  const pending = rows.filter(r => statusOf(r) === 'pending').length;
+
+  // Completed = everything NOT pending
+  // (converted, completed, not_interested, unreachable, etc.)
+  const completed = rows.filter(r => statusOf(r) !== 'pending').length;
+
+  return {
+    total,
+    pending,
+    completed,
+    other: 0,
+  };
+}, [filteredRows]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [q, dateRange, filter, jobStatus, branchOnly, mode]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+    if (page > maxPage) setPage(1);
+  }, [filteredRows.length, page, pageSize]);
+
+  const controlWidth = isMobile ? '100%' : undefined;
+  const kpiPad = isMobile ? 10 : 12;
+  const kpiMin = isMobile ? 110 : 120;
+  const kpiWideMin = isMobile ? 160 : 180;
+  const kpiNumStyle = isMobile ? { ...kpiNum, fontSize: 18 } : kpiNum;
+  const kpiLabelStyle = isMobile ? { ...kpiLabel, fontSize: 10 } : kpiLabel;
+
+  const openPostService = (row) => {
+    const mobile = String(row?.mobile || '').replace(/\D/g, '').slice(-10);
+    const jcNo = String(row?.jcNo || row?.serialNo || '').trim();
+    const params = new URLSearchParams();
+    params.set('autoFetch', '1');
+    if (mobile) {
+      params.set('mode', 'mobile');
+      params.set('query', mobile);
+    } else if (jcNo) {
+      params.set('mode', 'jc');
+      params.set('query', jcNo);
+    }
+    if (jcNo) params.set('jcNo', jcNo);
+    const qs = params.toString();
+    navigate(qs ? `/jobcard?${qs}` : '/jobcard');
+  };
+
+  const statusTagStyle = { fontSize: isMobile ? 9 : 10, lineHeight: '1.1', marginRight: 0 };
+  const actionBtnStyle = { height: isMobile ? 22 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12, fontWeight: 700 };
+  const actionBtnSecondaryStyle = { height: isMobile ? 22 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12 };
+  const iconBtnStyle = { height: isMobile ? 20 : 18, padding: '0 6px', fontSize: isMobile ? 11 : 10 };
+
+  const renderJobcardStatusActions = (r) => {
+    const isPending = String(r.status || '').toLowerCase() === 'pending';
+    const miniStack = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.1 };
+    return (
+      <div style={miniStack}>
+        <Tooltip title={r.closeReason || r.followUpNotes || ''}>
+          <Tag color={STATUS_COLOR[r.status] || 'default'} style={statusTagStyle}>
+            {STATUS_LABEL[r.status] || r.status}
+          </Tag>
+        </Tooltip>
+        {isPending ? (
+          <Button
+            size="small"
+            type="primary"
+            icon={<PhoneOutlined />}
+            style={actionBtnStyle}
+            onClick={() => openPostService(r)}
+          >
+            Post Service
+          </Button>
+        ) : (
+          <span style={{ fontSize: 10, color: '#999' }}>—</span>
+        )}
+      </div>
+    );
+  };
+
+  const renderQuotationStatusActions = (r) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.1 }}>
+      <Tooltip title={r.closeReason || r.followUpNotes || ''}>
+        <Tag color={STATUS_COLOR[r.status] || 'default'} style={statusTagStyle}>
+          {STATUS_LABEL[r.status] || r.status}
+        </Tag>
+      </Tooltip>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <Tooltip title="Mark done/converted with reason">
+          <Button
+            size="small"
+            type="primary"
+            icon={<CheckCircleOutlined />}
+            style={actionBtnStyle}
+            onClick={() => setClosing({ open: true, serial: r.serialNo, status: 'converted', reason: '', notes: '' })}
+          >
+            Done
+          </Button>
+        </Tooltip>
+        <Button
+          size="small"
+          style={actionBtnSecondaryStyle}
+          onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}
+        >
+          Reschedule
+        </Button>
+      </div>
+    </div>
   );
 
-  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YY-MM-DD HH:mm') : '—';
+  const renderBookingInvoiceInsurance = (r) => {
+    const vals = r.values || {};
+    const inv = vals['Invoice Status'] || vals['Invoice_Status'] || vals['invoiceStatus'] || (r.payload?.invoiceStatus) || '';
+    const invUrl = vals['Invoice File URL'] || vals['Invoice_File_URL'] || vals['invoiceFileUrl'] || (r.payload?.invoiceFileUrl) || '';
+    const ins = vals['Insurance Status'] || vals['Insurance_Status'] || vals['insuranceStatus'] || (r.payload?.insuranceStatus) || '';
+    const insUrl = vals['Insurance File URL'] || vals['Insurance_File_URL'] || vals['insuranceFileUrl'] || (r.payload?.insuranceFileUrl) || '';
+    return (
+      <div style={stackStyle}>
+        <div style={lineStyle}>
+          <Tag color="geekblue">{String(inv || '-').replace(/_/g, ' ')}</Tag>
+          {invUrl ? <a href={invUrl} target="_blank" rel="noopener noreferrer">📎</a> : null}
+        </div>
+        <div style={lineStyle}>
+          <Tag color="cyan">{String(ins || '-').replace(/_/g, ' ')}</Tag>
+          {insUrl ? <a href={insUrl} target="_blank" rel="noopener noreferrer">📎</a> : null}
+        </div>
+      </div>
+    );
+  };
 
-  const columns = isJobcard ? [
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width:80, render: (_, r) => fmt(r.dateAt) },
-    { title: 'Vehicle No.', dataIndex: 'regNo', key: 'regNo', width: 80 },
-    { title: 'Model', dataIndex: 'model', key: 'model', width: 20 },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 20 },
-    { title: 'Status', dataIndex: 'status',width: 20, key: 'status', render: (_, r) => (
-      <Tooltip title={r.closeReason || r.followUpNotes || ''}>
-        <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
-      </Tooltip>
+  const renderBookingRtoVehicle = (r) => {
+    const vals = r.values || {};
+    const rto = vals['RTO Status'] || vals['RTO_Status'] || vals['rtoStatus'] || (r.payload?.rtoStatus) || '';
+    const reg = r.regNo || vals['Vehicle No'] || vals['Vehicle_No'] || vals['vehicleNo'] || (r.payload?.vehicleNo) || '';
+    return (
+      <div style={stackStyle}>
+        <div style={lineStyle}><Tag>{String(rto || '-').replace(/_/g, ' ')}</Tag></div>
+        <div style={lineStyle}><Tag>{reg || '-'}</Tag></div>
+      </div>
+    );
+  };
+
+  const renderBookingStatusFile = (r) => (
+    <div style={stackStyle}>
+      <div style={lineStyle}>
+        <Tooltip title={r.followUpNotes || ''}>
+          <Tag color={STATUS_COLOR[r.status] || 'default'} style={statusTagStyle}>
+            {STATUS_LABEL[r.status] || r.status}
+          </Tag>
+        </Tooltip>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        <LinkCell url={r.fileUrl} />
+        <Button
+          size="small"
+          style={iconBtnStyle}
+          title="Print booking"
+          aria-label="Print booking"
+          onClick={() => {
+            if (!r.bookingId) {
+              message.warning('Booking ID missing for print');
+              return;
+            }
+            setPrintModal({ open: true, row: r });
+          }}
+        >
+          🖨️
+        </Button>
+      </div>
+    </div>
+  );
+
+  const columnsDesktop = isJobcard ? [
+    { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{fmt(r.dateAt)}</div>
+        <div style={smallLineStyle}>{r.branch || '—'}</div>
+      </div>
     ) },
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 20 },
+    { title: 'Customer / Mobile', key: 'customerMobile', width: 140, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.name || '—'}</div>
+        <div style={smallLineStyle}>{r.mobile || '—'}</div>
+      </div>
+    ) },
+    { title: 'Model / Vehicle No', key: 'modelVehicle', width: 140, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.model || '—'}</div>
+        <div style={smallLineStyle}>{r.regNo || '—'}</div>
+      </div>
+    ) },
+    { title: 'Status + Actions', key: 'statusActions', width: 150, render: (_, r) => renderJobcardStatusActions(r) },
   ] : (isBooking ? [
-
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 80, render: (_, r) => fmt(r.dateAt) },
-    { title: 'Customer', dataIndex: 'name', key: 'name', width: 50 },
-    { title: 'Mobile', dataIndex: 'mobile', key: 'mobile', width: 50 },
-    { title: 'Vehicle', dataIndex: 'vehicle', key: 'vehicle', width: 50, ellipsis: true },
-    { title: 'File', dataIndex: 'fileUrl', key: 'file', width: 40, render: (v)=> <LinkCell url={v} /> },
-    { title: 'Availability', dataIndex: 'availability', key: 'availability', width: 50 },
-    // Extended booking progress
-    { title: 'Invoice', key: 'invoice', width: 50, render: (_, r) => {
-      const v = (() => {
-        const vals = r.values || {};
-        return vals['Invoice Status'] || vals['Invoice_Status'] || vals['invoiceStatus'] || (r.payload?.invoiceStatus) || '';
-      })();
-      const url = (() => {
-        const vals = r.values || {};
-        return vals['Invoice File URL'] || vals['Invoice_File_URL'] || vals['invoiceFileUrl'] || (r.payload?.invoiceFileUrl) || '';
-      })();
-      return (
-        <Space size={4}>
-          <Tag>{String(v || '-').replace(/_/g,' ')}</Tag>
-          {url ? <a href={url} target="_blank" rel="noopener noreferrer">📎</a> : null}
-        </Space>
-      );
-    } },
-    { title: 'Insurance', key: 'insurance', width: 60, render: (_, r) => {
-      const v = (() => {
-        const vals = r.values || {};
-        return vals['Insurance Status'] || vals['Insurance_Status'] || vals['insuranceStatus'] || (r.payload?.insuranceStatus) || '';
-      })();
-      const url = (() => {
-        const vals = r.values || {};
-        return vals['Insurance File URL'] || vals['Insurance_File_URL'] || vals['insuranceFileUrl'] || (r.payload?.insuranceFileUrl) || '';
-      })();
-      return (
-        <Space size={4}>
-          <Tag>{String(v || '-').replace(/_/g,' ')}</Tag>
-          {url ? <a href={url} target="_blank" rel="noopener noreferrer">📎</a> : null}
-        </Space>
-      );
-    } },
-    { title: 'RTO', key: 'rto', width: 50, render: (_, r) => {
-      const vals = r.values || {};
-      const v = vals['RTO Status'] || vals['RTO_Status'] || vals['rtoStatus'] || (r.payload?.rtoStatus) || '';
-      return <Tag>{String(v || '-').replace(/_/g,' ')}</Tag>;
-    } },
-    { title: 'Vehicle No', key: 'vehno', dataIndex: 'regNo', width: 50, render: (v, r) => {
-      const vals = r.values || {};
-      const reg = v || vals['Vehicle No'] || vals['Vehicle_No'] || vals['vehicleNo'] || (r.payload?.vehicleNo) || '';
-      return reg || '-';
-    } },
-    { title: 'Status', dataIndex: 'status',width: 50, key: 'status', render: (_, r) => (
-      <Tooltip title={r.followUpNotes || ''}>
-        <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
-      </Tooltip>
+    { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{fmt(r.dateAt)}</div>
+        <div style={smallLineStyle}>{r.branch || '—'}</div>
+      </div>
     ) },
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 50 },
-    
+    { title: 'Customer / Mobile', key: 'customerMobile', width: 140, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.name || '—'}</div>
+        <div style={smallLineStyle}>{r.mobile || '—'}</div>
+      </div>
+    ) },
+    { title: 'Model / Variant || Color', key: 'modelVariantColor', width: 160, render: (_, r) => {
+      const model = String(r.model || '').trim();
+      const variant = String(r.variant || '').trim();
+      const color = String(r.color || '').trim();
+      return (
+        <div style={stackStyle}>
+          <div style={smallLineStyle}>{[model, variant].filter(Boolean).join(' || ') || '—'}</div>
+          <div style={smallLineStyle}>{color || '—'}</div>
+        </div>
+      );
+    } },
+    { title: 'Invoice + Insurance', key: 'invoiceInsurance', width: 140, render: (_, r) => renderBookingInvoiceInsurance(r) },
+    { title: 'RTO + Vehicle No', key: 'rtoVehicle', width: 140, render: (_, r) => renderBookingRtoVehicle(r) },
+    { title: 'Status + File', key: 'statusFile', width: 170, render: (_, r) => renderBookingStatusFile(r) },
   ] : [
-    // Quotation ordering: Quotation_ID, Customer, Mobile, Notes, Status, Actions, Remarks
-    // Use nowrap titles to keep headers on a single line
-    
-    { title: 'Date', dataIndex: 'dateAt', key: 'date', width: 120, render: (_, r) => fmt(r.dateAt) },
-    { title: (<span style={{ whiteSpace: 'nowrap' }}>Customer</span>), dataIndex: 'name', key: 'name', width: 180, align: 'left' },
-    { title: (<span style={{ whiteSpace: 'nowrap' }}>Mobile</span>), dataIndex: 'mobile', key: 'mobile', width: 140, align: 'left' },
-    { title: (<span style={{ whiteSpace: 'nowrap' }}>Notes</span>), dataIndex: 'followUpNotes', key: 'followUpNotes', width: 180, align: 'left', render: (v) => (
-      <Tooltip title={String(v || '').trim() || undefined}>
-        {clamp3(v)}
-      </Tooltip>
+    { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{fmt(r.dateAt)}</div>
+        <div style={smallLineStyle}>{r.branch || '—'}</div>
+      </div>
     ) },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (_, r) => (
-      <Tooltip title={r.closeReason || r.followUpNotes || ''}>
-        <Tag color={STATUS_COLOR[r.status] || 'default'}>{STATUS_LABEL[r.status] || r.status}</Tag>
-      </Tooltip>
+    { title: 'Customer / Mobile', key: 'customerMobile', width: 140, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.name || '—'}</div>
+        <div style={smallLineStyle}>{r.mobile || '—'}</div>
+      </div>
     ) },
-    {
-      title: 'Actions', key: 'actions',
-      render: (_, r) => (
-        <Space>
-          <Tooltip title="Mark done/converted with reason">
-            <Button size="small" type="primary" icon={<CheckCircleOutlined />} onClick={() => setClosing({ open: true, serial: r.serialNo, status: 'converted', reason: '', notes: '' })}>
-              Done
-            </Button>
-          </Tooltip>
-          <Button size="small" onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}>Reschedule</Button>
-        </Space>
-      ),
-    },
-   
-    { title: 'Branch', dataIndex: 'branch', key: 'branch', width: 160 },
-    { title: (<span style={{ whiteSpace: 'nowrap' }}>Quotation ID</span>), dataIndex: 'serialNo', key: 'serialNo', width: 160, align: 'left' },
+    { title: 'Offerings', key: 'remarks', width: 190, render: (_, r) => {
+      const remarks = String(r.remarks || '').trim();
+      return (
+        <Tooltip title={remarks || undefined}>
+          <div style={twoLineClamp}>{remarks || ''}</div>
+        </Tooltip>
+      );
+    } },
+    { title: 'Status + Actions', key: 'statusActions', width: 170, render: (_, r) => renderQuotationStatusActions(r) },
+    { title: 'Follow-up Notes', key: 'followUpNotes', width: 170, render: (_, r) => {
+      const notes = String(r.followUpNotes || '').trim();
+      return notes ? (
+        <Tooltip title={notes}>
+          <div style={twoLineClamp}>{notes}</div>
+        </Tooltip>
+      ) : (
+        <div style={twoLineClamp}></div>
+      );
+    } },
   ]);
+
+  const columnsMobile = isJobcard ? [
+    { title: 'Details', key: 'details', render: (_, r) => {
+      const dateBranch = [fmt(r.dateAt), r.branch || '—'].filter(Boolean).join(' | ');
+      const custMobile = [r.name || '—', r.mobile || '—'].filter(Boolean).join(' | ');
+      const modelReg = [r.model || '—', r.regNo || '—'].filter(Boolean).join(' || ');
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>{dateBranch || '—'}</div>
+          <div style={smallLineStyle}>{custMobile || '—'}</div>
+          <div style={smallLineStyle}>{modelReg || '—'}</div>
+        </div>
+      );
+    } },
+    { title: 'Status', key: 'statusActions', render: (_, r) => renderJobcardStatusActions(r) },
+  ] : (isBooking ? [
+    { title: 'Details', key: 'details', render: (_, r) => {
+      const dateBranch = [fmt(r.dateAt), r.branch || '—'].filter(Boolean).join(' | ');
+      const custMobile = [r.name || '—', r.mobile || '—'].filter(Boolean).join(' | ');
+      const model = String(r.model || '').trim();
+      const variant = String(r.variant || '').trim();
+      const color = String(r.color || '').trim();
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>{dateBranch || '—'}</div>
+          <div style={smallLineStyle}>{custMobile || '—'}</div>
+          <div style={smallLineStyle}>{[model, variant].filter(Boolean).join(' || ') || '—'}</div>
+          <div style={smallLineStyle}>{color || '—'}</div>
+        </div>
+      );
+    } },
+    { title: 'Docs / Status', key: 'docsStatus', render: (_, r) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {renderBookingInvoiceInsurance(r)}
+        {renderBookingRtoVehicle(r)}
+        {renderBookingStatusFile(r)}
+      </div>
+    ) },
+  ] : [
+    { title: 'Details', key: 'details', render: (_, r) => {
+      const dateBranch = [fmt(r.dateAt), r.branch || '—'].filter(Boolean).join(' | ');
+      const custMobile = [r.name || '—', r.mobile || '—'].filter(Boolean).join(' | ');
+      const remarks = String(r.remarks || '').trim();
+      const notes = String(r.followUpNotes || '').trim();
+      return (
+        <div style={stackStyle}>
+          <div style={lineStyle}>{dateBranch || '—'}</div>
+          <div style={smallLineStyle}>{custMobile || '—'}</div>
+          {remarks ? (
+            <div style={twoLineClamp}><span style={{ color: '#64748b' }}>Offer: </span>{remarks}</div>
+          ) : (
+            <div style={twoLineClamp}></div>
+          )}
+          {notes ? (
+            <div style={twoLineClamp}><span style={{ color: '#64748b' }}>Notes: </span>{notes}</div>
+          ) : (
+            <div style={twoLineClamp}></div>
+          )}
+        </div>
+      );
+    } },
+    { title: 'Status', key: 'statusActions', render: (_, r) => renderQuotationStatusActions(r) },
+  ]);
+
+  const columns = isMobile ? columnsMobile : columnsDesktop;
 
   return (
     <ErrorBoundary>
-      <div>
-      <Space style={{ marginBottom: 24 }} wrap>
-        {!isJobcard && (
-          <Select
-            value={filter}
-            onChange={setFilter}
-            style={{ minWidth: 130 }}
-            options={[
-              { value: 'all', label: 'All' },
-              { value: 'today', label: 'Due Today' },
-              { value: 'overdue', label: 'Overdue' },
-              { value: 'upcoming', label: 'Upcoming' },
-            ]}
-          />
-        )}
-        {isJobcard && (
-          <Select
-            value={jobStatus}
-            onChange={setJobStatus}
-            style={{ minWidth: 140 }}
-            options={[
-              { value: 'all', label: 'All statuses' },
-              { value: 'pending', label: 'Pending' },
-              { value: 'completed', label: 'Completed' },
-            ]}
-          />
-        )}
-        {/* Only admins/owners can switch branch scope; staff locked to own branch */}
-        {['owner','admin'].includes(userRole) && (
-          <Select
-            value={branchOnly ? 'mybranch' : 'all'}
-            onChange={(v)=>setBranchOnly(v==='mybranch')}
-            options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
-          />
-        )}
-        {/* Jobcard: we always show every row for the branch; no completed toggle */}
-        <Button onClick={fetchFollowUps} loading={loading}>Refresh</Button>
-      </Space>
+      <div className="fu-bg">
+        <style>{`
+          .fu-bg {
+            background:
+              radial-gradient(1200px 600px at 10% 0%, rgba(99, 102, 241, 0.14), transparent 55%),
+              radial-gradient(1000px 520px at 90% 5%, rgba(34, 197, 94, 0.12), transparent 55%),
+              radial-gradient(900px 480px at 50% 100%, rgba(250, 140, 22, 0.10), transparent 60%),
+              linear-gradient(180deg, rgba(248,250,252,0.95), rgba(255,255,255,0.86));
+            border-radius: 18px;
+            padding: 14px;
+          }
+          .row-pending td { background: rgba(250, 140, 22, 0.09) !important; }
+          .compact-table { border-radius: 16px; overflow: hidden; }
+          .compact-table .ant-table { border-radius: 16px; }
+          .compact-table .ant-table-thead > tr > th {
+            background: rgba(255,255,255,0.92);
+            backdrop-filter: blur(8px);
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            font-weight: 700;
+            color: #0f172a;
+            border-bottom: 1px solid #eef2f7;
+          }
+          .compact-table .ant-table-tbody > tr:hover > td {
+            background: rgba(99, 102, 241, 0.06) !important;
+          }
+          .compact-table .ant-pagination {
+            padding: 10px 12px;
+            margin: 0;
+            background: rgba(255,255,255,0.88);
+            border-top: 1px solid #eef2f7;
+          }
+          .fu-pill-input .ant-input-affix-wrapper {
+            border-radius: 999px !important;
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.06);
+          }
+          .fu-seg .ant-segmented {
+            border-radius: 999px;
+            padding: 4px;
+            background: rgba(255,255,255,0.86);
+            box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05);
+          }
+          .fu-seg .ant-segmented-item {
+            border-radius: 999px !important;
+            font-weight: 600;
+          }
+        `}</style>
+        <Card style={softCard} bodyStyle={{ padding: isMobile ? 12 : 16 }}>
+          <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'flex-start', justifyContent: isMobile ? 'flex-start' : 'space-between', gap: 14, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>
+            {/* Left: identity */}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', minWidth: isMobile ? '100%' : 260, width: isMobile ? '100%' : undefined }}>
+              <Avatar size={isMobile ? 36 : 44} style={{ background: '#111827' }}>
+                {(String(me?.name || 'S').trim()[0] || 'S').toUpperCase()}
+              </Avatar>
+              <div>
+                <Title level={isMobile ? 5 : 4} style={{ margin: 0, lineHeight: 1.15 }}>
+                  {isJobcard ? 'Job Card Follow-Ups' : (isBooking ? 'Booking Follow-Ups' : 'Quotation Follow-Ups')}
+                </Title>
+                <div style={{ marginTop: 6, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Tag icon={<ShopOutlined />} style={{ borderRadius: 999, marginRight: 0 }}>
+                    {me?.branch || allowedBranches?.[0] || '—'}
+                  </Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    <CalendarOutlined />{' '}
+                    Last refresh: <b>{lastRefreshedAt ? lastRefreshedAt.format('DD MMM, HH:mm') : '—'}</b>
+                  </Text>
+                </div>
+              </div>
+            </div>
 
-      <Table
-        rowKey={(r)=>String(r.key)}
-        dataSource={rows}
-        columns={columns}
-        loading={loading && !hasCache}
-        size="small"
-        tableLayout="fixed"
-        pagination={{
-          current: page,
-          pageSize,
-          showSizeChanger: true,
-          pageSizeOptions: ['10','25','50','100'],
-          onChange: (p, ps) => {
-            setPage(p);
-            if (ps !== pageSize) setPageSize(ps);
-          },
-          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
-        }}
-        scroll={{ x: true }}
-      />
+            {/* Middle: KPIs */}
+            <div style={{ display: 'flex', gap: 10, alignItems: 'stretch', flexWrap: 'wrap', width: isMobile ? '100%' : undefined }}>
+              <Card size="small" style={kpiCard} bodyStyle={{ padding: kpiPad, minWidth: kpiMin }}>
+                <div style={kpiNumStyle}>{summary.total}</div>
+                <div style={kpiLabelStyle}><FileTextOutlined /> Total</div>
+              </Card>
+              <Card size="small" style={kpiCard} bodyStyle={{ padding: kpiPad, minWidth: kpiMin }}>
+                <div style={{ ...kpiNumStyle, color: '#fa8c16' }}>{summary.pending}</div>
+                <div style={kpiLabelStyle}><ThunderboltOutlined /> Pending</div>
+              </Card>
+              {isJobcard ? (
+                <Card size="small" style={kpiCard} bodyStyle={{ padding: kpiPad, minWidth: kpiMin }}>
+                  <div style={{ ...kpiNumStyle, color: '#52c41a' }}>{summary.completed}</div>
+                  <div style={kpiLabelStyle}><CheckCircleOutlined /> Completed</div>
+                </Card>
+              ) : null}
+
+              <Card size="small" style={kpiCard} bodyStyle={{ padding: kpiPad, minWidth: kpiWideMin }}>
+                <Text type="secondary" style={{ fontSize: isMobile ? 10 : 11 }}>Completion</Text>
+                <Progress
+                  percent={summary.total ? Math.round((summary.completed / summary.total) * 100) : 0}
+                  size="small"
+                  status="active"
+                  showInfo
+                />
+              </Card>
+            </div>
+
+            {/* Right: controls */}
+            <div style={{ flex: 1, minWidth: isMobile ? '100%' : 320 }}>
+              <div style={{ display: 'flex', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
+                <Space wrap={!isMobile} direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
+                  {!isJobcard ? (
+                    <div className="fu-seg" style={{ display: 'flex', alignItems: 'center', gap: 8, width: controlWidth, flexWrap: 'wrap' }}>
+                      <FilterOutlined style={{ color: '#64748b' }} />
+                      <Segmented
+                        value={filter}
+                        onChange={setFilter}
+                        block={isMobile}
+                        size={isMobile ? 'small' : 'middle'}
+                        options={[
+                          { label: 'All', value: 'all' },
+                          { label: 'Due Today', value: 'today' },
+                          { label: 'Overdue', value: 'overdue' },
+                          { label: 'Upcoming', value: 'upcoming' },
+                        ]}
+                      />
+                    </div>
+                  ) : (
+                    <Select
+                      value={jobStatus}
+                      onChange={setJobStatus}
+                      style={{ minWidth: isMobile ? '100%' : 180, width: controlWidth }}
+                      options={[
+                        { value: 'all', label: 'All statuses' },
+                        { value: 'pending', label: 'Pending' },
+                        { value: 'completed', label: 'Completed' },
+                      ]}
+                    />
+                  )}
+
+                  <DatePicker.RangePicker
+                    value={dateRange}
+                    onChange={(v) => setDateRange(v)}
+                    allowClear
+                    size={isMobile ? 'small' : 'middle'}
+                    style={{ width: controlWidth }}
+                  />
+
+                  <div className="fu-pill-input" style={{ width: controlWidth }}>
+                    <Input
+                      allowClear
+                      prefix={<SearchOutlined />}
+                      placeholder="Search name / mobile / model / notes"
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      size={isMobile ? 'small' : 'middle'}
+                      style={{ width: isMobile ? '100%' : 280 }}
+                    />
+                  </div>
+
+                  {['owner','admin'].includes(userRole) && (
+                    <Select
+                      value={branchOnly ? 'mybranch' : 'all'}
+                      onChange={(v)=>setBranchOnly(v==='mybranch')}
+                      options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
+                      style={{ minWidth: isMobile ? '100%' : 150, width: controlWidth }}
+                    />
+                  )}
+
+                  <Button
+                    onClick={fetchFollowUps}
+                    loading={loading}
+                    icon={<ReloadOutlined />}
+                    type="primary"
+                    style={isMobile ? { ...pillBtn, width: '100%' } : pillBtn}
+                  >
+                    Refresh
+                  </Button>
+                </Space>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <div style={{ height: 12 }} />
+
+        <Card style={softPanel} bodyStyle={{ padding: 0 }}>
+          <Table
+            rowKey={(r)=>String(r.key)}
+            dataSource={filteredRows}
+            columns={columns}
+            loading={loading && !hasCache}
+            size="small"
+            sticky={!isMobile}
+            tableLayout={isMobile ? 'auto' : 'fixed'}
+            className="compact-table"
+            rowClassName={(r) => {
+              const s = String(r.status || '').toLowerCase();
+              return s === 'pending' ? 'row-pending' : '';
+            }}
+            locale={{
+              emptyText: (
+                <div style={{ padding: 26, textAlign: 'center' }}>
+                  <div style={{ fontSize: 18, marginBottom: 6 }}>No follow-ups found</div>
+                  <div style={{ color: '#64748b' }}>Try changing filters, date range, or search.</div>
+                </div>
+              )
+            }}
+            pagination={{
+              current: page,
+              pageSize,
+              total: filteredRows.length,
+              showSizeChanger: !isMobile,
+              simple: isMobile,
+              size: isMobile ? 'small' : 'default',
+              pageSizeOptions: ['10','20','50','100','200'],
+              onChange: (p, ps) => {
+                setPage(p);
+                setPageSize(ps);
+              },
+            }}
+          />
+        </Card>
 
       {/* No jobcard inline actions/modal */}
 
@@ -789,22 +1278,39 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       <Modal
         title={`Mark Done – ${closing.serial || ''}`}
         open={closing.open}
-        onCancel={() => setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' })}
+        confirmLoading={closingSaving}
+        maskClosable={!closingSaving}
+        keyboard={!closingSaving}
+        closable={!closingSaving}
+        cancelButtonProps={{ disabled: closingSaving }}
+        okButtonProps={{ disabled: closingSaving }}
+        onCancel={() => closingSaving ? null : setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' })}
         onOk={async () => {
-          const patch = {
-            status: closing.status || 'converted',
-            closeReason: closing.status || 'converted',
-            closeNotes: closing.details || '',
-            closedAt: new Date().toISOString(),
-          };
-          if (closing.status === 'purchased_elsewhere') {
-            patch.purchasedElsewhere = {
-              boughtFrom: closing.boughtFrom || '',
-              offer: closing.offer || '',
+          if (closingSaving) return;
+          setClosingSaving(true);
+          try {
+            const patch = {
+              status: closing.status || 'converted',
+              closeReason: closing.status || 'converted',
+              closeNotes: closing.details || '',
+              closedAt: new Date().toISOString(),
             };
+            if (String(closing.details || '').trim()) {
+              patch.followUp = { notes: closing.details };
+            }
+            if (closing.status === 'purchased_elsewhere') {
+              patch.purchasedElsewhere = {
+                boughtFrom: closing.boughtFrom || '',
+                offer: closing.offer || '',
+              };
+            }
+            const ok = await updateFollowUp(closing.serial, patch);
+            if (ok) {
+              setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
+            }
+          } finally {
+            setClosingSaving(false);
           }
-          await updateFollowUp(closing.serial, patch);
-          setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
@@ -817,17 +1323,34 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
               { value: 'not_interested', label: 'Not Interested' },
               { value: 'unreachable', label: 'Unreachable' },
               { value: 'purchased_elsewhere', label: 'Purchased SomeWhereElse' },
-
             ]}
           />
-          {closing.status === 'purchased_elsewhere' && (
-            <>
-              <Input placeholder="Bought From" value={closing.boughtFrom} onChange={(e)=>setClosing(s=>({...s, boughtFrom:e.target.value}))} />
-               </>
-          )}
+          {closing.status === 'purchased_elsewhere' ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Input
+                placeholder="Bought from (dealer name)"
+                value={closing.boughtFrom}
+                onChange={(e)=>setClosing(s=>({...s, boughtFrom: e.target.value}))}
+              />
+              <Input
+                placeholder="Offer / price"
+                value={closing.offer}
+                onChange={(e)=>setClosing(s=>({...s, offer: e.target.value}))}
+              />
+            </div>
+          ) : null}
           <Input.TextArea rows={2} placeholder="Notes" value={closing.details} onChange={(e)=>setClosing(s=>({...s, details:e.target.value}))} />
         </Space>
       </Modal>
+      {isBooking && (
+        <BookingPrintQuickModal
+          open={printModal.open}
+          onClose={() => setPrintModal({ open: false, row: null })}
+          row={printModal.row}
+          webhookUrl={webhookUrl}
+          secret={BOOKING_SECRET}
+        />
+      )}
       </div>
     </ErrorBoundary>
   );

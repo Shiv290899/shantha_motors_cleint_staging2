@@ -553,6 +553,33 @@ export default function JobCard({ initialValues = null } = {}) {
     }
   }, [location?.search]);
 
+  const autoFetch = useMemo(() => {
+    try {
+      const search = location?.search || "";
+      if (!search) return null;
+      const params = new URLSearchParams(search);
+      const flag = params.get("autoFetch") || params.get("fetch");
+      if (!flag) return null;
+      const query =
+        params.get("query") ||
+        params.get("mobile") ||
+        params.get("custMobile") ||
+        params.get("jcNo") ||
+        params.get("jc") ||
+        "";
+      if (!String(query || "").trim()) return null;
+      let mode = params.get("mode") || "";
+      if (!mode) {
+        if (params.get("jcNo") || params.get("jc")) mode = "jc";
+        else if (params.get("vehicle") || params.get("reg")) mode = "vehicle";
+        else mode = "mobile";
+      }
+      return { mode, query };
+    } catch {
+      return null;
+    }
+  }, [location?.search]);
+
   // Apply external initial values (when rendered in a modal)
   useEffect(() => {
     const sourceInit = initialValues || initialFromQuery;
@@ -1297,6 +1324,7 @@ export default function JobCard({ initialValues = null } = {}) {
                 setFollowUpAt={setFollowUpAt}
                 setFollowUpNotes={setFollowUpNotes}
                 setPostServiceLock={setPostServiceLock}
+                autoSearch={autoFetch}
               />
             </div>
           </div>
