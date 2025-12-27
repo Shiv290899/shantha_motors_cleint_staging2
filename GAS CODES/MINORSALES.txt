@@ -413,7 +413,7 @@ function doPost(e) {
       // Don't break main response if DailyCollections fails
     }
 
-    return out({ success: true, inserted: rows.length, orderId: orderId }, 200);
+    return out({ success: true, inserted: items.length, orderId: orderId }, 200);
   } catch (err) {
     return out({ success: false, error: String(err && err.message || err) }, 500);
   }

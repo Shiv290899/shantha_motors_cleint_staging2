@@ -9,7 +9,7 @@ import { exportToCsv } from "../utils/csvExport";
 import { normalizeKey, uniqCaseInsensitive, toKeySet } from "../utils/caseInsensitive";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbyImL9EFtRT7DBis6GtPnGdT5wi39lTl5y-sew09VC7aDL2GM6mikKwLDrrUekZIcC2pw/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwiVdyRFjlmXAS64E_8ePJId-ElT_BtOt47uPzNOTCyOll-GmLNCqutTFPwzYapH224VQ/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 

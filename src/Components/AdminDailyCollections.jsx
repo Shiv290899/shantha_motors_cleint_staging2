@@ -10,7 +10,7 @@ const { Text } = Typography;
 export default function AdminDailyCollections() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbyImL9EFtRT7DBis6GtPnGdT5wi39lTl5y-sew09VC7aDL2GM6mikKwLDrrUekZIcC2pw/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwiVdyRFjlmXAS64E_8ePJId-ElT_BtOt47uPzNOTCyOll-GmLNCqutTFPwzYapH224VQ/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
   const readUser = () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } };

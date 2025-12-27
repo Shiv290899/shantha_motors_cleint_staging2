@@ -661,26 +661,41 @@ function getServiceHistory_(params){
   return { success:true, rows: matches };
 }
 
-/** Upsert by mobile (latest row). */
+/** Upsert by JC No (fallback to mobile if JC is missing). */
 function upsertByMobile_(d){
   const s = sh_();
   ensureCoreOptionalCols_(s);
   let ix = headerIx_(s);
 
   const fvIncoming = d.formValues || {};
+  const jcIncoming = String(
+    d.jcNo ||
+    fvIncoming.jcNo ||
+    (d.payload && d.payload.formValues && d.payload.formValues.jcNo) ||
+    ''
+  ).trim();
   const mobile10 = ten_(d.mobile || fvIncoming.custMobile);
-  if (!mobile10 || ix.idxMobile < 0) {
-    return insertNew_(d);
-  }
   const last = s.getLastRow();
   let hitRow = -1;
   let existingRow = null;
   if (last > 1) {
     const rows = s.getRange(2,1,last-1,ix.width).getValues();
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const m = ten_(rows[i][ix.idxMobile]);
-      if (m === mobile10) { hitRow = i + 2; existingRow = rows[i]; break; }
+    if (jcIncoming && ix.idxJC >= 0) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const jc = String(rows[i][ix.idxJC] || '').trim();
+        if (jc && jc === jcIncoming) { hitRow = i + 2; existingRow = rows[i]; break; }
+      }
     }
+    if (hitRow < 0 && !jcIncoming && mobile10 && ix.idxMobile >= 0) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const m = ten_(rows[i][ix.idxMobile]);
+        if (m === mobile10) { hitRow = i + 2; existingRow = rows[i]; break; }
+      }
+    }
+  }
+
+  if (hitRow < 0) {
+    return insertNew_(Object.assign({}, d, { formValues: fvIncoming, payload: d.payload || d }), mobile10);
   }
 
   const existingPayload = (existingRow && ix.idxPayloads.length) ? safeJson_(existingRow[ix.idxPayloads[0]]) : null;
@@ -698,40 +713,36 @@ function upsertByMobile_(d){
   const postAt = (mergedPayload && mergedPayload.postServiceAt) ? mergedPayload.postServiceAt : (d?.payload?.postServiceAt || '');
   const utr = String(d && (d.utr || d.utrNo || (d.payload && (d.payload.utr || d.payload.utrNo)) || '')).trim();
 
-  if (hitRow > 0) {
-    const row = s.getRange(hitRow,1,1,ix.width).getValues()[0];
+  const row = s.getRange(hitRow,1,1,ix.width).getValues()[0];
 
-    put(row, ix.idxTime, new Date());
-    put(row, ix.idxName, fv.custName);
-    put(row, ix.idxMobile, mobile10);
-    put(row, ix.idxAmount, (d.collectedAmount != null ? d.collectedAmount : fv.amount));
-    put(row, ix.idxReg, fv.regNo);
-    put(row, ix.idxSvc, fv.serviceType);
-    put(row, ix.idxBranch, fv.branch);
-    put(row, ix.idxObs, fv.obs);
-    put(row, ix.idxExp, fv.expectedDelivery);
-    put(row, ix.idxPayment, (d.paymentMode != null ? d.paymentMode : fv.paymentMode));
+  put(row, ix.idxTime, new Date());
+  put(row, ix.idxName, fv.custName);
+  put(row, ix.idxMobile, mobile10);
+  put(row, ix.idxAmount, (d.collectedAmount != null ? d.collectedAmount : fv.amount));
+  put(row, ix.idxReg, fv.regNo);
+  put(row, ix.idxSvc, fv.serviceType);
+  put(row, ix.idxBranch, fv.branch);
+  put(row, ix.idxObs, fv.obs);
+  put(row, ix.idxExp, fv.expectedDelivery);
+  put(row, ix.idxPayment, (d.paymentMode != null ? d.paymentMode : fv.paymentMode));
 
-    put(row, ix.idxExecutive2, fv.executive);
-    put(row, ix.idxMechanic, fv.mechanic);
-    put(row, ix.idxModel, fv.model);
-    put(row, ix.idxColour, fv.colour);
-    put(row, ix.idxKM, digits(fv.km));
-    put(row, ix.idxFuel, fv.fuelLevel);
-    put(row, ix.idxVehType, fv.vehicleType);
+  put(row, ix.idxExecutive2, fv.executive);
+  put(row, ix.idxMechanic, fv.mechanic);
+  put(row, ix.idxModel, fv.model);
+  put(row, ix.idxColour, fv.colour);
+  put(row, ix.idxKM, digits(fv.km));
+  put(row, ix.idxFuel, fv.fuelLevel);
+  put(row, ix.idxVehType, fv.vehicleType);
 
-    put(row, ix.idxPostAt, postAt);
-    put(row, ix.idxUTR, utr);
+  put(row, ix.idxPostAt, postAt);
+  put(row, ix.idxUTR, utr);
 
-    if (ix.idxJC >= 0 && (d.jcNo || fv.jcNo)) row[ix.idxJC] = (d.jcNo || fv.jcNo);
+  if (ix.idxJC >= 0 && (d.jcNo || fv.jcNo)) row[ix.idxJC] = (d.jcNo || fv.jcNo);
 
-    if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(mergedPayload);
+  if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(mergedPayload);
 
-    s.getRange(hitRow,1,1,ix.width).setValues([row]);
-    return { success:true, upsert:true, updated:true, row: hitRow };
-  }
-
-  return insertNew_(Object.assign({}, d, { formValues: fv, payload: mergedPayload }), mobile10);
+  s.getRange(hitRow,1,1,ix.width).setValues([row]);
+  return { success:true, upsert:true, updated:true, row: hitRow };
 }
 
 function insertNew_(d, mobileCanonical){
@@ -795,13 +806,24 @@ function findExistingRowFull_(mobile10, jcNo){
     if (last <= 1) return null;
 
     const rows = s.getRange(2,1,last-1,ix.width).getValues();
-    for (let i = rows.length - 1; i >= 0; i--){
-      const r = rows[i];
-      const m = ten_(r[ix.idxMobile]);
-      const jc = String(r[ix.idxJC] || '').trim();
-      if ((mobile10 && m === mobile10) || (jcNo && jc === jcNo)){
-        const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
-        return { rowIndex: i+2, rowValues: r, payload, ix };
+    if (jcNo && ix.idxJC >= 0) {
+      for (let i = rows.length - 1; i >= 0; i--){
+        const r = rows[i];
+        const jc = String(r[ix.idxJC] || '').trim();
+        if (jc && jc === jcNo){
+          const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
+          return { rowIndex: i+2, rowValues: r, payload, ix };
+        }
+      }
+    }
+    if (mobile10 && ix.idxMobile >= 0) {
+      for (let i = rows.length - 1; i >= 0; i--){
+        const r = rows[i];
+        const m = ten_(r[ix.idxMobile]);
+        if (m === mobile10){
+          const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
+          return { rowIndex: i+2, rowValues: r, payload, ix };
+        }
       }
     }
     return null;
@@ -818,13 +840,18 @@ function findExistingBranchExec_(mobile10, jcNo) {
 
     const rows = s.getRange(2,1,last-1,ix.width).getValues();
     let hit = -1;
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const r = rows[i];
-      const m = String(r[ix.idxMobile] || '').replace(/\D/g,'').slice(-10);
-      const jc = String(r[ix.idxJC] || '').trim();
-      if ((mobile10 && m === mobile10) || (jcNo && jc === jcNo)) { 
-        hit = i; 
-        break; 
+    if (jcNo && ix.idxJC >= 0) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        const jc = String(r[ix.idxJC] || '').trim();
+        if (jc && jc === jcNo) { hit = i; break; }
+      }
+    }
+    if (hit < 0 && mobile10 && ix.idxMobile >= 0) {
+      for (let i = rows.length - 1; i >= 0; i--) {
+        const r = rows[i];
+        const m = String(r[ix.idxMobile] || '').replace(/\D/g,'').slice(-10);
+        if (m === mobile10) { hit = i; break; }
       }
     }
     if (hit < 0) return { branch: '', executive: '' };
