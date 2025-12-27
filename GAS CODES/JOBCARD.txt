@@ -2013,6 +2013,28 @@ function staffLedgerAppendFromDailyUpdate_(branch, staff, amount, type, opt){
   }catch(err){ return { error: String(err) }; }
 }
 
+function staffLedgerRowKey_(row, I){
+  const norm = (v) => String(v || '').trim().toLowerCase();
+  const cell = (idx) => (idx >= 0 ? row[idx] : '');
+  return [
+    norm(cell(I.Branch)),
+    norm(cell(I.Staff)),
+    norm(cell(I.SrcType)),
+    norm(cell(I.SrcId)),
+    norm(cell(I.CustMobile)),
+    norm(cell(I.PayMode)),
+    norm(cell(I.Cash)),
+    norm(cell(I.Online)),
+    norm(cell(I.UTR))
+  ].join('|');
+}
+
+function staffLedgerRowTs_(row, I){
+  const raw = (I.DateTimeISO >= 0 ? row[I.DateTimeISO] : (I.Date >= 0 ? row[I.Date] : ''));
+  const t = raw instanceof Date ? raw.getTime() : (new Date(String(raw))).getTime();
+  return isFinite(t) ? t : 0;
+}
+
 function staffLedgerSummary_(branch, staff){
   const b = String(branch||'').trim().toLowerCase();
   const s = String(staff||'').trim().toLowerCase();
@@ -2022,7 +2044,8 @@ function staffLedgerSummary_(branch, staff){
   const last = sh.getLastRow();
   if (last <= 1) return { success:true, data: { branch:branch, staff:staff, cashPending:0, onlinePending:0, totalPending:0 } };
   const rows = sh.getRange(2,1,last-1,I.width).getValues();
-  let c=0,o=0; let lastSettledAt = '';
+  const groups = {};
+  let lastSettledAt = '';
   for (let i=0;i<rows.length;i++){
     const r = rows[i];
     if (String(r[I.Branch]||'').trim().toLowerCase() !== b) continue;
@@ -2031,11 +2054,24 @@ function staffLedgerSummary_(branch, staff){
     const onAmt = Number(r[I.Online]||0)||0;
     const sc = Number(r[I.SCash]||0)||0;
     const so = Number(r[I.SOnline]||0)||0;
-    const cp = Math.max(0, cashAmt - sc);
-    const op = Math.max(0, onAmt - so);
-    if (cp>0 || op>0){ c += cp; o += op; }
+    const key = staffLedgerRowKey_(r, I);
+    const g = groups[key];
+    if (!g) {
+      groups[key] = { cashAmt, onAmt, scMax: sc, soMax: so };
+    } else {
+      g.scMax = Math.max(g.scMax, sc);
+      g.soMax = Math.max(g.soMax, so);
+    }
     const sat = r[I.SAt];
     if (sat) { const t = (sat instanceof Date) ? sat.getTime() : (new Date(String(sat))).getTime(); if (isFinite(t)) lastSettledAt = String(sat); }
+  }
+  let c=0,o=0;
+  const keys = Object.keys(groups);
+  for (let i=0;i<keys.length;i++){
+    const g = groups[keys[i]];
+    const cp = Math.max(0, g.cashAmt - g.scMax);
+    const op = Math.max(0, g.onAmt - g.soMax);
+    if (cp>0 || op>0){ c += cp; o += op; }
   }
   const prevDueRow = staffPrevDueFetch_(branch, staff);
   const prevDueAmt = dcToNum_(prevDueRow && prevDueRow.amount);
@@ -2064,6 +2100,7 @@ function staffLedgerTransactions_(branch, staff, mode){
   const out = [];
   if (last > 1){
     const rows = sh.getRange(2,1,last-1,I.width).getValues();
+    const groups = {};
     for (let i=0;i<rows.length;i++){
       const r = rows[i];
       if (String(r[I.Branch]||'').trim().toLowerCase() !== bKey) continue;
@@ -2072,12 +2109,27 @@ function staffLedgerTransactions_(branch, staff, mode){
       const onAmt = Number(r[I.Online]||0)||0;
       const sc = Number(r[I.SCash]||0)||0;
       const so = Number(r[I.SOnline]||0)||0;
-      const cp = Math.max(0, cashAmt - sc);
-      const op = Math.max(0, onAmt - so);
+      const key = staffLedgerRowKey_(r, I);
+      const ts = staffLedgerRowTs_(r, I);
+      const g = groups[key];
+      if (!g) {
+        groups[key] = { row: r, ts, cashAmt, onAmt, scMax: sc, soMax: so };
+      } else {
+        g.scMax = Math.max(g.scMax, sc);
+        g.soMax = Math.max(g.soMax, so);
+        if (ts >= g.ts) { g.row = r; g.ts = ts; }
+      }
+    }
+    const keys = Object.keys(groups);
+    for (let i=0;i<keys.length;i++){
+      const g = groups[keys[i]];
+      const cp = Math.max(0, g.cashAmt - g.scMax);
+      const op = Math.max(0, g.onAmt - g.soMax);
       const totalPend = cp + op;
       if (!(totalPend>0)) continue;
       if (m==='cash' && !(cp>0)) continue;
       if (m==='online' && !(op>0)) continue;
+      const r = g.row;
       out.push({
         dateTimeIso: r[I.DateTimeISO],
         date: r[I.Date],

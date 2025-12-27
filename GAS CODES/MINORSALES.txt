@@ -150,9 +150,14 @@ function updateDailyCollection_(branch, staff, amount, type, opt) {
   // cash / online split (can be 0)
   const cashInc   = dcToNum_(opt && opt.cashCollected);
   const onlineInc = dcToNum_(opt && opt.onlineCollected);
+  const sourceId = opt && opt.sourceId ? String(opt.sourceId) : '';
 
   if (!b || !s || !(amt > 0)) {
     return { success:false, message:'missing branch/staff or amount<=0' };
+  }
+
+  if (sourceId && staffLedgerHasSourceId_(b, s, type, sourceId)) {
+    return { success:true, skipped:true, reason:'duplicate sourceId' };
   }
 
   const sh = dcGetSheet_();
@@ -566,6 +571,29 @@ function appendStaffLedgerTransaction_(rowObj){
   try { put(I.Raw, JSON.stringify(rowObj.rawPayload || {})); } catch(_){ put(I.Raw, ''); }
   sh.appendRow(row);
   return { row: sh.getLastRow() };
+}
+
+function staffLedgerHasSourceId_(branch, staff, sourceType, sourceId){
+  const bKey = String(branch || '').trim().toLowerCase();
+  const sKey = String(staff || '').trim().toLowerCase();
+  const tKey = String(sourceType || '').trim().toLowerCase();
+  const idKey = String(sourceId || '').trim().toLowerCase();
+  if (!bKey || !sKey || !tKey || !idKey) return false;
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return false;
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (String(r[I.Branch]||'').trim().toLowerCase() !== bKey) continue;
+    if (String(r[I.Staff]||'').trim().toLowerCase() !== sKey) continue;
+    if (String(r[I.SrcType]||'').trim().toLowerCase() !== tKey) continue;
+    if (String(r[I.SrcId]||'').trim().toLowerCase() !== idKey) continue;
+    return true;
+  }
+  return false;
 }
 
 function staffLedgerAppendFromDailyUpdate_(branch, staff, amount, type, opt){

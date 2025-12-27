@@ -7,7 +7,7 @@ const { Text } = Typography;
 export default function StaffAccountCard() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbyImL9EFtRT7DBis6GtPnGdT5wi39lTl5y-sew09VC7aDL2GM6mikKwLDrrUekZIcC2pw/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 

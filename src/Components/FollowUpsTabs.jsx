@@ -14,7 +14,7 @@ export default function FollowUpsTabs() {
   const DEFAULT_QUOT_URL =
     'https://script.google.com/macros/s/AKfycbxXtfRVEFeaKu10ijzfQdOVlgkZWyH1q1t4zS3PHTX9rQQ7ztRJdpFV5svk98eUs3UXuw/exec';
   const DEFAULT_JC_URL =
-    'https://script.google.com/macros/s/AKfycbwX0-KYGAGl7Gte4f_rF8OfnimU7T5WetLIv6gba_o7-kOOjzgOM3JnsHkoqrDJK83GCQ/exec';
+    'https://script.google.com/macros/s/AKfycbyImL9EFtRT7DBis6GtPnGdT5wi39lTl5y-sew09VC7aDL2GM6mikKwLDrrUekZIcC2pw/exec';
   const QUOT_URL = import.meta.env.VITE_QUOTATION_GAS_URL || DEFAULT_QUOT_URL;
   const JC_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const DEFAULT_BOOKING_URL =
