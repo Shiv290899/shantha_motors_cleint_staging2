@@ -447,10 +447,20 @@ export default function FetchJobcard({
     }
   };
 
+  const applyMatch = (item) => {
+    const isPayload = item && item.formValues;
+    if (isPayload) applyPayloadToForm(item);
+    else applyRowToForm(item);
+  };
+
   // ---------- search ----------
   const runSearch = async (overrideQuery, modeOverride) => {
     const modeNow = modeOverride || mode;
-    const raw = (overrideQuery ?? query ?? "").trim();
+    const rawOverride =
+      typeof overrideQuery === "string" || typeof overrideQuery === "number"
+        ? String(overrideQuery)
+        : undefined;
+    const raw = (rawOverride ?? query ?? "").trim();
     if (!raw) {
       message.warning(modeNow === "vehicle" ? "Enter vehicle no. (KA03AB1234)" : modeNow === "jc" ? "Enter a valid Job Card number." : "Enter a valid 10-digit mobile number.");
       return;
@@ -584,7 +594,7 @@ export default function FetchJobcard({
           >
             Close
           </Button>,
-          <Button key="search" type="primary" loading={loading} onClick={runSearch}>
+          <Button key="search" type="primary" loading={loading} onClick={() => runSearch()}>
             Search
           </Button>,
         ]}
@@ -618,7 +628,7 @@ export default function FetchJobcard({
                 setQuery(digits);
               }
             }}
-            onPressEnter={runSearch}
+            onPressEnter={() => runSearch()}
             allowClear
           />
 
@@ -648,8 +658,21 @@ export default function FetchJobcard({
                 const ts = isPayload ? (fv.expectedDelivery || '-') : (parseTimestamp(item).format("DD/MM/YYYY HH:mm"));
                 return (
                   <List.Item
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => applyMatch(item)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') applyMatch(item);
+                    }}
+                    style={{ cursor: 'pointer' }}
                     actions={[
-                      <Button type="link" onClick={() => (isPayload ? applyPayloadToForm(item) : applyRowToForm(item))}>
+                      <Button
+                        type="link"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          applyMatch(item);
+                        }}
+                      >
                         Use
                       </Button>,
                     ]}
