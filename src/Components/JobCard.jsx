@@ -775,6 +775,11 @@ export default function JobCard({ initialValues = null } = {}) {
   // If branch/executive ever get cleared by a reset, restore from defaults
   const watchedBranch = Form.useWatch('branch', form);
   const watchedExec = Form.useWatch('executive', form);
+  const isNHBranch = String(watchedBranch || defaultBranchName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .includes('byadarahalli');
   useEffect(() => {
     const patch = {};
     if (!watchedBranch && defaultBranchName) patch.branch = defaultBranchName;
@@ -1305,7 +1310,9 @@ export default function JobCard({ initialValues = null } = {}) {
             style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 12 }}
           >
             <div>
-              <Title level={4} style={{ margin: 0 }}>SHANTHA MOTORS — JOB CARD</Title>
+              <Title level={4} style={{ margin: 0 }}>
+                {isNHBranch ? "NH MOTORS — JOB CARD" : "SHANTHA MOTORS — JOB CARD"}
+              </Title>
               <Text type="secondary">Multi Brand Two Wheeler Sales & Service</Text>
             </div>
             <div className="brand-actions" style={{ display: "flex", flexDirection: "column", gap: 8 }}>

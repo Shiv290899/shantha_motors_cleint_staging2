@@ -74,8 +74,11 @@ const PreServiceSheet = forwardRef(function PreServiceSheet(
     return s === "yes" || s === "y" || s === "true" || s === "1";
   })();
   const floorMatNo = vals?.floorMat != null ? !floorMatYes : false;
-  const branch = String(vals?.branch || "").trim();
-  const isNH = branch === "Byadarahalli"; // Switch branding for Byadarahalli
+  const branchKey = String(vals?.branch || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  const isNH = branchKey.includes("byadarahalli"); // Switch branding for Byadarahalli
   const serviceTypeList = ["Free", "Paid", "Minor", "Accidental"];
 
   return (

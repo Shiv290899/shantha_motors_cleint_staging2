@@ -328,6 +328,20 @@ export default function Quotation() {
   useEffect(() => { const onOnline = () => retryOutbox(); window.addEventListener('online', onOnline); return () => window.removeEventListener('online', onOnline); }, []);
 
   const executiveName = Form.useWatch("executive", form) || userStaffName || "";
+  const executivePhone = useMemo(() => {
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const target = norm(executiveName);
+    if (!target) return "";
+    const matchByName = (list) => (list || []).find((e) => norm(e?.name) === target);
+    const found = matchByName(execOptions) || matchByName(EXECUTIVES);
+    if (found?.phone) return String(found.phone);
+    try {
+      const curUser = JSON.parse(localStorage.getItem('user') || 'null');
+      const curName = norm(curUser?.formDefaults?.staffName || curUser?.name || '');
+      if (curName && curName === target) return String(curUser?.phone || '');
+    } catch { /* ignore */ }
+    return "";
+  }, [executiveName, execOptions]);
   // Restore defaults if branch/executive get cleared by a reset or fetch
   const watchedBranch = Form.useWatch('branch', form);
   const watchedExec = Form.useWatch('executive', form);
@@ -2037,10 +2051,7 @@ export default function Quotation() {
             <div className="box" style={{ marginBottom: 8 }}>
               <div style={{ marginBottom: 6, fontSize: "13pt", fontWeight: 700 }}>
                 <b>Executive name:</b> {executiveName || "-"}
-                {(() => {
-                  const found = EXECUTIVES.find((e) => e.name === executiveName);
-                  return found ? ` (${found.phone})` : "";
-                })()}
+                {executivePhone ? ` (${executivePhone})` : ""}
               </div>
 
               <div
