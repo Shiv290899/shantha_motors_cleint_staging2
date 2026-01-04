@@ -712,11 +712,16 @@ export default function Bookings() {
   const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
   const smallLineStyle = { ...lineStyle, fontSize: 11 };
   const wrapLineStyle = { whiteSpace: 'normal' };
+  const stampRemark = (note) => {
+    const ts = dayjs().format('DD-MM-YYYY HH:mm');
+    const text = String(note || '').trim();
+    return text ? `${ts} - ${text}` : ts;
+  };
 
   let columns = [
     { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => {
       const ms = parseTsMs(r.ts);
-      const dt = ms ? dayjs(ms).format('YY-MM-DD HH:mm') : '—';
+      const dt = ms ? dayjs(ms).format('DD-MM-YYYY HH:mm') : '—';
       return (
         <div style={stackStyle}>
           <div style={lineStyle}>{dt}</div>
@@ -1085,16 +1090,17 @@ export default function Bookings() {
           setRemarkSaving(true);
           try {
             if (!GAS_URL_STATIC) { message.error('Booking GAS URL not configured'); return; }
-            const body = GAS_SECRET_STATIC ? { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET_STATIC } : { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
+            const stampedText = stampRemark(remarkModal.text);
+            const body = GAS_SECRET_STATIC ? { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET_STATIC } : { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: stampedText };
             const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'POST', payload: body });
             if (resp && (resp.ok || resp.success)) {
-              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
+              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
               setRows(prev => prev.map(x => x.bookingId === remarkModal.refId ? {
                 ...x,
                 RemarkLevel: remarkModal.level.toUpperCase(),
-                RemarkText: remarkModal.text,
+                RemarkText: stampedText,
                 _remarkLevel: remarkModal.level,
-                _remarkText: remarkModal.text
+                _remarkText: stampedText
               } : x));
               message.success('Remark saved to sheet');
               setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
@@ -1180,17 +1186,19 @@ function parseTsMs(v) {
   const dIso = new Date(s);
   if (!isNaN(dIso.getTime())) return dIso.getTime();
   // dd/mm/yyyy or mm/dd/yyyy with optional time
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  const m = s.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
   if (m) {
-    let a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+    const sep = m[2];
+    let a = parseInt(m[1], 10), b = parseInt(m[3], 10), y = parseInt(m[4], 10);
     if (y < 100) y += 2000;
     let month, day;
-    // If first part > 12 treat as day/month else month/day
-    if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
-    let hh = m[4] ? parseInt(m[4], 10) : 0;
-    const mm = m[5] ? parseInt(m[5], 10) : 0;
-    const ss = m[6] ? parseInt(m[6], 10) : 0;
-    const ap = (m[7] || '').toUpperCase();
+    // If using dash, treat as DD-MM-YYYY; else keep existing heuristic
+    if (sep === '-') { day = a; month = b - 1; }
+    else if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
+    let hh = m[5] ? parseInt(m[5], 10) : 0;
+    const mm = m[6] ? parseInt(m[6], 10) : 0;
+    const ss = m[7] ? parseInt(m[7], 10) : 0;
+    const ap = (m[8] || '').toUpperCase();
     if (ap === 'PM' && hh < 12) hh += 12;
     if (ap === 'AM' && hh === 12) hh = 0;
     const d = new Date(y, month, day, hh, mm, ss);

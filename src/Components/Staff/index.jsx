@@ -179,7 +179,7 @@ export default function Staff() {
           lineHeight: 1.15,
         }}
       >
-        <span>Staff Dashboard</span>
+        
         {branchName ? (
           <span
             title="Your branch"

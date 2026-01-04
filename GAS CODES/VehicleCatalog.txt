@@ -94,14 +94,35 @@ function handleUpsert_(payload) {
   rec.UpdatedAt = new Date();
 
   const rows = readRows_();
-  const idx = rows.findIndex((r) => buildKey_(r) === rec.Key);
-  if (idx >= 0) {
-    const rowNumber = rows[idx]._row;
+  const lastRow = sheet.getLastRow();
+  const lookupKeyRaw = payload.key || payload.previousKey || payload.originalKey || '';
+  const targetKey = lookupKeyRaw ? String(lookupKeyRaw).toUpperCase() : rec.Key;
+  const rowIdRaw = payload.id || payload.rowId || payload.row || payload._row;
+  const rowId = rowIdRaw ? Number(rowIdRaw) : NaN;
+  let rowNumber = null;
+
+  if (!isNaN(rowId) && rowId >= 2 && rowId <= lastRow) {
+    const rowIdValue = Math.floor(rowId);
+    if (!lookupKeyRaw) {
+      rowNumber = rowIdValue;
+    } else {
+      const rowById = rows.find((r) => r._row === rowIdValue);
+      if (rowById && buildKey_(rowById) === targetKey) rowNumber = rowIdValue;
+    }
+  }
+
+  if (!rowNumber) {
+    const idx = rows.findIndex((r) => buildKey_(r) === targetKey);
+    if (idx >= 0) rowNumber = rows[idx]._row;
+  }
+
+  if (rowNumber) {
     writeRow_(sheet, rowNumber, rec);
     return ContentService.createTextOutput(JSON.stringify({ ok: true, updated: true, row: rowNumber, data: rec }))
       .setMimeType(ContentService.MimeType.JSON);
   }
-  const nextRow = sheet.getLastRow() + 1;
+
+  const nextRow = lastRow + 1;
   writeRow_(sheet, nextRow, rec);
   return ContentService.createTextOutput(JSON.stringify({ ok: true, created: true, row: nextRow, data: rec }))
     .setMimeType(ContentService.MimeType.JSON);

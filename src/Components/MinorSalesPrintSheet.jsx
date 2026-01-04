@@ -1,12 +1,11 @@
 // components/MinorSalesPrintSheet.jsx
 import React, { forwardRef } from "react";
+import dayjs from "dayjs";
 
 function fmtDate(d) {
   try {
-    const dt = d instanceof Date ? d : new Date(d);
-    const dd = dt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-    const tt = dt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-    return `${dd} ${tt}`;
+    const dt = dayjs(d);
+    return dt.isValid() ? dt.format("DD-MM-YYYY HH:mm") : "-";
   } catch { return "-"; }
 }
 

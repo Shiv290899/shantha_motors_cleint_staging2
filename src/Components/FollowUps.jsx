@@ -49,6 +49,7 @@ const STATUS_COLOR = {
   // Quotation/Jobcard
   completed: 'green',
   converted: 'green',
+  booked: 'green',
   not_interested: 'default',
   unreachable: 'volcano',
   wrong_number: 'magenta',
@@ -67,7 +68,8 @@ const STATUS_LABEL = {
   cancelled: 'Cancelled',
   // Quotation/Jobcard
   completed: 'Completed',
-  converted: 'Converted',
+  converted: 'Booked',
+  booked: 'Booked',
   not_interested: 'Not Interested',
   unreachable: 'Unreachable',
   wrong_number: 'Wrong Number',
@@ -145,6 +147,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
 
   const [reschedule, setReschedule] = useState({ open: false, serial: null, at: null, notes: '' });
   const [closing, setClosing] = useState({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
+  const [rescheduleSaving, setRescheduleSaving] = useState(false);
   const [closingSaving, setClosingSaving] = useState(false);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
   const [q, setQ] = useState('');
@@ -187,12 +190,17 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const modeKey = String(mode || '').toLowerCase();
   const isJobcard = modeKey === 'jobcard';
   const isBooking = modeKey === 'booking';
+  const isQuotation = !isJobcard && !isBooking;
 
   // Jobcard: force filter to 'all' so nothing gets hidden by date
   React.useEffect(() => {
     if (isJobcard && filter !== 'all') setFilter('all');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isJobcard]);
+  React.useEffect(() => {
+    if (isQuotation && filter === 'overdue') setFilter('all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isQuotation]);
 
   const callWebhook = async ({ method = 'GET', payload }) => {
     if (isJobcard) {
@@ -396,6 +404,11 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       const parseTime = (v) => {
         if (v === null || v === undefined || v === '') return null;
         try {
+          if (dayjs.isDayjs(v)) return v.isValid() ? v : null;
+          if (v instanceof Date) {
+            const d = dayjs(v);
+            return d.isValid() ? d : null;
+          }
           // numeric millis or numeric-like string
           if (typeof v === 'number') {
             const d = dayjs(v);
@@ -411,17 +424,19 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           // Try native Date first
           const d1 = new Date(s);
           if (!Number.isNaN(d1.getTime())) return dayjs(d1);
-          // Try DD/MM/YYYY with optional time + AM/PM
-          const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+          // Try DD/MM/YYYY or DD-MM-YYYY with optional time + AM/PM
+          const m = s.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
           if (m) {
-            let a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+            const sep = m[2];
+            let a = parseInt(m[1], 10), b = parseInt(m[3], 10), y = parseInt(m[4], 10);
             if (y < 100) y += 2000;
             let month, day;
-            if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
-            let hh = m[4] ? parseInt(m[4], 10) : 0;
-            const mm = m[5] ? parseInt(m[5], 10) : 0;
-            const ss = m[6] ? parseInt(m[6], 10) : 0;
-            const ap = (m[7] || '').toUpperCase();
+            if (sep === '-') { day = a; month = b - 1; }
+            else if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
+            let hh = m[5] ? parseInt(m[5], 10) : 0;
+            const mm = m[6] ? parseInt(m[6], 10) : 0;
+            const ss = m[7] ? parseInt(m[7], 10) : 0;
+            const ap = (m[8] || '').toUpperCase();
             if (ap === 'PM' && hh < 12) hh += 12;
             if (ap === 'AM' && hh === 12) hh = 0;
             const d = new Date(y, month, day, hh, mm, ss);
@@ -446,7 +461,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         const fv = p.formValues || {};
         // For booking list, values are top-level keys
         const values = (r && r.values) ? r.values : (r || {});
-        const fu = p.followUp || {};
+        const fu = p.followUp || p.followup || p.follow_up || {};
         // Serial helpers (quotation vs jobcard)
         const serial = (() => {
           if (isJobcard) {
@@ -514,9 +529,23 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           }
           return parseTime(rawTime);
         })();
-        const fallbackFuAt = fu.at ? dayjs(fu.at) : null;
+        let followUpAtRaw = (
+          fu.at ?? fu.followUpAt ?? fu.followupAt ?? fu.date ?? fu.datetime ??
+          p.followUpAt ?? p.followupAt ?? p.followUpDate ?? p.followupDate ??
+          values['Follow-up At'] ?? values['Follow Up At'] ?? values['Followup At'] ??
+          values['Follow-up Date'] ?? values['Follow Up Date'] ?? values['Followup Date'] ??
+          values['Next Follow-up'] ?? values['Next Follow Up'] ?? values['Next Followup'] ??
+          values['Follow-up'] ?? values['Follow Up'] ?? values['Followup']
+        );
+        if (!followUpAtRaw) {
+          const fuDate = values['Follow-up Date'] || values['Follow Up Date'] || values['Followup Date'] || '';
+          const fuTime = values['Follow-up Time'] || values['Follow Up Time'] || values['Followup Time'] || '';
+          if (fuDate && fuTime) followUpAtRaw = `${fuDate} ${fuTime}`;
+        }
+        const fallbackFuAt = parseTime(followUpAtRaw);
         const sortAt = savedAt || fallbackFuAt;
         const sortAtMs = sortAt && typeof sortAt.valueOf === 'function' ? sortAt.valueOf() : 0;
+        const createdAt = savedAt || null;
 
         return {
           key: serial || i,
@@ -527,8 +556,8 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           vehicle,
           branch: String(branchDisp || '-').trim(),
           executive: fv.executive || fu.assignedTo || values.Executive || '-',
-          followUpAt: fu.at ? dayjs(fu.at) : null,
-          dateAt: fallbackFuAt || savedAt || null,
+          followUpAt: fallbackFuAt,
+          dateAt: createdAt || fallbackFuAt || null,
           sortAtMs,
           // Follow-up notes only (do not fall back to remarks)
           followUpNotes: (
@@ -586,7 +615,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         // Do not filter by executive name (per requirement)
         // date filter
         if (filter === 'all') return true;
-        const d = it.followUpAt;
+        const d = (it.followUpAt && it.followUpAt.isValid && it.followUpAt.isValid()) ? it.followUpAt : it.dateAt;
         if (!d || !d.isValid()) return false;
         if (filter === 'today') return !d.isBefore(startToday) && !d.isAfter(endToday);
         if (filter === 'overdue') return d.isBefore(startToday);
@@ -659,7 +688,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     }
   };
 
-  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('YY-MM-DD HH:mm') : '—';
+  const buildStampedNote = (note) => {
+    const ts = dayjs().format('DD-MM-YYYY HH:mm');
+    const text = String(note || '').trim();
+    return text ? `${ts} - ${text}` : ts;
+  };
+
+  const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('DD-MM-YYYY HH:mm') : '—';
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
   const lineStyle = { whiteSpace: isMobile ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: isMobile ? 'clip' : 'ellipsis' };
   const smallLineStyle = { ...lineStyle, fontSize: isMobile ? 11 : 10 };
@@ -810,7 +845,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
         </Tag>
       </Tooltip>
       <div style={{ display: 'flex', gap: 4 }}>
-        <Tooltip title="Mark done/converted with reason">
+        <Tooltip title="Mark done/booked with reason">
           <Button
             size="small"
             type="primary"
@@ -1107,7 +1142,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
                   </Tag>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     <CalendarOutlined />{' '}
-                    Last refresh: <b>{lastRefreshedAt ? lastRefreshedAt.format('DD MMM, HH:mm') : '—'}</b>
+                    Last refresh: <b>{lastRefreshedAt ? lastRefreshedAt.format('DD-MM-YYYY HH:mm') : '—'}</b>
                   </Text>
                 </div>
               </div>
@@ -1153,7 +1188,11 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
                         onChange={setFilter}
                         block={isMobile}
                         size={isMobile ? 'small' : 'middle'}
-                        options={[
+                        options={isQuotation ? [
+                          { label: 'All', value: 'all' },
+                          { label: 'Due Today', value: 'today' },
+                          { label: 'Upcoming', value: 'upcoming' },
+                        ] : [
                           { label: 'All', value: 'all' },
                           { label: 'Due Today', value: 'today' },
                           { label: 'Overdue', value: 'overdue' },
@@ -1263,10 +1302,21 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
       <Modal
         title={`Reschedule ${reschedule.serial || ''}`}
         open={reschedule.open}
-        onCancel={() => setReschedule({ open: false, serial: null, at: null, notes: '' })}
+        confirmLoading={rescheduleSaving}
+        maskClosable={!rescheduleSaving}
+        keyboard={!rescheduleSaving}
+        closable={!rescheduleSaving}
+        onCancel={() => rescheduleSaving ? null : setReschedule({ open: false, serial: null, at: null, notes: '' })}
         onOk={async () => {
-          await updateFollowUp(reschedule.serial, { followUp: { at: reschedule.at?.toISOString?.() || null, notes: reschedule.notes || '' }, status: 'pending' });
-          setReschedule({ open: false, serial: null, at: null, notes: '' });
+          if (rescheduleSaving) return;
+          setRescheduleSaving(true);
+          try {
+            const stamped = buildStampedNote(reschedule.notes);
+            const ok = await updateFollowUp(reschedule.serial, { followUp: { at: reschedule.at?.toISOString?.() || null, notes: stamped }, status: 'pending' });
+            if (ok) setReschedule({ open: false, serial: null, at: null, notes: '' });
+          } finally {
+            setRescheduleSaving(false);
+          }
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
@@ -1289,15 +1339,14 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
           if (closingSaving) return;
           setClosingSaving(true);
           try {
+            const stamped = buildStampedNote(closing.details);
             const patch = {
               status: closing.status || 'converted',
               closeReason: closing.status || 'converted',
               closeNotes: closing.details || '',
               closedAt: new Date().toISOString(),
+              followUp: { notes: stamped },
             };
-            if (String(closing.details || '').trim()) {
-              patch.followUp = { notes: closing.details };
-            }
             if (closing.status === 'purchased_elsewhere') {
               patch.purchasedElsewhere = {
                 boughtFrom: closing.boughtFrom || '',
@@ -1319,7 +1368,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
             value={closing.status}
             onChange={(v)=>setClosing(s=>({...s, status:v}))}
             options={[
-              { value: 'converted', label: 'Converted (Booked/Purchased)' },
+              { value: 'converted', label: 'Booked' },
               { value: 'not_interested', label: 'Not Interested' },
               { value: 'unreachable', label: 'Unreachable' },
               { value: 'purchased_elsewhere', label: 'Purchased SomeWhereElse' },

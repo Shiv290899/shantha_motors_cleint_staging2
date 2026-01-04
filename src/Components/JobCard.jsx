@@ -8,7 +8,9 @@ import {
   Form,
   Input,
   InputNumber,
+  List,
   Row,
+  Spin,
   Typography,
   message,
   Select,
@@ -40,8 +42,9 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwiVdyRFjlmXAS64E_8ePJId-ElT_BtOt47uPzNOTCyOll-GmLNCqutTFPwzYapH224VQ/exec";
+  "https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
+const JOBCARD_GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 
 // Google Form constants removed — now using Apps Script webhook
 
@@ -77,6 +80,21 @@ const EXECUTIVES = [
 const SERVICE_TYPES = ["Free", "Paid", "Minor", "Accidental"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
 const MECHANIC = ["SONU", "KARTHIK", "MANMOHAN", "MANSUR", "IRSHAD", "DAKSHAT", "SALMAN"];
+const MECHANIC_CONTACTS = {
+  SONU: "7033558306",
+  KARTHIK: "7338386813",
+  MANMOHAN: "9956079799",
+  MANSUR: "7795047627",
+  IRSHAD: "6207176821",
+  DAKSHAT: "7829096931",
+  SALMAN: "7892335161",
+};
+
+const getMechanicContact = (name) => {
+  const key = String(name || "").trim();
+  if (!key) return "";
+  return MECHANIC_CONTACTS[key] || MECHANIC_CONTACTS[key.toUpperCase()] || "";
+};
 
 // Fuel Level (tabs)
 const FUEL_LEVELS = ["Empty", "¼", "½", "¾", "Full"];
@@ -206,7 +224,7 @@ function normalizeINPhone(raw) {
 
 function buildWelcomeMsg(vals, totals) {
   const fmtDate =
-    vals?.expectedDelivery ? dayjs(vals.expectedDelivery).format("DD/MM/YYYY") : "—";
+    vals?.expectedDelivery ? dayjs(vals.expectedDelivery).format("DD-MM-YYYY HH:mm") : "—";
   // Always use logged-in user's phone; ignore any legacy mappings
   const execPhone = getLoggedInPhone();
   const branch = vals?.branch || "—";
@@ -214,6 +232,10 @@ function buildWelcomeMsg(vals, totals) {
   const jc = vals?.jcNo || "—";
   const reg = vals?.regNo || "—";
   const estimate = inr(totals?.grand ?? 0);
+  const obsLines = (vals?.obs ? vals.obs.split("\n").map((s) => s.trim()).filter(Boolean) : []);
+  const obsBlock = obsLines.length
+    ? `*Customer Observations:*\n${obsLines.map((s) => `- ${s}`).join("\n")}\n\n`
+    : "";
 
   const isNH = String(branch).trim() === "Byadarahalli";
   const showroomEn = isNH ? "NH Motors" : "Shantha Motors";
@@ -227,10 +249,42 @@ function buildWelcomeMsg(vals, totals) {
     `🏍️ Vehicle: ${reg}\n` +
     `📅 Delivery Date: ${fmtDate}\n` +
     `💰 Estimated Cost (ಅಂದಾಜು ವೆಚ್ಚ): ${estimate}\n\n` +
+    obsBlock +
     `ℹ️ Final prices may vary based on actual service needs.\n\n` +
     `Need any help? Just reply here.\n\n` +
     `— ${vals?.executive || "Team"}, ${branch}${execPhone ? ` (☎️ ${execPhone})` : ""}`
   );
+}
+
+function buildMechanicMsg(vals) {
+  const name = (vals?.custName ? String(vals.custName).trim() : "") || "—";
+  const mobile = vals?.custMobile ? String(vals.custMobile).replace(/\D/g, "").slice(-10) : "—";
+  const model = (vals?.model ? String(vals.model).trim() : "") || "—";
+  const reg = (vals?.regNo ? String(vals.regNo).trim() : "") || "—";
+  const serviceType = (vals?.serviceType ? String(vals.serviceType).trim() : "") || "—";
+  const mat = (vals?.floorMat ? String(vals.floorMat).trim() : "") || "—";
+
+  const rawKm = String(vals?.km ?? "").toUpperCase().trim();
+  const kmDigits = rawKm.replace(/\s*KM\s*$/i, "").replace(/\D/g, "");
+  const km = kmDigits ? `${kmDigits} KM` : rawKm || "—";
+
+  const notesLines = (vals?.obs ? vals.obs.split("\n").map((s) => s.trim()).filter(Boolean) : []);
+  const notesBlock = notesLines.length ? notesLines.map((s) => `• ${s}`).join("\n") : "• —";
+
+  return [
+    "*Job Card Details (Mechanic)* 🛠️",
+    "",
+    `👤 Customer Name: ${name}`,
+    `📞 Mobile Number: ${mobile}`,
+    `🔧 Model: ${model}`,
+    `🏍️ Vehicle Number: ${reg}`,
+    `🧼 Floor Mat: ${mat}`,
+    `🛠️ Service Type: ${serviceType}`,
+    `🧾 Odometer Rating: ${km}`,
+    "",
+    "*Customer Observation:*",
+    notesBlock,
+  ].join("\n");
 }
 
 function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
@@ -271,7 +325,7 @@ function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
   const exec = vals?.executive || "Team";
   const execPhone = getLoggedInPhone();
 
-  const now = dayjs().format('DD/MM/YYYY');
+  const now = dayjs().format('DD-MM-YYYY HH:mm');
   const line = (s) => String(s || '').replace(/\s+/g, ' ').trim();
   const money = (n) => inr(Math.round(Number(n || 0)));
 
@@ -372,7 +426,7 @@ export default function JobCard({ initialValues = null } = {}) {
   const location = useLocation();
   const [form] = Form.useForm();
   const [, setUserStaffName] = useState();
-  const [, setUserRole] = useState();
+  const [userRole, setUserRole] = useState("");
   // Keep defaults to restore if fields get cleared
   const [defaultBranchName, setDefaultBranchName] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]); // [{id,name,code}]
@@ -410,6 +464,11 @@ export default function JobCard({ initialValues = null } = {}) {
   const [postRemarks, setPostRemarks] = useState('');
   const [postServiceLock, setPostServiceLock] = useState(POST_LOCK_EMPTY);
   const [actionCooldownUntil, setActionCooldownUntil] = useState(0);
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [pendingItems, setPendingItems] = useState([]);
+  const [pendingLoaded, setPendingLoaded] = useState(false);
+  const [pendingAutoSearch, setPendingAutoSearch] = useState(null);
   const startActionCooldown = (ms = 6000) => {
     const until = Date.now() + ms;
     setActionCooldownUntil(until);
@@ -588,7 +647,7 @@ export default function JobCard({ initialValues = null } = {}) {
       const fv = sourceInit.formValues || sourceInit;
       const parseDay = (v) => {
         if (!v) return null;
-        const d = dayjs(v, ["DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true);
+        const d = dayjs(v, ["DD-MM-YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true);
         return d.isValid() ? d : null;
       };
       const kmVal = fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '';
@@ -788,6 +847,120 @@ export default function JobCard({ initialValues = null } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedBranch, watchedExec, defaultBranchName, defaultExecutiveName]);
 
+  const pendingBranch = useMemo(() => {
+    const role = String(userRole || '').toLowerCase();
+    const isPriv = ['owner', 'admin', 'backend'].includes(role);
+    if (isPriv) return '';
+    return watchedBranch || defaultBranchName || '';
+  }, [userRole, watchedBranch, defaultBranchName]);
+  const pendingBranchReady = useMemo(() => {
+    const role = String(userRole || '').toLowerCase();
+    const isPriv = ['owner', 'admin', 'backend'].includes(role);
+    if (isPriv) return true;
+    return Boolean(String(pendingBranch || '').trim());
+  }, [userRole, pendingBranch]);
+  const pendingCount = pendingLoaded ? pendingItems.length : null;
+
+  const normalizePendingRow = (row) => {
+    const values = row?.values || row || {};
+    const payloadRaw =
+      row?.payload ||
+      values.Payload ||
+      values.payload ||
+      values.PAYLOAD ||
+      row?.Payload ||
+      row?.PAYLOAD ||
+      '';
+    let payload = {};
+    try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = {}; }
+    const fv = payload.formValues || payload.values || {};
+    const pick = (obj, keys) => {
+      for (const k of keys) {
+        const v = obj?.[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+      }
+      return '';
+    };
+    const postAt =
+      payload?.postServiceAt ||
+      values['Post Service At'] ||
+      values.Post_Service_At ||
+      values.PostServiceAt ||
+      '';
+    const hasPayments = Array.isArray(payload?.payments) && payload.payments.some((p) => Number(p?.amount || 0) > 0);
+    const status = postAt || hasPayments ? 'completed' : 'pending';
+
+    let followUpAtRaw =
+      payload?.followUp?.at ||
+      payload?.followup?.at ||
+      payload?.followUpAt ||
+      values['Follow-up At'] ||
+      values['Follow Up At'] ||
+      values['Followup At'] ||
+      values['Follow-up Date'] ||
+      values['Follow Up Date'] ||
+      values['Followup Date'] ||
+      '';
+    if (!followUpAtRaw) {
+      const fuDate = values['Follow-up Date'] || values['Follow Up Date'] || values['Followup Date'] || '';
+      const fuTime = values['Follow-up Time'] || values['Follow Up Time'] || values['Followup Time'] || '';
+      if (fuDate && fuTime) followUpAtRaw = `${fuDate} ${fuTime}`;
+    }
+    const followUpAt = followUpAtRaw
+      ? dayjs(followUpAtRaw, ["DD-MM-YYYY HH:mm","DD/MM/YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY", dayjs.ISO_8601], true)
+      : null;
+
+    return {
+      jcNo: fv.jcNo || pick(values, ['JC No', 'JC No.', 'Job Card No', 'JC Number']) || '-',
+      name: fv.custName || pick(values, ['Customer Name', 'Customer_Name', 'Name']) || '-',
+      mobile: String(fv.custMobile || pick(values, ['Mobile', 'Mobile Number', 'Phone']) || '').replace(/\D/g, '').slice(-10),
+      regNo: fv.regNo || pick(values, ['Vehicle No', 'Vehicle_No', 'Reg No', 'Registration Number']) || '-',
+      branch: fv.branch || pick(values, ['Branch', 'Branch Name']) || '-',
+      followUpAt: followUpAt && followUpAt.isValid() ? followUpAt.format('DD-MM-YYYY HH:mm') : (followUpAtRaw || ''),
+      followUpNotes: payload?.followUp?.notes || payload?.followupNotes || payload?.followUpNotes || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Followup Notes'] || '',
+      status,
+      payload,
+    };
+  };
+
+  const loadPendingCases = async ({ silent = false } = {}) => {
+    if (!JOBCARD_GAS_URL) return;
+    if (!pendingBranchReady) {
+      setPendingItems([]);
+      setPendingLoaded(false);
+      return;
+    }
+    if (!silent) setPendingLoading(true);
+    try {
+      const base = { action: 'list', status: 'pending', page: 1, pageSize: 200 };
+      const filters = pendingBranch ? { branch: pendingBranch } : {};
+      const payload = JOBCARD_GAS_SECRET ? { ...base, ...filters, secret: JOBCARD_GAS_SECRET } : { ...base, ...filters };
+      const resp = await saveJobcardViaWebhook({ webhookUrl: JOBCARD_GAS_URL, method: 'GET', payload });
+      const js = resp?.data || resp;
+      const rows = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+      const mapped = rows.map(normalizePendingRow).filter((r) => r && r.jcNo !== '-');
+      const pendingOnly = mapped.filter((r) => r.status === 'pending');
+      setPendingItems(pendingOnly);
+      setPendingLoaded(true);
+    } catch {
+      setPendingItems([]);
+      setPendingLoaded(true);
+    } finally {
+      if (!silent) setPendingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!pendingBranchReady) {
+      setPendingItems([]);
+      setPendingLoaded(false);
+      return;
+    }
+    setPendingItems([]);
+    setPendingLoaded(false);
+    loadPendingCases({ silent: true });
+  }, [pendingBranchReady, pendingBranch]);
+
   // Watchers (can be used for dynamic behaviors later)
 
   const handleRegChange = (e) => {
@@ -817,7 +990,7 @@ export default function JobCard({ initialValues = null } = {}) {
     const raw = postServiceLock.at;
     if (!raw) return "";
     const d = dayjs(raw);
-    if (d.isValid()) return d.format("DD/MM/YYYY HH:mm");
+    if (d.isValid()) return d.format("DD-MM-YYYY HH:mm");
     return String(raw);
   }, [postServiceLock.at]);
   const isPostLocked = !!postServiceLock.locked;
@@ -899,7 +1072,7 @@ export default function JobCard({ initialValues = null } = {}) {
   };
 
   // ---- Auto Save (→ Apps Script Webhook) ----
-  const fmtDDMMYYYY = (d) => (d ? dayjs(d).format("DD/MM/YYYY") : "");
+  const fmtDDMMYYYY = (d) => (d ? dayjs(d).format("DD-MM-YYYY HH:mm") : "");
   const OBS_SEP = " # ";
 
   const handleAutoSave = async () => {
@@ -1085,7 +1258,7 @@ export default function JobCard({ initialValues = null } = {}) {
           fuelLevel: valsNow.fuelLevel || '',
           vehicleType: valsNow.vehicleType || '',
           floorMat: floorMatStr,
-          expectedDelivery: valsNow.expectedDelivery ? dayjs(valsNow.expectedDelivery).format('DD/MM/YYYY') : '',
+          expectedDelivery: valsNow.expectedDelivery ? dayjs(valsNow.expectedDelivery).format('DD-MM-YYYY HH:mm') : '',
           // Persist observation for later fetch/print (flatten newlines)
           obs: _rawobsOneLine,
           remarks: staffRemark,
@@ -1097,7 +1270,7 @@ export default function JobCard({ initialValues = null } = {}) {
       // Optimistic: queue background post-service save
       message.success({ key: 'postsave', content: 'Saved successfully' });
       const expectedDeliveryStr = valsNow.expectedDelivery
-        ? dayjs(valsNow.expectedDelivery).format('DD/MM/YYYY')
+        ? dayjs(valsNow.expectedDelivery).format('DD-MM-YYYY HH:mm')
         : '';
       const data = {
         mobile: mobile10,
@@ -1274,6 +1447,49 @@ export default function JobCard({ initialValues = null } = {}) {
     }
   };
 
+  // --- Auto-save then WhatsApp (Mechanic) ---
+  const handleShareMechanicWhatsApp = async () => {
+    try {
+      if (Date.now() < actionCooldownUntil) return;
+      startActionCooldown(6000);
+      await handleAutoSave(); // will throw if invalid
+
+      const valsNow = normalizeFormValues(form.getFieldsValue(true));
+      await form.validateFields(["mechanic"]); // ensure mechanic is selected
+
+      const mechanicName = String(valsNow.mechanic || "").trim();
+      const mechanicPhoneRaw = getMechanicContact(mechanicName);
+      const mechanicE164 = normalizeINPhone(mechanicPhoneRaw);
+      if (!mechanicE164) {
+        message.error(
+          mechanicName
+            ? `No phone number found for mechanic ${mechanicName}.`
+            : "Select a mechanic with a saved phone number."
+        );
+        return;
+      }
+
+      const msg = buildMechanicMsg(valsNow);
+      message.loading({ key: "mechshare", content: "Preparing mechanic WhatsApp message…" });
+      openWhatsAppOrSMS({
+        mobileE164: mechanicE164,
+        text: msg,
+        onFailToWhatsApp: () => {
+          message.info({
+            key: "mechshare",
+            content: "WhatsApp may not be available. Falling back to SMS composer…",
+            duration: 2,
+          });
+        },
+      });
+      setTimeout(() => {
+        message.success({ key: "mechshare", content: "Ready to send.", duration: 2 });
+      }, 800);
+    } catch {
+      // validation error already shown
+    }
+  };
+
   // --- Auto-save then Pre-service print ---
   const handlePreService = async () => {
     try {
@@ -1315,7 +1531,7 @@ export default function JobCard({ initialValues = null } = {}) {
               </Title>
               <Text type="secondary">Multi Brand Two Wheeler Sales & Service</Text>
             </div>
-            <div className="brand-actions" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="brand-actions" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {/* Fetch button */}
               <FetchJobcard
                 form={form}
@@ -1331,10 +1547,69 @@ export default function JobCard({ initialValues = null } = {}) {
                 setFollowUpAt={setFollowUpAt}
                 setFollowUpNotes={setFollowUpNotes}
                 setPostServiceLock={setPostServiceLock}
-                autoSearch={autoFetch}
+                autoSearch={pendingAutoSearch || autoFetch}
               />
+              <Button
+                onClick={async () => {
+                  setPendingOpen(true);
+                  await loadPendingCases();
+                }}
+              >
+                {pendingCount === null ? "PendingCases" : `PendingCases (${pendingCount})`}
+              </Button>
             </div>
           </div>
+
+          <Modal
+            title={pendingCount !== null ? `PendingCases (${pendingCount})` : "PendingCases"}
+            open={pendingOpen}
+            onCancel={() => setPendingOpen(false)}
+            footer={[
+              <Button key="refresh" onClick={() => loadPendingCases()}>Refresh</Button>,
+              <Button key="close" type="primary" onClick={() => setPendingOpen(false)}>Close</Button>,
+            ]}
+          >
+            {pendingLoading ? (
+              <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
+                <Spin />
+              </div>
+            ) : pendingItems.length ? (
+              <List
+                size="small"
+                dataSource={pendingItems}
+                renderItem={(item) => (
+                  <List.Item
+                    actions={[
+                      <Button
+                        size="small"
+                        type="primary"
+                        onClick={() => {
+                          const query = item.mobile || item.jcNo;
+                          const mode = item.mobile ? "mobile" : "jc";
+                          if (!query) return;
+                          setPendingAutoSearch({ mode, query, token: Date.now() });
+                          setPendingOpen(false);
+                          setPendingItems((prev) => prev.filter((p) => p.jcNo !== item.jcNo));
+                        }}
+                      >
+                        Post Service
+                      </Button>,
+                    ]}
+                  >
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 2, width: "100%" }}>
+                      <div style={{ fontWeight: 600 }}>{item.name || "-"}</div>
+                      <div>📞 {item.mobile || "-"} | 🧾 {item.jcNo || "-"}</div>
+                      <div>🏍️ {item.regNo || "-"} | 🏢 {item.branch || "-"}</div>
+                      {item.followUpAt ? <div>🗓️ {item.followUpAt}</div> : null}
+                      {item.followUpNotes ? <div style={{ color: "#666" }}>{item.followUpNotes}</div> : null}
+                    </div>
+                  </List.Item>
+                )}
+              />
+            ) : (
+              <div style={{ color: "#666" }}>No pending job cards.</div>
+            )}
+          </Modal>
 
           <Form
           form={form}
@@ -1343,72 +1618,10 @@ export default function JobCard({ initialValues = null } = {}) {
           style={{ marginTop: 12 }}
           onValuesChange={recomputeReady} // ★ live-enable buttons as user fills
         >
-          {/* Job Details */}
-          <Card size="small" bordered title="Job Details">
-            <Row gutter={[12, 8]}>
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item label="JC No." name="jcNo" >
-                  <Input placeholder="No Need to Enter" readOnly />
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item label="Created At" name="createdAt" rules={[{ required: true }]}>
-                  <DatePicker showTime style={{ width: "100%" }} />
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item label="Branch" name="branch" rules={[{ required: true }]}>
-                  {canSwitch && allowedBranches.length ? (
-                    <Select
-                      placeholder="Select branch"
-                      value={watchedBranch}
-                      onChange={(v) => onBranchChange(v)}
-                      options={allowedBranches.map((b) => ({ value: b.name, label: b.name }))}
-                    />
-                  ) : (
-                    <Input readOnly placeholder="Auto-fetched from your profile" />
-                  )}
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item label="Allotted Mechanic" name="mechanic" rules={[{ required: true }]}>
-                  <Select
-                    placeholder="Select mechanic"
-                    options={MECHANIC.map((name) => ({ value: name, label: name }))}
-                  />
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item label="Executive" name="executive" rules={[{ required: true }]}>
-                  {canSwitch ? (
-                    <Select
-                      showSearch
-                      optionFilterProp="label"
-                      placeholder="Select executive"
-                      options={(execOptions.length ? execOptions : EXECUTIVES).map((e) => ({ value: e.name, label: e.name }))}
-                    />
-                  ) : (
-                    <Input readOnly placeholder="Auto-fetched from your profile" />
-                  )}
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item label="Expected Delivery Date" name="expectedDelivery" rules={[{ required: true }]}>
-                  <DatePicker style={{ width: "100%" }} />
-                </Form.Item>
-              </Col>
-            </Row>
-          </Card>
-
           {/* Vehicle & Customer */}
           <Card size="small" bordered style={{ marginTop: 12 }} title="Vehicle & Customer">
             <Row gutter={[12, 8]}>
-              <Col xs={24} sm={12} md={6}>
+              <Col xs={24} sm={12} md={8}>
                 <Form.Item
                   label="Vehicle No."
                   name="regNo"
@@ -1431,56 +1644,6 @@ export default function JobCard({ initialValues = null } = {}) {
                     inputMode="latin"
                     style={{ textTransform: "uppercase" }}
                   />
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={6}>
-                <Form.Item label="Model" name="model" rules={[{ required: true }]} getValueFromEvent={upperFromEvent}>
-                  <Input placeholder="e.g., Honda Activa 6G" style={{ textTransform: "uppercase" }} />
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={6}>
-                <Form.Item label="Colour" name="colour" getValueFromEvent={upperFromEvent}>
-                  <Input style={{ textTransform: "uppercase" }} />
-                </Form.Item>
-              </Col>
-
-              <Col xs={24} sm={12} md={6}>
-                <Form.Item
-                  label="Odometer Reading"
-                  name="km"
-                  rules={[{ required: true, message: "Please enter Odometer Reading" }]}
-                  getValueFromEvent={(e) => {
-                    const val = e.target.value.replace(/\D/g, "");
-                    return val ? `${val} KM` : "";
-                  }}
-                  getValueProps={(value) => ({
-                    value: value?.toString().replace(/\D/g, ""),
-                  })}
-                >
-                  <Input
-                    style={{ width: "100%" }}
-                    maxLength={6}
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    onKeyPress={handleKmKeyPress}
-                    placeholder="Enter KM"
-                    suffix="KM"
-                  />
-                </Form.Item>
-              </Col>
-            </Row>
-
-            <Row gutter={[12, 8]}>
-              <Col xs={24} sm={12} md={8}>
-                <Form.Item 
-                  label="Customer Name" 
-                  name="custName" 
-                  rules={[{ required: true, whitespace: true, message: 'Please enter customer name' }]}
-                  getValueFromEvent={upperFromEvent}
-                >
-                  <Input placeholder="e.g., RAHUL SHARMA" style={{ textTransform: 'uppercase' }} />
                 </Form.Item>
               </Col>
 
@@ -1512,6 +1675,56 @@ export default function JobCard({ initialValues = null } = {}) {
                 </Form.Item>
               </Col>
 
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item 
+                  label="Customer Name" 
+                  name="custName" 
+                  rules={[{ required: true, whitespace: true, message: 'Please enter customer name' }]}
+                  getValueFromEvent={upperFromEvent}
+                >
+                  <Input placeholder="e.g., RAHUL SHARMA" style={{ textTransform: 'uppercase' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Row gutter={[12, 8]}>
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Model" name="model" rules={[{ required: true }]} getValueFromEvent={upperFromEvent}>
+                  <Input placeholder="e.g., Honda Activa 6G" style={{ textTransform: "uppercase" }} />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Colour" name="colour" getValueFromEvent={upperFromEvent}>
+                  <Input style={{ textTransform: "uppercase" }} />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item
+                  label="Odometer Reading"
+                  name="km"
+                  rules={[{ required: true, message: "Please enter Odometer Reading" }]}
+                  getValueFromEvent={(e) => {
+                    const val = e.target.value.replace(/\D/g, "");
+                    return val ? `${val} KM` : "";
+                  }}
+                  getValueProps={(value) => ({
+                    value: value?.toString().replace(/\D/g, ""),
+                  })}
+                >
+                  <Input
+                    style={{ width: "100%" }}
+                    maxLength={6}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    onKeyPress={handleKmKeyPress}
+                    placeholder="Enter KM"
+                    suffix="KM"
+                  />
+                </Form.Item>
+              </Col>
+
               {/* Call Status removed per request */}
 
               <Col xs={24}>
@@ -1521,7 +1734,6 @@ export default function JobCard({ initialValues = null } = {}) {
               </Col>
             </Row>
           </Card>
-
           {isPostLocked && (
             <Alert
               type="warning"
@@ -1690,6 +1902,68 @@ export default function JobCard({ initialValues = null } = {}) {
             </div>
           </Card>
 
+          {/* Job Details */}
+          <Card size="small" bordered style={{ marginTop: 12 }} title="Job Details">
+            <Row gutter={[12, 8]}>
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="JC No." name="jcNo" >
+                  <Input placeholder="No Need to Enter" readOnly />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Created At" name="createdAt" rules={[{ required: true }]}>
+                  <DatePicker showTime style={{ width: "100%" }} />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Branch" name="branch" rules={[{ required: true }]}>
+                  {canSwitch && allowedBranches.length ? (
+                    <Select
+                      placeholder="Select branch"
+                      value={watchedBranch}
+                      onChange={(v) => onBranchChange(v)}
+                      options={allowedBranches.map((b) => ({ value: b.name, label: b.name }))}
+                    />
+                  ) : (
+                    <Input readOnly placeholder="Auto-fetched from your profile" />
+                  )}
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Allotted Mechanic" name="mechanic" rules={[{ required: true }]}>
+                  <Select
+                    placeholder="Select mechanic"
+                    options={MECHANIC.map((name) => ({ value: name, label: name }))}
+                  />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Executive" name="executive" rules={[{ required: true }]}>
+                  {canSwitch ? (
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="Select executive"
+                      options={(execOptions.length ? execOptions : EXECUTIVES).map((e) => ({ value: e.name, label: e.name }))}
+                    />
+                  ) : (
+                    <Input readOnly placeholder="Auto-fetched from your profile" />
+                  )}
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
+                <Form.Item label="Expected Delivery Date" name="expectedDelivery" rules={[{ required: true }]}>
+                  <DatePicker style={{ width: "100%" }} />
+                </Form.Item>
+              </Col>
+            </Row>
+          </Card>
+
           {/* Follow-up section removed per request */}
 
           {/* ACTION BUTTONS — gated by isReady */}
@@ -1702,7 +1976,20 @@ export default function JobCard({ initialValues = null } = {}) {
                   onClick={handleShareWhatsApp}
                   disabled={!isReady || actionCooldownUntil > Date.now()}
                 >
-                  WhatsApp/SMS
+                  Customer WhatsApp
+                </Button>
+              </Tooltip>
+            </Col>
+
+            <Col>
+              <Tooltip title={isReady ? "" : (notReadyWhy || "Fill all required fields")} placement="top">
+                <Button
+                  type="default"
+                  icon={<FaWhatsapp style={{ color: "#25D366" }} />}
+                  onClick={handleShareMechanicWhatsApp}
+                  disabled={!isReady || actionCooldownUntil > Date.now()}
+                >
+                  Mechanic WhatsApp
                 </Button>
               </Tooltip>
             </Col>

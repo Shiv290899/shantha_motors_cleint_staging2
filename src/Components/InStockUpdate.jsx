@@ -41,6 +41,11 @@ export default function InStockUpdate() {
   const [editingRow, setEditingRow] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editForm] = Form.useForm();
+  const [movementModalOpen, setMovementModalOpen] = useState(false);
+  const [movementAction, setMovementAction] = useState(null); // transfer | return
+  const [movementRow, setMovementRow] = useState(null);
+  const [movementSaving, setMovementSaving] = useState(false);
+  const [movementForm] = Form.useForm();
 
   // Vehicle catalog (for prefilled dropdowns in Edit)
   const CATALOG_CSV_URL = import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
@@ -64,7 +69,7 @@ export default function InStockUpdate() {
   // Current user for prefill & createdBy
   const currentUser = useMemo(() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } }, []);
   const myRole = useMemo(() => String(currentUser?.role || '').toLowerCase(), [currentUser]);
-  const isAdminOwner = useMemo(() => ['admin'].includes(myRole), [myRole]);
+  const isAdminOwner = useMemo(() => ['admin', 'owner', 'backend'].includes(myRole), [myRole]);
 
   useEffect(() => {
     (async () => {
@@ -101,19 +106,20 @@ export default function InStockUpdate() {
     try {
       const resp = await listCurrentStocks({ branch: branch === "all" ? undefined : branch, limit: 1000 });
       const list = Array.isArray(resp?.data) ? resp.data : [];
-      const rows = list.map((r, i) => ({
-        key: r._id || r.movementId || i,
-        ts: r.timestamp || r.createdAt || "",
-        chassis: r.chassisNo || "",
-        company: r.company || "",
-        model: r.model || "",
-        variant: r.variant || "",
-        color: r.color || "",
-        branch: r.sourceBranch || r.branch || "",
-        status: r.status || "in stock",
-        movementId: r.movementId || r.lastMovementId || "",
-        lastMovementId: r.lastMovementId || r.movementId || "",
-      }));
+        const rows = list.map((r, i) => ({
+          key: r._id || r.movementId || i,
+          ts: r.timestamp || r.createdAt || "",
+          chassis: r.chassisNo || "",
+          company: r.company || "",
+          model: r.model || "",
+          variant: r.variant || "",
+          color: r.color || "",
+          branch: r.sourceBranch || r.branch || "",
+          status: r.status || "in stock",
+          movementId: r.movementId || r.lastMovementId || "",
+          lastMovementId: r.lastMovementId || r.movementId || "",
+          notes: r.notes || "",
+        }));
       setItems(rows);
       setHasCache(true);
       try {
@@ -263,6 +269,91 @@ export default function InStockUpdate() {
   // Summary counts (independent of search filter)
   const totalCount = items.length;
   
+  const openBookingModal = (r) => {
+    const pre = {
+      company: r.company || '',
+      bikeModel: r.model || '',
+      variant: r.variant || '',
+      color: r.color || '',
+      chassisNo: r.chassis || '',
+      purchaseType: 'cash',
+      addressProofMode: 'aadhaar',
+      executive: (currentUser?.name || currentUser?.email || ''),
+      branch: r.branch || '',
+    };
+    setInvoicePrefill(pre);
+    setInvoiceBaseRow(r);
+    setInvoiceModalOpen(true);
+  };
+
+  const openEditModal = (r) => {
+    setEditingRow(r);
+    setEditModalOpen(true);
+    setSelCompany(r.company || '');
+    setSelModel(r.model || '');
+    setSelVariant(r.variant || '');
+    editForm.setFieldsValue({
+      company: r.company || undefined,
+      model: r.model || undefined,
+      variant: r.variant || undefined,
+      color: r.color || undefined,
+      notes: r.notes || undefined,
+    });
+  };
+
+  const openMovementModal = (nextAction, r) => {
+    setMovementAction(nextAction);
+    setMovementRow(r);
+    movementForm.resetFields();
+    setMovementModalOpen(true);
+  };
+
+  const closeMovementModal = () => {
+    setMovementModalOpen(false);
+    setMovementAction(null);
+    setMovementRow(null);
+    movementForm.resetFields();
+  };
+
+  const handleMovementSave = async () => {
+    if (!movementRow || !movementAction) {
+      message.warning('Select a vehicle first.');
+      return;
+    }
+    try {
+      const values = await movementForm.validateFields();
+      setMovementSaving(true);
+      const row = {
+        Chassis_No: String(movementRow.chassis || '').toUpperCase(),
+        Company: movementRow.company || '',
+        Model: movementRow.model || '',
+        Variant: movementRow.variant || '',
+        Color: movementRow.color || '',
+        Action: movementAction,
+        Source_Branch: movementRow.branch || '',
+        Notes: values.notes || '',
+      };
+      if (movementAction === 'transfer') row.Target_Branch = values.targetBranch || '';
+      if (movementAction === 'return') row.Return_To = values.returnTo || '';
+      const res = await createStock({ data: row, createdBy: currentUser?.name || currentUser?.email || 'user' });
+      if (res?.success) {
+        const msg = movementAction === 'transfer'
+          ? 'Transfer recorded and waiting for admit by the target branch.'
+          : 'Return recorded.';
+        message.success(msg);
+        closeMovementModal();
+        fetchData();
+      } else {
+        message.error(res?.message || 'Save failed');
+      }
+    } catch (e) {
+      if (e?.errorFields) return;
+      message.error('Save failed');
+    } finally {
+      setMovementSaving(false);
+    }
+  };
+
 
   const col = (v) => String(v || "").trim();
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
@@ -341,58 +432,32 @@ export default function InStockUpdate() {
         );
       }
     },
-    {
-      title: "Status",
-      dataIndex: "status",
-      key: "status",
-      width: isMobile ? undefined : 110,
-      render: (v) => <Tag color="green">{col(v) || 'in stock'}</Tag>
-    },
   ];
 
   const actionsColumn = {
     title: "Actions",
     key: "actions",
-    width: isMobile ? undefined : 140,
+    width: isMobile ? undefined : 200,
     fixed: isMobile ? undefined : 'right',
     render: (_, r) => (
-      <Space size="small" direction="vertical">
-        <Button size="small" type="primary" onClick={() => {
-          const pre = {
-            company: r.company || '',
-            bikeModel: r.model || '',
-            variant: r.variant || '',
-            color: r.color || '',
-            chassisNo: r.chassis || '',
-            purchaseType: 'cash',
-            addressProofMode: 'aadhaar',
-            executive: (currentUser?.name || currentUser?.email || ''),
-            branch: r.branch || '',
-          };
-          setInvoicePrefill(pre);
-          setInvoiceBaseRow(r);
-          setInvoiceModalOpen(true);
-        }}>Book</Button>
-            <Button size="small" onClick={() => {
-              setEditingRow(r);
-              setSelCompany(r.company || '');
-              setSelModel(r.model || '');
-              setSelVariant(r.variant || '');
-              editForm.setFieldsValue({
-                company: r.company || '',
-                model: r.model || '',
-                variant: r.variant || '',
-                color: r.color || '',
-                notes: '',
-              });
-              setEditModalOpen(true);
-            }}>Edit</Button>
-            {/* Delete removed per request */}
-      </Space>
+      isAdminOwner ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Space size={4}>
+            <Button size="small" onClick={() => openMovementModal('transfer', r)} style={{ fontSize: 11, height: 20, padding: '0 8px' }}>Transfer</Button>
+            <Button size="small" type="primary" onClick={() => openBookingModal(r)} style={{ fontSize: 11, height: 20, padding: '0 8px' }}>Book</Button>
+          </Space>
+          <Space size={4}>
+            <Button size="small" onClick={() => openMovementModal('return', r)} style={{ fontSize: 11, height: 20, padding: '0 8px' }}>Return</Button>
+            <Button size="small" onClick={() => openEditModal(r)} style={{ fontSize: 11, height: 20, padding: '0 8px' }}>Edit</Button>
+          </Space>
+        </div>
+      ) : (
+        <span style={{ color: '#94a3b8' }}>—</span>
+      )
     )
   };
 
-  const columns = isAdminOwner ? [...baseColumns, actionsColumn] : baseColumns;
+  const columns = isAdminOwner ? [...baseColumns, actionsColumn] : [...baseColumns];
 
   const handleExportCsv = () => {
     if (!filtered.length) {
@@ -515,7 +580,7 @@ export default function InStockUpdate() {
         columns={columns}
         loading={loading && !hasCache}
         size="small"
-        className="compact-table"
+        className="compact-table stock-finder-table"
         tableLayout={isMobile ? "auto" : "fixed"}
         pagination={{
           current: page,
@@ -614,6 +679,45 @@ export default function InStockUpdate() {
             )}
           </Form.Item>
           <Form.Item name="notes" label="Notes"> <Input.TextArea rows={3} placeholder="Optional notes" /> </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Transfer/Return Modal */}
+      <Modal
+        title={movementAction === 'transfer' ? 'Transfer Vehicle' : movementAction === 'return' ? 'Return Vehicle' : 'Movement'}
+        open={movementModalOpen}
+        onCancel={closeMovementModal}
+        onOk={handleMovementSave}
+        okText="Save"
+        confirmLoading={movementSaving}
+        destroyOnClose
+      >
+        {movementRow && (
+          <div style={{ marginBottom: 12, fontSize: 12, color: '#475569' }}>
+            <div><strong>Chassis:</strong> {movementRow.chassis || '-'}</div>
+            <div><strong>Vehicle:</strong> {[movementRow.company, movementRow.model, movementRow.variant, movementRow.color].filter(Boolean).join(' ') || '-'}</div>
+            <div><strong>Branch:</strong> {movementRow.branch || '-'}</div>
+          </div>
+        )}
+        <Form form={movementForm} layout="vertical">
+          {movementAction === 'transfer' && (
+            <Form.Item name="targetBranch" label="Target Branch" rules={[{ required: true, message: 'Select target branch' }]}>
+              <Select
+                showSearch
+                optionFilterProp="children"
+                placeholder="Select branch"
+                options={branchOptions.map((b) => ({ value: b, label: b }))}
+              />
+            </Form.Item>
+          )}
+          {movementAction === 'return' && (
+            <Form.Item name="returnTo" label="Return To (Dealer/Area)" rules={[{ required: true, message: 'Enter return destination' }]}>
+              <Input placeholder="e.g., Kengaria / Dealer name" />
+            </Form.Item>
+          )}
+          <Form.Item name="notes" label="Notes">
+            <Input.TextArea rows={3} placeholder="Optional notes" />
+          </Form.Item>
         </Form>
       </Modal>
 

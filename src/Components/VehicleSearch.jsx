@@ -27,7 +27,7 @@ const { Text } = Typography;
 const DEFAULT_BOOKING_GAS_URL =
   "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwiVdyRFjlmXAS64E_8ePJId-ElT_BtOt47uPzNOTCyOll-GmLNCqutTFPwzYapH224VQ/exec";
+  "https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec";
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 const BOOKING_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 
@@ -498,7 +498,7 @@ export default function VehicleSearch() {
         {
           label: "Created",
           value: mainBooking.createdAt
-            ? mainBooking.createdAt.format("DD MMM YYYY")
+            ? mainBooking.createdAt.format("DD-MM-YYYY HH:mm")
             : "-",
         },
       ]
@@ -592,7 +592,7 @@ export default function VehicleSearch() {
   const handleExportCsv = () => {
     const fmt = (v) => {
       const d = dayjs(v);
-      return d.isValid() ? d.format("YYYY-MM-DD HH:mm") : "";
+      return d.isValid() ? d.format("DD-MM-YYYY HH:mm") : "";
     };
     const rowsForCsv = [];
     bookings.forEach((b, idx) => {
@@ -898,7 +898,7 @@ export default function VehicleSearch() {
                     >
                       <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
                         <Tag color="gold" style={{ fontWeight: 600 }}>
-                          {s.createdAt ? s.createdAt.format("DD MMM YYYY") : "-"}
+                          {s.createdAt ? s.createdAt.format("DD-MM-YYYY HH:mm") : "-"}
                         </Tag>
                         <Space wrap size={[8, 8]}>
                           <Tag color="geekblue">{ordinal(s.serviceNo || idx + 1)} Service</Tag>

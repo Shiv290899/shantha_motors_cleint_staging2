@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import {
-  Row, Col, Form, Input, InputNumber, Select, Button, Radio, message, Checkbox, Divider, DatePicker, Switch
+  Row, Col, Form, Input, InputNumber, Select, Button, Radio, message, Checkbox, Divider, DatePicker, Switch, List, Modal, Spin
 } from "antd";
 import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import FetchQuot from "./FetchQuot"; // for fetching saved quotations
@@ -279,7 +279,7 @@ export default function Quotation() {
   const [docsReq, setDocsReq] = useState(DOCS_REQUIRED);
   const [extraVehicles, setExtraVehicles] = useState([]); // up to 2 records (V2, V3)
   const [userStaffName, setUserStaffName] = useState();
-  const [, setUserRole] = useState();
+  const [userRole, setUserRole] = useState("");
   // Defaults for restore if fields get cleared
   const [defaultBranchName, setDefaultBranchName] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]); // [{id,name,code}]
@@ -292,6 +292,11 @@ export default function Quotation() {
   const [followUpEnabled, setFollowUpEnabled] = useState(true);
   const [followUpAt, setFollowUpAt] = useState(() => dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
   const [followUpNotes, setFollowUpNotes] = useState("");
+  const [pendingOpen, setPendingOpen] = useState(false);
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [pendingItems, setPendingItems] = useState([]);
+  const [pendingLoaded, setPendingLoaded] = useState(false);
+  const [pendingAutoApply, setPendingAutoApply] = useState(null);
 
   // Outbox for optimistic background submission (local-only)
   const OUTBOX_KEY = 'Quotation:outbox';
@@ -362,13 +367,7 @@ export default function Quotation() {
   };
 
   const pageRef = useRef(null);
-  const printDate = useMemo(() => {
-    const d = new Date();
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    return `${dd}/${mm}/${yyyy}`;
-  }, []);
+  const printDate = useMemo(() => dayjs().format("DD-MM-YYYY HH:mm"), []);
 
   // helper to make image paths absolute for the print iframe + cache-bust
   const absBust = (p) => {
@@ -538,6 +537,103 @@ export default function Quotation() {
       //ignore
     }
   };
+
+  const pendingBranch = useMemo(
+    () => watchedBranch || defaultBranchName || '',
+    [watchedBranch, defaultBranchName]
+  );
+  const pendingBranchReady = useMemo(
+    () => Boolean(String(pendingBranch || '').trim()),
+    [pendingBranch]
+  );
+  const pendingCount = pendingLoaded ? pendingItems.length : null;
+
+  const normalizePendingRow = (row) => {
+    const values = row?.values || row || {};
+    const payloadRaw =
+      row?.payload ||
+      values.Payload ||
+      values.payload ||
+      values.PAYLOAD ||
+      row?.Payload ||
+      row?.PAYLOAD ||
+      '';
+    let payload = {};
+    try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = {}; }
+    const fv = payload.formValues || payload.values || {};
+    const followUp = payload.followUp || payload.followup || {};
+    const status = String(followUp.status || values.Status || values.status || 'pending').toLowerCase();
+    const pick = (obj, keys) => {
+      for (const k of keys) {
+        const v = obj?.[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+      }
+      return '';
+    };
+    const followUpAtRaw =
+      followUp.at ||
+      followUp.followUpAt ||
+      values['Follow-up At'] ||
+      values['Follow Up At'] ||
+      values['Followup At'] ||
+      values['Follow-up Date'] ||
+      values['Follow Up Date'] ||
+      values['Followup Date'] ||
+      '';
+    const followUpAt = (() => {
+      if (!followUpAtRaw) return '';
+      const d = dayjs(followUpAtRaw, ["DD-MM-YYYY HH:mm","DD/MM/YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY", dayjs.ISO_8601], true);
+      return d.isValid() ? d.format('DD-MM-YYYY HH:mm') : String(followUpAtRaw);
+    })();
+    return {
+      serial: fv.serialNo || pick(values, ['Quotation No.', 'Quotation No', 'Quotation_ID', 'Quotation ID', 'Serial']) || '-',
+      name: fv.name || pick(values, ['Customer_Name', 'Customer Name', 'Name']) || '-',
+      mobile: String(fv.mobile || pick(values, ['Mobile', 'Mobile Number', 'Phone']) || '').replace(/\D/g, '').slice(-10),
+      vehicle: [fv.company || payload.company || values.Company, fv.bikeModel || payload.model || values.Model, fv.variant || payload.variant || values.Variant].filter(Boolean).join(' ') || '-',
+      branch: fv.branch || payload.branch || values.Branch || values['Branch Name'] || '-',
+      followUpAt,
+      followUpNotes: followUp.notes || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Followup Notes'] || '',
+      status,
+      payload,
+    };
+  };
+
+  const loadPendingCases = async ({ silent = false } = {}) => {
+    if (!QUOT_GAS_URL) return;
+    if (!pendingBranchReady) {
+      setPendingItems([]);
+      setPendingLoaded(false);
+      return;
+    }
+    if (!silent) setPendingLoading(true);
+    try {
+      const base = { action: 'list', page: 1, pageSize: 500 };
+      const filters = pendingBranch ? { branch: pendingBranch } : {};
+      const resp = await saveBookingViaWebhook({ webhookUrl: QUOT_GAS_URL, method: 'GET', payload: { ...base, ...filters } });
+      const js = resp?.data || resp;
+      const rows = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+      const mapped = rows.map(normalizePendingRow).filter((r) => r && r.serial !== '-');
+      const pendingOnly = mapped.filter((r) => !r.status || r.status === 'pending');
+      setPendingItems(pendingOnly);
+      setPendingLoaded(true);
+    } catch {
+      setPendingItems([]);
+      setPendingLoaded(true);
+    } finally {
+      if (!silent) setPendingLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!pendingBranchReady) {
+      setPendingItems([]);
+      setPendingLoaded(false);
+      return;
+    }
+    setPendingItems([]);
+    setPendingLoaded(false);
+    loadPendingCases({ silent: true });
+  }, [pendingBranchReady, pendingBranch]);
 
   useEffect(() => {
     if (brand === "NH") {
@@ -1114,12 +1210,11 @@ export default function Quotation() {
         })),
       ];
 
-      // Resolve executive name & phone for WhatsApp footer
-      // Always use the logged-in staff's own name and phone; ignore legacy mappings
+      // Resolve executive name & phone for WhatsApp footer (prefer selected executive)
       const curUser = (() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } })();
-      const execPhone = String(curUser?.phone || '').replace(/\D/g,'');
-      const execNameDisplay = (v.executive || curUser?.formDefaults?.staffName || curUser?.name || executiveName || '-');
-      const qDate = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+      const execPhone = String(executivePhone || '').replace(/\D/g,'');
+      const execNameDisplay = (v.executive || executiveName || curUser?.formDefaults?.staffName || curUser?.name || '-');
+      const qDate = dayjs().format("DD-MM-YYYY HH:mm");
 
       // Header
       const header = [
@@ -1318,14 +1413,71 @@ export default function Quotation() {
                       setFollowUpEnabled={setFollowUpEnabled}
                       setFollowUpAt={setFollowUpAt}
                       setFollowUpNotes={setFollowUpNotes}
+                      autoApply={pendingAutoApply}
                       buttonText="Fetch Details"
                       buttonProps={{
                         style: { background: "#2ECC71", borderColor: "#2ECC71", color: "#fff" },
                       }}
                     />
+                    <Button
+                      onClick={async () => {
+                        setPendingOpen(true);
+                        await loadPendingCases();
+                      }}
+                    >
+                      {pendingCount === null ? "PendingCases" : `PendingCases (${pendingCount})`}
+                    </Button>
                   </div>
                 </div>
               </Col>
+              <Modal
+                title={pendingCount !== null ? `PendingCases (${pendingCount})` : "PendingCases"}
+                open={pendingOpen}
+                onCancel={() => setPendingOpen(false)}
+                footer={[
+                  <Button key="refresh" onClick={() => loadPendingCases()}>Refresh</Button>,
+                  <Button key="close" type="primary" onClick={() => setPendingOpen(false)}>Close</Button>,
+                ]}
+              >
+                {pendingLoading ? (
+                  <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>
+                    <Spin />
+                  </div>
+                ) : pendingItems.length ? (
+                  <List
+                    size="small"
+                    dataSource={pendingItems}
+                    renderItem={(item) => (
+                      <List.Item
+                        actions={[
+                          <Button
+                            size="small"
+                            type="primary"
+                            onClick={() => {
+                              if (!item?.payload) return;
+                              setPendingAutoApply({ payload: item.payload, token: Date.now() });
+                              setPendingOpen(false);
+                              setPendingItems((prev) => prev.filter((p) => p.serial !== item.serial));
+                            }}
+                          >
+                            Open
+                          </Button>,
+                        ]}
+                      >
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 2, width: "100%" }}>
+                          <div style={{ fontWeight: 600 }}>{item.name || "-"}</div>
+                          <div>📞 {item.mobile || "-"} | 🧾 {item.serial || "-"}</div>
+                          <div>🏍️ {item.vehicle || "-"} | 🏢 {item.branch || "-"}</div>
+                          {item.followUpAt ? <div>🗓️ {item.followUpAt}</div> : null}
+                          {item.followUpNotes ? <div style={{ color: "#666" }}>{item.followUpNotes}</div> : null}
+                        </div>
+                      </List.Item>
+                    )}
+                  />
+                ) : (
+                  <div style={{ color: "#666" }}>No pending quotations.</div>
+                )}
+              </Modal>
 
               {/* Toggle manual/sheet mode for vehicle selection */}
               <Col span={24}>

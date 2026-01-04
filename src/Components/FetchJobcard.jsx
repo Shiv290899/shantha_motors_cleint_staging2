@@ -132,7 +132,18 @@ export default function FetchJobcard({
     if (!t) return null;
     const d = dayjs(
       t,
-      ["DD/MM/YYYY", "D/M/YYYY", "DD-MM-YYYY", "YYYY-MM-DD", dayjs.ISO_8601],
+      [
+        "DD-MM-YYYY HH:mm",
+        "D-M-YYYY HH:mm",
+        "DD/MM/YYYY HH:mm",
+        "D/M/YYYY HH:mm",
+        "DD-MM-YYYY",
+        "D-M-YYYY",
+        "DD/MM/YYYY",
+        "D/M/YYYY",
+        "YYYY-MM-DD",
+        dayjs.ISO_8601,
+      ],
       true
     );
     return d.isValid() ? d : null;
@@ -148,6 +159,10 @@ export default function FetchJobcard({
         "D/M/YYYY H:mm:ss",
         "DD/MM/YYYY H:mm:ss",
         "DD/MM/YYYY",
+        "D-M-YYYY H:mm:ss",
+        "DD-MM-YYYY H:mm:ss",
+        "DD-MM-YYYY HH:mm",
+        "DD-MM-YYYY",
       ],
       false
     );
@@ -408,7 +423,7 @@ export default function FetchJobcard({
         branch: fv.branch || undefined,
         mechanic: fv.mechanic || undefined,
         executive: fv.executive || undefined,
-        expectedDelivery: fv.expectedDelivery ? dayjs(fv.expectedDelivery, ["DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true) : null,
+        expectedDelivery: fv.expectedDelivery ? dayjs(fv.expectedDelivery, ["DD-MM-YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true) : null,
         regNo: fv.regNo || '',
         model: fv.model || '',
         colour: fv.colour || '',
@@ -549,12 +564,14 @@ export default function FetchJobcard({
     }
   };
 
-  const autoRanRef = useRef(false);
+  const lastAutoKeyRef = useRef("");
   useEffect(() => {
     const rawQuery = String(autoSearch?.query || "").trim();
-    if (!rawQuery || autoRanRef.current) return;
+    if (!rawQuery) return;
     const nextMode = (autoSearch?.mode === "vehicle" || autoSearch?.mode === "jc") ? autoSearch.mode : "mobile";
-    autoRanRef.current = true;
+    const nextKey = `${nextMode}:${rawQuery}:${autoSearch?.token || ""}`;
+    if (lastAutoKeyRef.current === nextKey) return;
+    lastAutoKeyRef.current = nextKey;
     setMode(nextMode);
     setQuery(rawQuery);
     setOpen(true);
@@ -655,7 +672,10 @@ export default function FetchJobcard({
                 const nm = isPayload ? (fv.custName || '—') : (pick(item, COL.CustName) || '—');
                 const mb = isPayload ? (String(fv.custMobile || '').replace(/\D/g,'').slice(-10) || '—') : (tenDigits(pick(item, COL.Mobile)) || '—');
                 const rn = isPayload ? (fv.regNo || '—') : (pick(item, COL.RegNo) || '—');
-                const ts = isPayload ? (fv.expectedDelivery || '-') : (parseTimestamp(item).format("DD/MM/YYYY HH:mm"));
+                const exp = isPayload ? parseDDMMYYYY(fv.expectedDelivery) : null;
+                const ts = isPayload
+                  ? (exp ? exp.format("DD-MM-YYYY HH:mm") : (fv.expectedDelivery || '-'))
+                  : (parseTimestamp(item).format("DD-MM-YYYY HH:mm"));
                 return (
                   <List.Item
                     role="button"

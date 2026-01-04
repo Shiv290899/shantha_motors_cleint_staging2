@@ -8,6 +8,34 @@ const DEFAULT_GAS_STOCKS_URL =
 const DIRECT_GAS_STOCKS_URL = import.meta.env.VITE_STOCKS_GAS_URL || "";
 
 const isPlainObject = (v) => v && typeof v === "object" && !Array.isArray(v);
+const normalizeStockPatch = (patch = {}) => {
+  const get = (a, b) => (patch[a] !== undefined ? patch[a] : patch[b]);
+  const actionRaw = get("action", "Action");
+  const chassisRaw = get("chassisNo", "Chassis_No");
+  const normalized = {
+    movementId: get("movementId", "MovementId"),
+    chassisNo: chassisRaw ? String(chassisRaw).toUpperCase() : undefined,
+    company: get("company", "Company"),
+    model: get("model", "Model"),
+    variant: get("variant", "Variant"),
+    color: get("color", "Color"),
+    action: actionRaw ? String(actionRaw).toLowerCase() : undefined,
+    sourceBranch: get("sourceBranch", "Source_Branch"),
+    targetBranch: get("targetBranch", "Target_Branch"),
+    returnTo: get("returnTo", "Return_To"),
+    customerName: get("customerName", "Customer_Name"),
+    transferStatus: get("transferStatus", "Transfer_Status"),
+    notes: get("notes", "Notes"),
+    createdByName: get("createdByName", "CreatedByName"),
+    createdById: get("createdById", "CreatedById"),
+    resolvedByName: get("resolvedByName", "ResolvedByName"),
+    resolvedById: get("resolvedById", "ResolvedById"),
+    resolvedAt: get("resolvedAt", "ResolvedAt"),
+    deleted: get("deleted", "Deleted"),
+    timestamp: get("timestamp", "Timestamp"),
+  };
+  return normalized;
+};
 
 const gasGet = async (params) => {
   // 1) Backend proxy (preferred)
@@ -118,7 +146,8 @@ export const createStock = async ({ data: row, createdBy }) => {
 };
 
 export const updateStock = async (movementId, patch) => {
-  const payload = { action: "update", movementId, ...patch, data: patch };
+  const normalized = normalizeStockPatch(patch || {});
+  const payload = { action: "update", movementId, data: normalized };
   const data = await gasPost(payload);
   return { success: !!data.ok, data: data.data, message: data.message };
 };

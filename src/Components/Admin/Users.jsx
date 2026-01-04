@@ -1,4 +1,5 @@
 import React from "react";
+import dayjs from "dayjs";
 import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Checkbox, Row, Col } from "antd";
 import { listUsers, listUsersPublic, updateUser, deleteUser } from "../../apiCalls/adminUsers";
 import { listBranchesPublic } from "../../apiCalls/branches";
@@ -202,7 +203,7 @@ export default function Users({ readOnly = false }) {
     { title: "Status", dataIndex: "status", key: "status", width: 130, render: (v) => (
       v === "active" ? <Tag color="green">Active</Tag> : v === "inactive" ? <Tag>Inactive</Tag> : <Tag color="orange">Suspended</Tag>
     ) },
-    { title: "Last Login", dataIndex: "lastLoginAt", key: "lastLoginAt", width: 180, render: (v) => v ? new Date(v).toLocaleString() : "—" },
+    { title: "Last Login", dataIndex: "lastLoginAt", key: "lastLoginAt", width: 180, render: (v) => v ? dayjs(v).format("DD-MM-YYYY HH:mm") : "—" },
     ...(!readOnly ? [{
       title: "Actions",
       key: "actions",

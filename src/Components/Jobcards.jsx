@@ -9,7 +9,7 @@ import { exportToCsv } from "../utils/csvExport";
 import { normalizeKey, uniqCaseInsensitive, toKeySet } from "../utils/caseInsensitive";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwiVdyRFjlmXAS64E_8ePJId-ElT_BtOt47uPzNOTCyOll-GmLNCqutTFPwzYapH224VQ/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -43,6 +43,7 @@ export default function Jobcards() {
   const [loading, setLoading] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all"); // free | paid | all
+  const [statusFilter, setStatusFilter] = useState("all"); // pending | completed | all
   const [q, setQ] = useState("");
   const debouncedQ = useDebouncedValue(q, 300);
   const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
@@ -91,7 +92,7 @@ export default function Jobcards() {
   const cacheKey = (() => {
     const start = dateRange && dateRange[0] ? dateRange[0].startOf('day').valueOf() : '';
     const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
-    return `Jobcards:list:${JSON.stringify({ branchFilter, serviceFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
+    return `Jobcards:list:${JSON.stringify({ branchFilter, serviceFilter, statusFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
   })();
 
   // Row normalizer (used for main list and filter source fetch)
@@ -185,6 +186,7 @@ export default function Jobcards() {
           q: debouncedQ || '',
           branch: branchFilter !== 'all' ? branchFilter : '',
           service: serviceFilter !== 'all' ? serviceFilter : '',
+          status: statusFilter !== 'all' ? statusFilter : '',
         };
         if (dateRange && dateRange[0] && dateRange[1]) {
           filters.start = dateRange[0].startOf('day').valueOf();
@@ -230,7 +232,7 @@ export default function Jobcards() {
     const handler = () => load();
     window.addEventListener('reload-jobcards', handler);
     return () => { cancelled = true; window.removeEventListener('reload-jobcards', handler); };
-  }, [branchFilter, serviceFilter, debouncedQ, dateRange, page, pageSize, USE_SERVER_PAG]);
+  }, [branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange, page, pageSize, USE_SERVER_PAG]);
 
   const optionRows = filterSourceRows.length ? filterSourceRows : rows;
 
@@ -255,6 +257,7 @@ export default function Jobcards() {
       }
       if (branchFilter !== "all" && normalizeKey(r.branch) !== normalizeKey(branchFilter)) return false;
       if (serviceFilter !== "all" && normalizeKey(r.serviceType) !== normalizeKey(serviceFilter)) return false;
+      if (statusFilter !== "all" && normalizeKey(r.status) !== normalizeKey(statusFilter)) return false;
       if (dateRange && dateRange[0] && dateRange[1]) {
         const start = dateRange[0].startOf('day').valueOf();
         const end = dateRange[1].endOf('day').valueOf();
@@ -270,7 +273,7 @@ export default function Jobcards() {
       return true;
     });
     return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
-  }, [allowedBranches, branchFilter, dateRange, debouncedQ, serviceFilter, userRole]);
+  }, [allowedBranches, branchFilter, dateRange, debouncedQ, serviceFilter, statusFilter, userRole]);
 
   const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
 
@@ -278,7 +281,7 @@ export default function Jobcards() {
   useEffect(() => {
     setPage(1);
     setLoadedCount(pageSize);
-  }, [branchFilter, serviceFilter, debouncedQ, dateRange]);
+  }, [branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange]);
   useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
 
   const loadExportRows = useCallback(async () => {
@@ -289,6 +292,7 @@ export default function Jobcards() {
       q: debouncedQ || '',
       branch: branchFilter !== 'all' ? branchFilter : '',
       service: serviceFilter !== 'all' ? serviceFilter : '',
+      status: statusFilter !== 'all' ? statusFilter : '',
     };
     if (dateRange && dateRange[0] && dateRange[1]) {
       filters.start = dateRange[0].startOf('day').valueOf();
@@ -299,7 +303,7 @@ export default function Jobcards() {
     const js = resp?.data || resp;
     const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
     return dataArr.map((o, idx) => mapJobRow(o, idx)).filter((r)=>r.jcNo || r.name || r.mobile);
-  }, [USE_SERVER_PAG, GAS_URL, GAS_SECRET, branchFilter, dateRange, debouncedQ, mapJobRow, rows, serviceFilter]);
+  }, [USE_SERVER_PAG, GAS_URL, GAS_SECRET, branchFilter, dateRange, debouncedQ, mapJobRow, rows, serviceFilter, statusFilter]);
 
   const handleExportCsv = async () => {
     const msgKey = 'export-jobcards';
@@ -387,6 +391,11 @@ export default function Jobcards() {
     if (s === 'pending') return 'Pending';
     return String(v || '—') || '—';
   };
+  const stampRemark = (note) => {
+    const ts = dayjs().format('DD-MM-YYYY HH:mm');
+    const text = String(note || '').trim();
+    return text ? `${ts} - ${text}` : ts;
+  };
 
   const columns = [
     { title: "Time / Branch", key: "timeBranch", width: 90, render: (_, r) => (
@@ -457,17 +466,20 @@ export default function Jobcards() {
           <Select
             value={branchFilter}
             onChange={setBranchFilter}
-            style={{ minWidth: 160 }}
+            style={{ minWidth: 120 }}
             disabled={!['owner','admin','backend'].includes(userRole)}
             options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
           />
-          <Select value={serviceFilter} onChange={setServiceFilter} style={{ minWidth: 140 }}
+          <Select value={serviceFilter} onChange={setServiceFilter} style={{ minWidth: 100 }}
                   options={services.map(m => ({ value: m, label: m === 'all' ? 'All Services' : String(m).toUpperCase() }))} />
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 100 }}
+                  options={[{ value: 'all', label: 'All Statuses' }, { value: 'pending', label: 'Pending' }, { value: 'completed', label: 'Completed' }]} />
+          
           <DatePicker.RangePicker value={dateRange} onChange={(v)=>{ setDateRange(v); setQuickKey(null); }} allowClear />
           <Button size="small" type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
           <Button size="small" type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>
           <Button size="small" onClick={()=>{ setDateRange(null); setQuickKey(null); }}>Clear</Button>
-          <Input placeholder="Search name/mobile/jc/vehicle/model/mode" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 280 }} />
+          <Input placeholder="Search name/mobile/jc/vehicle/model/mode" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 120 }} />
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
@@ -542,11 +554,12 @@ export default function Jobcards() {
           setRemarkSaving(true);
           try {
             if (!GAS_URL) { message.error('Jobcards GAS URL not configured'); return; }
-            const body = GAS_SECRET ? { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET } : { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
+            const stampedText = stampRemark(remarkModal.text);
+            const body = GAS_SECRET ? { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: stampedText };
             const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
             if (resp && (resp.ok || resp.success)) {
-              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
-              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: remarkModal.text, _remarkLevel: remarkModal.level, _remarkText: remarkModal.text } : x));
+              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
+              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: stampedText, _remarkLevel: remarkModal.level, _remarkText: stampedText } : x));
               message.success('Remark saved to sheet');
               setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
             } else { message.error('Save failed'); }
@@ -572,10 +585,9 @@ export default function Jobcards() {
 function formatTs(v) {
   if (!v) return <Text type="secondary">—</Text>;
   try {
-    const d = v instanceof Date ? v : new Date(String(v));
-    if (isNaN(d.getTime())) return String(v);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const ms = parseTsMs(v);
+    if (!ms) return String(v);
+    return dayjs(ms).format("DD-MM-YYYY HH:mm");
   } catch { return String(v); }
 }
 
@@ -586,16 +598,18 @@ function parseTsMs(v) {
   const s = String(v).trim();
   const dIso = new Date(s);
   if (!isNaN(dIso.getTime())) return dIso.getTime();
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  const m = s.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
   if (m) {
-    let a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+    const sep = m[2];
+    let a = parseInt(m[1], 10), b = parseInt(m[3], 10), y = parseInt(m[4], 10);
     if (y < 100) y += 2000;
     let month, day;
-    if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
-    let hh = m[4] ? parseInt(m[4], 10) : 0;
-    const mm = m[5] ? parseInt(m[5], 10) : 0;
-    const ss = m[6] ? parseInt(m[6], 10) : 0;
-    const ap = (m[7] || '').toUpperCase();
+    if (sep === '-') { day = a; month = b - 1; }
+    else if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
+    let hh = m[5] ? parseInt(m[5], 10) : 0;
+    const mm = m[6] ? parseInt(m[6], 10) : 0;
+    const ss = m[7] ? parseInt(m[7], 10) : 0;
+    const ap = (m[8] || '').toUpperCase();
     if (ap === 'PM' && hh < 12) hh += 12;
     if (ap === 'AM' && hh === 12) hh = 0;
     const d = new Date(y, month, day, hh, mm, ss);

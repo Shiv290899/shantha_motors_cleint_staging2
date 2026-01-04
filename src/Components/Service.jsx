@@ -413,7 +413,7 @@ export default function Service() {
                 </Col>
                 <Col xs={24} sm={12} md={16}>
                   <Form.Item name="date" label={<Text style={{ color: "#fff" }}>Preferred Date</Text>}>
-                    <Input placeholder="YYYY-MM-DD" />
+                    <Input placeholder="DD-MM-YYYY HH:mm" />
                   </Form.Item>
                 </Col>
                 <Col xs={24} sm={12} md={8}>

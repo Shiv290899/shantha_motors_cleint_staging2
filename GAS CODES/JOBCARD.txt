@@ -82,6 +82,7 @@ function handle_(e){
       const branch = String((p.branch != null ? p.branch : (body.branch || '')));
       const executive = String((p.executive != null ? p.executive : (body.executive || '')));
       const service = String((p.service != null ? p.service : (body.service || ''))).toLowerCase();
+      const status = String((p.status != null ? p.status : (body.status || ''))).toLowerCase();
       const sinceISO = String((p.since != null ? p.since : (body.since || '')));
       const untilISO = String((p.until != null ? p.until : (body.until || '')));
       const startMs = p.start ? +p.start : (body.start ? +body.start : null);
@@ -92,7 +93,7 @@ function handle_(e){
       const limit = Math.max(parseInt((p.limit != null ? p.limit : (body.limit || '0')), 10) || 0, 0);
 
       const resp = list_({
-        branch, executive, service, sinceISO, untilISO, startMs, endMs,
+        branch, executive, service, status, sinceISO, untilISO, startMs, endMs,
         q,
         page, pageSize, limit
       });
@@ -1215,6 +1216,7 @@ function list_(opts) {
   const wantBranchKey = norm_(String((opts && opts.branch) || ''));
   const wantExecKey = norm_(String((opts && opts.executive) || ''));
   const wantService = String((opts && opts.service) || '').toLowerCase();
+  const wantStatus = String((opts && opts.status) || '').toLowerCase();
   const q = String((opts && opts.q) || '').trim();
 
   const startMs = (opts && typeof opts.startMs === 'number') ? opts.startMs : null;
@@ -1238,6 +1240,13 @@ function list_(opts) {
     const execFromPayload = String((payload && payload.formValues && payload.formValues.executive) || '').trim();
     const branchPayload = String((payload && payload.formValues && payload.formValues.branch) || '').trim();
     const paymentMode = ix.idxPayment >= 0 ? String(r[ix.idxPayment] || '') : '';
+    const postAt = (payload && payload.postServiceAt) || (ix.idxPostAt >= 0 ? r[ix.idxPostAt] : '') || '';
+    const hasPost = String(postAt || '').trim().length > 0;
+    const hasPayments = Array.isArray(payload && payload.payments) && payload.payments.some(function(p){ return Number(p && p.amount || 0) > 0; });
+    const hasPaymentMode = String(paymentMode || '').trim().length > 0;
+    const amt = ix.idxAmount >= 0 ? r[ix.idxAmount] : '';
+    const hasAmount = String(amt || '').trim().length > 0;
+    const status = (hasPost || hasPayments || (hasPaymentMode && hasAmount)) ? 'completed' : 'pending';
     const model = payload && payload.formValues ? (payload.formValues.model || '') : '';
 
     return {
@@ -1253,7 +1262,8 @@ function list_(opts) {
       executive: execFromPayload,
       paymentMode,
       jcNo: String(r[ix.idxJC] || '').trim(),
-      model
+      model,
+      status
     };
   });
 
@@ -1265,6 +1275,7 @@ function list_(opts) {
     }
     if (wantExecKey && norm_(x.executive) !== wantExecKey) return false;
     if (wantService && x.serviceType !== wantService) return false;
+    if (wantStatus && x.status !== wantStatus) return false;
 
     if (startMs && endMs) {
       if (!x.tsMs || x.tsMs < startMs || x.tsMs > endMs) return false;

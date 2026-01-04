@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+import dayjs from 'dayjs'
 import { Table, Button, Space, Modal, Form, Input, InputNumber, message, Popconfirm, Alert, Typography, Tag, Select } from 'antd'
 import { ReloadOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons'
 import { exportToCsv } from '../utils/csvExport'
@@ -49,6 +50,11 @@ const fetchSheetRowsCSV = async (url) => {
 
 const pick = (row, keys) => String(keys.map((k) => row[k] ?? '').find((v) => v !== '') || '').trim()
 
+const buildCatalogKey = (company, model, variant) => {
+  const toKey = (s) => String(s || '').trim().toUpperCase()
+  return [toKey(company), toKey(model), toKey(variant)].join('|')
+}
+
 const normalizeRow = (row = {}) => {
   const rawPrice =
     pick(row, HEADERS.price) ||
@@ -58,20 +64,23 @@ const normalizeRow = (row = {}) => {
     row.price ||
     0;
   const price = Number(String(rawPrice || 0).replace(/[",\s₹]/g, '')) || 0;
+  const company = pick(row, HEADERS.company) || row.company || ''
+  const model = pick(row, HEADERS.model) || row.model || ''
+  const variant = pick(row, HEADERS.variant) || row.variant || ''
   return {
-    id: row.id || row._id || row.rowId || undefined,
-    company: pick(row, HEADERS.company) || row.company || '',
-    model: pick(row, HEADERS.model) || row.model || '',
-    variant: pick(row, HEADERS.variant) || row.variant || '',
+    id: row.id || row._id || row.rowId || row._row || undefined,
+    company,
+    model,
+    variant,
     onRoadPrice: price,
     updatedAt: row.UpdatedAt || row.updatedAt || row.updated_at || row.updated || '',
     updatedBy: row.UpdatedBy || row.updatedBy || row.updated_by || row.user || '',
-    key: row.key || row.id || `${pick(row, HEADERS.company)}|${pick(row, HEADERS.model)}|${pick(row, HEADERS.variant)}`,
+    key: row.key || row.Key || buildCatalogKey(company, model, variant),
   }
 }
 
 export default function VehicleCatalogManager({ csvFallbackUrl }) {
-  const GAS_URL = import.meta.env.VITE_VEHICLE_CATALOG_GAS_URL || 'https://script.google.com/macros/s/AKfycbyqah2vllS4FCZZsxheXSQF4Lwv8kKsCmNSJ4GIikjrGMscGWLTurK0Nzu_oAHLSdZXsg/exec'
+  const GAS_URL = import.meta.env.VITE_VEHICLE_CATALOG_GAS_URL || 'https://script.google.com/macros/s/AKfycby1Op7Uo6tADosF89SkiZMsJVl-95zxsSb_uo7p_3JqynUp30Bf0sFRQF2NF6PO-628Qg/exec'
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -257,7 +266,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
     { title: 'Model', dataIndex: 'model', key: 'model', sorter: (a, b) => a.model.localeCompare(b.model) },
     { title: 'Variant', dataIndex: 'variant', key: 'variant', sorter: (a, b) => a.variant.localeCompare(b.variant) },
     { title: 'On-Road Price (₹)', dataIndex: 'onRoadPrice', key: 'onRoadPrice', render: (v) => v ? v.toLocaleString('en-IN') : <Text type="secondary">0</Text>, sorter: (a, b) => (a.onRoadPrice || 0) - (b.onRoadPrice || 0) },
-    { title: 'Updated At', dataIndex: 'updatedAt', key: 'updatedAt', render: (v) => v ? new Date(v).toLocaleString() : <Text type="secondary">-</Text> },
+    { title: 'Updated At', dataIndex: 'updatedAt', key: 'updatedAt', render: (v) => v ? dayjs(v).format('DD-MM-YYYY HH:mm') : <Text type="secondary">-</Text> },
     { title: 'Updated By', dataIndex: 'updatedBy', key: 'updatedBy', render: (v) => v || <Text type="secondary">-</Text> },
     {
       title: 'Actions', key: 'actions', render: (_, record) => (

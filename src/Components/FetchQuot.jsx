@@ -1,5 +1,5 @@
 // FetchQuot.jsx
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import { Alert, Button, Modal, Input, List, Space, Spin, message } from "antd";
@@ -31,6 +31,7 @@ export default function FetchQuot({
   setFollowUpEnabled,
   setFollowUpAt,
   setFollowUpNotes,
+  autoApply,
   buttonText = "Fetch Details",
   buttonProps = {},
 }) {
@@ -41,6 +42,7 @@ export default function FetchQuot({
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
   const [notFoundText, setNotFoundText] = useState("");
+  const lastAutoRef = useRef("");
 
   // ---------------- helpers ----------------
   const tenDigits = (x) =>
@@ -209,6 +211,14 @@ export default function FetchQuot({
       message.error("Could not apply fetched details.");
     }
   };
+
+  useEffect(() => {
+    if (!autoApply?.payload) return;
+    const key = String(autoApply?.token || '') + ':' + String(autoApply?.payload?.formValues?.serialNo || autoApply?.payload?.serialNo || autoApply?.payload?.formValues?.mobile || '');
+    if (lastAutoRef.current === key) return;
+    lastAutoRef.current = key;
+    applyToForm(autoApply.payload);
+  }, [autoApply]);
 
   // ---------------- search ----------------
   const runSearch = async () => {

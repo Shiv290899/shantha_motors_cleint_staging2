@@ -121,10 +121,10 @@ export default function StockUpdate() {
     return name || '';
   }, [currentUser]);
   const myRole = useMemo(() => String(currentUser?.role || '').toLowerCase(), [currentUser]);
+  const isStaffLike = useMemo(() => ['staff','mechanic','employees'].includes(myRole), [myRole]);
   const isPriv = useMemo(() => ['admin','owner','backend'].includes(myRole), [myRole]);
-  const lockSourceBranch = useMemo(() => ['staff','mechanic','employees'].includes(myRole), [myRole]);
-  const isAdminOwner = useMemo(() => ['admin'].includes(myRole), [myRole]);
-  const isOwner = useMemo(() => myRole === 'owner', [myRole]);
+  const lockSourceBranch = isStaffLike;
+  const isAdminOwner = isPriv;
   const pendingBranch = useMemo(() => {
     if (isPriv) {
       if (branchFilter === 'all') return 'all';
@@ -141,10 +141,9 @@ export default function StockUpdate() {
   }, [items, pendingBranch, myBranch, isPriv, normalizeKey]);
   const alertPending = pendingTransfers.length ? pendingTransfers : computedPending;
   const listBranchScope = useMemo(() => {
-    const isStaffLike = ['staff','mechanic','employees'].includes(myRole);
     if (isStaffLike) return myBranch || 'self';
     return branchFilter === 'all' ? 'all' : (branchFilter || 'all');
-  }, [myRole, myBranch, branchFilter]);
+  }, [isStaffLike, myBranch, branchFilter]);
   const cacheKey = useMemo(
     () => `StockMovements:list:${JSON.stringify({ role: myRole || '', branch: listBranchScope })}`,
     [myRole, listBranchScope]
@@ -349,14 +348,13 @@ export default function StockUpdate() {
   const label = (s) => <strong style={{ fontWeight: 700 }}>{s}</strong>;
   const isEdit = Boolean(editingMovementId);
   const isVehicleLocked = action !== 'add' && !isEdit; // allow editing vehicle fields while editing
-  const isChassisLocked = action !== 'add';
+  const isChassisLocked = action !== 'add' || isEdit;
   const isSourceLocked = lockSourceBranch || action !== 'add';
 
   const fetchList = async () => {
     setLoadingList(true);
     try {
       // For staff-like roles, show current inventory only (latest per chassis)
-      const isStaffLike = ['staff','mechanic','employees'].includes(myRole)
       const branchParam = isStaffLike ? myBranch : (branchFilter === 'all' ? undefined : branchFilter);
       const resp = isStaffLike
         ? await listCurrentStocks({ branch: branchParam })
@@ -454,50 +452,7 @@ export default function StockUpdate() {
     }
   }, [modalOpen, lockSourceBranch, myBranch, form]);
 
-  const openWithAction = (base, act) => {
-    try {
-      if (act === 'invoice') {
-        // Open Booking form modal with prefilled vehicle stock details
-        const prefill = {
-          company: base?.company || '',
-          bikeModel: base?.model || '',
-          variant: base?.variant || '',
-          color: base?.color || '',
-          chassisNo: base?.chassis || base?.chassisNo || '',
-          purchaseType: 'cash',
-          addressProofMode: 'aadhaar',
-          executive: (currentUser?.name || currentUser?.email || ''),
-          branch: (currentUser?.formDefaults?.branchName || currentUser?.primaryBranch?.name || myBranch || ''),
-        };
-        setInvoicePrefill(prefill);
-        setInvoiceBaseRow(base || null);
-        setInvoiceModalOpen(true);
-        return;
-      }
-
-      setAllowedActions([act]);
-      setAction(act);
-      setFormError("");
-      const patch = {
-        chassis: base?.chassis || base?.chassisNo || undefined,
-        company: base?.company || undefined,
-        model: base?.model || undefined,
-        variant: base?.variant || undefined,
-        color: base?.color || undefined,
-        // Prefer the row's current source (server-provided) for accurate chaining
-        sourceBranch: base?.sourceBranch || myBranch || undefined,
-        // For transfer, suggest previous source as the target (quick reverse)
-        targetBranch: act === 'transfer' ? (base?.lastSourceBranch || base?.sourceBranch || undefined) : undefined,
-        returnTo: undefined,
-        customerName: undefined,
-        notes: undefined,
-      };
-      form.setFieldsValue(patch);
-      setModalOpen(true);
-    } catch {
-      // ignore
-    }
-  };
+  
 
   const onEditRow = (base) => {
     try {
@@ -528,10 +483,62 @@ export default function StockUpdate() {
     }
   };
 
+  const openQuickMovement = (nextAction, base) => {
+    if (!base || !nextAction) return;
+    try {
+      setEditingMovementId(null);
+      setAllowedActions([nextAction]);
+      setFormError("");
+      setAction(nextAction);
+      setCompany(base?.company || '');
+      setModel(base?.model || '');
+      setVariant(base?.variant || '');
+      form.resetFields();
+      const patch = {
+        chassis: base?.chassis || base?.chassisNo || undefined,
+        company: base?.company || undefined,
+        model: base?.model || undefined,
+        variant: base?.variant || undefined,
+        color: base?.color || undefined,
+        sourceBranch: base?.sourceBranch || base?.lastSourceBranch || myBranch || undefined,
+        targetBranch: undefined,
+        returnTo: undefined,
+        customerName: undefined,
+        notes: undefined,
+      };
+      form.setFieldsValue(patch);
+      setModalOpen(true);
+    } catch {
+      // ignore open failures
+    }
+  };
+
+  const openBookingModal = (base) => {
+    if (!base) return;
+    const pre = {
+      company: base.company || '',
+      bikeModel: base.model || '',
+      variant: base.variant || '',
+      color: base.color || '',
+      chassisNo: base.chassis || '',
+      purchaseType: 'cash',
+      addressProofMode: 'aadhaar',
+      executive: (currentUser?.name || currentUser?.email || ''),
+      branch: base.sourceBranch || base.lastSourceBranch || myBranch || '',
+    };
+    setInvoicePrefill(pre);
+    setInvoiceBaseRow(base);
+    setInvoiceModalOpen(true);
+  };
  
 
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
-  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const lineStyle = {
+    whiteSpace: isMobile ? 'normal' : 'nowrap',
+    overflow: 'hidden',
+    textOverflow: isMobile ? 'clip' : 'ellipsis',
+    wordBreak: isMobile ? 'break-word' : 'normal',
+  };
   const chassisLineStyle = { whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip', wordBreak: 'break-all' };
   const pickTs = (r) => (
     r?.timestamp ||
@@ -553,10 +560,10 @@ export default function StockUpdate() {
     const num = Number(raw);
     if (!Number.isNaN(num)) {
       const dNum = dayjs(num);
-      if (dNum.isValid()) return dNum.format('YYYY-MM-DD HH:mm');
+      if (dNum.isValid()) return dNum.format('DD-MM-YYYY HH:mm');
     }
     const d = dayjs(raw);
-    return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : String(raw);
+    return d.isValid() ? d.format('DD-MM-YYYY HH:mm') : String(raw);
   };
   const actionTag = (v, row) => {
     const t = String(v || "").toLowerCase();
@@ -573,13 +580,13 @@ export default function StockUpdate() {
 
   // Core columns
   const baseColsCore = [
-    { title: "Time / Source", key: "timeSource", width: 90, render: (_, r) => (
+    { title: "Time / Source", key: "timeSource", width: isMobile ? 70 : 90, render: (_, r) => (
       <div style={stackStyle}>
         <div style={lineStyle}>{formatTs(pickTs(r))}</div>
         <div style={lineStyle}><span style={{ color: '#6b7280' }}>{r.sourceBranch || '—'}</span></div>
       </div>
     ) },
-    { title: "Chassis / Company || Model", key: "chassisCompanyModel", width: 100, render: (_, r) => (
+    { title: "Chassis / Company || Model", key: "chassisCompanyModel", width: isMobile ? 90 : 100, render: (_, r) => (
       <div style={stackStyle}>
         <div style={chassisLineStyle}>
           <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{r.chassis || '-'}</span>
@@ -587,7 +594,7 @@ export default function StockUpdate() {
         <div style={lineStyle}>{`${r.company || '—'} || ${r.model || '—'}`}</div>
       </div>
     ) },
-    { title: "Variant + Color || Action", key: "variantColorAction", width: 130, render: (_, r) => (
+    { title: "Variant + Color || Action", key: "variantColorAction", width: isMobile ? 110 : 130, render: (_, r) => (
       <div style={stackStyle}>
         <div style={lineStyle}>{r.variant || '—'}</div>
         <div style={lineStyle}>
@@ -600,7 +607,7 @@ export default function StockUpdate() {
     ) },
   ];
   const adminExtras = [
-    { title: "Target/Return/Customer + Notes", key: "destNotes", width: 250, render: (_, r) => (
+    { title: "Target/Return/Customer + Notes", key: "destNotes", width: isMobile ? 160 : 250, render: (_, r) => (
       <div style={stackStyle}>
         <div style={lineStyle}>{r.targetBranch || r.returnTo || r.customerName || "—"}</div>
         <div style={lineStyle}>{r.notes || "—"}</div>
@@ -610,23 +617,27 @@ export default function StockUpdate() {
   const actionsCol = {
     title: "Actions",
     key: "actions",
-    width: 150,
+    width: isMobile ? 120 : 170,
     render: (_, r) => (
-      <Space size={4} wrap={false} style={{ whiteSpace: 'nowrap' }}>
-        {!isOwner && (
-          <>
-            <Button size="small" onClick={() => openWithAction(r, 'transfer')} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Transfer</Button>
-            <Button size="small" onClick={() => openWithAction(r, 'return')} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Return</Button>
-          </>
-        )}
-        <Button size="small" type="primary" onClick={() => openWithAction(r, 'invoice')} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Book</Button>
-        {isAdminOwner && (
+      isAdminOwner ? (
+        <Space size={4} wrap={false} style={{ whiteSpace: 'nowrap' }}>
           <Button size="small" onClick={() => onEditRow(r)} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Edit</Button>
-        )}
-      </Space>
+        </Space>
+      ) : isStaffLike ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <Space size={4}>
+            <Button size="small" onClick={() => openQuickMovement('transfer', r)} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Transfer</Button>
+            <Button size="small" type="primary" onClick={() => openBookingModal(r)} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Book</Button>
+          </Space>
+          <Space size={4}>
+            <Button size="small" onClick={() => openQuickMovement('return', r)} style={{ fontSize: 10, height: 18, padding: '0 6px' }}>Return</Button>
+          </Space>
+        </div>
+      ) : (
+        <span style={{ color: '#94a3b8' }}>—</span>
+      )
     )
   };
-  const isStaffLike = ['staff','mechanic','employees'].includes(myRole);
   // Staff order: Time/Source, Chassis/Company/Model, Variant/Color/Action, Actions
   // Admin/Owner order: Time/Source, Chassis/Company/Model, Variant/Color/Action, Actions, Target/Return/Customer+Notes
   const columns = isStaffLike
@@ -787,7 +798,7 @@ export default function StockUpdate() {
                     <span style={{ fontWeight: 700 }}>Chassis:</span>
                     <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{p.chassis || '-'}</span>
                     <Tag color="geekblue" style={{ marginLeft: 4 }}>
-                      {[p.company, p.model, p.variant].filter(Boolean).join(' ')}
+                      {[p.company, p.model, p.variant, p.color].filter(Boolean).join(' ')}
                     </Tag>
                   </div>
                   <div style={{ marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap', color: '#111827' }}>
@@ -796,7 +807,7 @@ export default function StockUpdate() {
                     <span style={{ fontWeight: 600 }}>{p.targetBranch || 'Target ?'}</span>
                   </div>
                   <div style={{ marginTop: 4, fontSize: 12, color: '#4b5563' }}>
-                    Requested by {p.createdByName || 'user'}{p.ts ? ` on ${dayjs(p.ts).format('DD MMM, HH:mm')}` : ''}
+                    Requested by {p.createdByName || 'user'}{p.ts ? ` on ${dayjs(p.ts).format('DD-MM-YYYY HH:mm')}` : ''}
                   </div>
                   {p.notes && <div style={{ marginTop: 4, fontSize: 12, color: '#92400e' }}>Notes: {p.notes}</div>}
                 </div>
@@ -845,8 +856,8 @@ export default function StockUpdate() {
         }}
         size="small"
         className="stock-movements-table"
-        tableLayout="fixed"
-        scroll={{ y: isMobile ? 420 : 600 }}
+        tableLayout={isMobile ? "auto" : "fixed"}
+        scroll={isMobile ? { x: "max-content", y: 420 } : { y: 600 }}
         rowKey={(r) => `${r.ts}-${r.chassis}-${r.key}`}
       />
 
@@ -998,6 +1009,7 @@ export default function StockUpdate() {
                 <Form.Item label={label("Action")}>
                   <Radio.Group
                     value={action}
+                    disabled={isEdit}
                     onChange={(e) => setAction(e.target.value)}
                   >
                     {(allowedActions || ["add","transfer","return","invoice"]).includes("add") && (

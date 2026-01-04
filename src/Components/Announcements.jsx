@@ -116,7 +116,7 @@ export default function Announcements() {
                       <Text strong>{it.title}</Text>
                     </div>
                     <div style={{ marginTop: 6, whiteSpace:'pre-wrap' }}>{it.body}</div>
-                    <div style={{ marginTop: 6, color:'#666' }}>{dayjs(it.createdAt).format('DD/MM/YYYY HH:mm')}</div>
+                    <div style={{ marginTop: 6, color:'#666' }}>{dayjs(it.createdAt).format('DD-MM-YYYY HH:mm')}</div>
                   </div>
                 </div>
               </Card>

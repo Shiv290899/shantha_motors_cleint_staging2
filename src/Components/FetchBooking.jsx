@@ -34,7 +34,6 @@ export default function FetchBooking({
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
   const [notFoundText, setNotFoundText] = useState("");
-
   const tenDigits = (x) =>
     String(x || "").replace(/\D/g, "").slice(-10);
   const cleanBookingId = (x) =>
@@ -329,7 +328,7 @@ export default function FetchBooking({
     const mobile = tenDigits(p.mobileNumber || p.mobile || "");
     const branch = p.branch || "-";
     const created = p.ts
-      ? dayjs(p.ts).format("DD/MM/YYYY")
+      ? dayjs(p.ts).format("DD-MM-YYYY HH:mm")
       : "-";
     return (
       <List.Item

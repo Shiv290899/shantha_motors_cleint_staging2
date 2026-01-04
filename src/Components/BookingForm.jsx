@@ -2303,23 +2303,23 @@ export default function BookingForm({
               </Text>
             </div>
             <div style={{ flex: 1 }} />
-              <FetchBooking
-                form={form}
-                webhookUrl={BOOKING_GAS_URL}
-                setSelectedCompany={setSelectedCompany}
-                setSelectedModel={setSelectedModel}
-                onApplied={({ bookingId, mobile, vehicle }) => {
-                  setPaymentsOnlyMode(true);
-                  setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
-                  setHasFetchedBookingFlag(true);
-                  const availability = String(vehicle?.availability || '').toLowerCase();
-                  const chassisVal = vehicle?.chassisNo || form.getFieldValue('chassisNo');
-                  const isAllot = availability === 'allot' || String(chassisVal || '') === '__ALLOT__';
-                  const hasChassis = Boolean(chassisVal && String(chassisVal) !== '__ALLOT__');
-                  setChassisLocked(Boolean(hasChassis && !isAllot));
-                  message.info('Payments-only update mode enabled');
-                }}
-              />
+            <FetchBooking
+              form={form}
+              webhookUrl={BOOKING_GAS_URL}
+              setSelectedCompany={setSelectedCompany}
+              setSelectedModel={setSelectedModel}
+              onApplied={({ bookingId, mobile, vehicle }) => {
+                setPaymentsOnlyMode(true);
+                setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
+                setHasFetchedBookingFlag(true);
+                const availability = String(vehicle?.availability || '').toLowerCase();
+                const chassisVal = vehicle?.chassisNo || form.getFieldValue('chassisNo');
+                const isAllot = availability === 'allot' || String(chassisVal || '') === '__ALLOT__';
+                const hasChassis = Boolean(chassisVal && String(chassisVal) !== '__ALLOT__');
+                setChassisLocked(Boolean(hasChassis && !isAllot));
+                message.info('Payments-only update mode enabled');
+              }}
+            />
           </div>
         }
       >

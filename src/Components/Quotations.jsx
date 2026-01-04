@@ -378,7 +378,7 @@ export default function Quotations() {
 
   const statusColor = (s) => {
     const k = String(s || '').toLowerCase();
-    return k === 'converted' ? 'green'
+    return (k === 'converted' || k === 'booked') ? 'green'
       : k === 'completed' ? 'green'
       : k === 'pending' ? 'orange'
       : k === 'not_interested' ? 'default'
@@ -387,6 +387,18 @@ export default function Quotations() {
       : k === 'purchased_elsewhere' ? 'geekblue'
       : k === 'no_response' ? 'gold'
       : 'default';
+  };
+  const statusLabel = (s) => {
+    const raw = String(s || '').trim();
+    if (!raw) return '—';
+    const k = raw.toLowerCase();
+    if (k === 'converted') return 'Booked';
+    return raw.replace(/_/g, ' ');
+  };
+  const stampRemark = (note) => {
+    const ts = dayjs().format('DD-MM-YYYY HH:mm');
+    const text = String(note || '').trim();
+    return text ? `${ts} - ${text}` : ts;
   };
 
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
@@ -435,7 +447,7 @@ export default function Quotations() {
       return (
         <div style={stackStyle}>
           <div style={lineStyle}>
-            <Tag color={statusColor(r.status)}>{String(r.status || '').replace(/_/g, ' ') || '—'}</Tag>
+            <Tag color={statusColor(r.status)}>{statusLabel(r.status)}</Tag>
           </div>
           {notes ? (
             <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{notes}</span>} placement="topLeft">
@@ -498,19 +510,19 @@ export default function Quotations() {
           <Select
             value={branchFilter}
             onChange={setBranchFilter}
-            style={{ minWidth: 160 }}
+            style={{ minWidth: 120 }}
             disabled={!['owner','admin','backend'].includes(userRole)}
             options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
           />
-          <Select value={modeFilter} onChange={setModeFilter} style={{ minWidth: 140 }}
+          <Select value={modeFilter} onChange={setModeFilter} style={{ minWidth: 100 }}
                   options={modes.map(m => ({ value: m, label: m === 'all' ? 'All Modes' : String(m).toUpperCase() }))} />
-          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 160 }}
-                  options={statuses.map(s => ({ value: s, label: s === 'all' ? 'All Statuses' : String(s).replace(/_/g,' ') }))} />
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 100 }}
+                  options={statuses.map(s => ({ value: s, label: s === 'all' ? 'All Statuses' : statusLabel(s) }))} />
           <DatePicker.RangePicker value={dateRange} onChange={(v)=>{ setDateRange(v); setQuickKey(null); }} allowClear />
           <Button size="small" type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
           <Button size="small" type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>
           <Button size="small" onClick={()=>{ setDateRange(null); setQuickKey(null); }}>Clear</Button>
-          <Input placeholder="Search name/mobile/quotation/company/model" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 260 }} />
+          <Input placeholder="Search name/mobile/quotation/company/model" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 150 }} />
         </Space>
         <div style={{ flex: 1 }} />
         <Space>
@@ -584,17 +596,18 @@ export default function Quotations() {
           try {
             // Sheet-only: call GAS to persist
             if (!GAS_URL) { message.error('Quotation GAS URL not configured'); return; }
-            const body = GAS_SECRET ? { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text, secret: GAS_SECRET } : { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: remarkModal.text };
+            const stampedText = stampRemark(remarkModal.text);
+            const body = GAS_SECRET ? { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: stampedText };
             const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
             if (resp && (resp.ok || resp.success)) {
-              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: remarkModal.text } }));
+              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
               // also update rows array for immediate tag color
               setRows(prev => prev.map(x => x.serialNo === remarkModal.refId ? {
                 ...x,
                 RemarkLevel: remarkModal.level.toUpperCase(),
-                RemarkText: remarkModal.text,
+                RemarkText: stampedText,
                 _remarkLevel: remarkModal.level,
-                _remarkText: remarkModal.text
+                _remarkText: stampedText
               } : x));
               message.success('Remark saved to sheet');
               // Also mirror to Google Sheet via Apps Script (kept short and resilient)
@@ -622,10 +635,9 @@ export default function Quotations() {
 function formatTs(v) {
   if (!v) return <Text type="secondary">—</Text>;
   try {
-    const d = v instanceof Date ? v : new Date(String(v));
-    if (isNaN(d.getTime())) return String(v);
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const ms = parseTsMs(v);
+    if (!ms) return String(v);
+    return dayjs(ms).format("DD-MM-YYYY HH:mm");
   } catch { return String(v); }
 }
 
@@ -636,16 +648,18 @@ function parseTsMs(v) {
   const s = String(v).trim();
   const dIso = new Date(s);
   if (!isNaN(dIso.getTime())) return dIso.getTime();
-  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  const m = s.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
   if (m) {
-    let a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+    const sep = m[2];
+    let a = parseInt(m[1], 10), b = parseInt(m[3], 10), y = parseInt(m[4], 10);
     if (y < 100) y += 2000;
     let month, day;
-    if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
-    let hh = m[4] ? parseInt(m[4], 10) : 0;
-    const mm = m[5] ? parseInt(m[5], 10) : 0;
-    const ss = m[6] ? parseInt(m[6], 10) : 0;
-    const ap = (m[7] || '').toUpperCase();
+    if (sep === '-') { day = a; month = b - 1; }
+    else if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
+    let hh = m[5] ? parseInt(m[5], 10) : 0;
+    const mm = m[6] ? parseInt(m[6], 10) : 0;
+    const ss = m[7] ? parseInt(m[7], 10) : 0;
+    const ap = (m[8] || '').toUpperCase();
     if (ap === 'PM' && hh < 12) hh += 12;
     if (ap === 'AM' && hh === 12) hh = 0;
     const d = new Date(y, month, day, hh, mm, ss);
