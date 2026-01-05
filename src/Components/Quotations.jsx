@@ -404,10 +404,11 @@ export default function Quotations() {
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
   const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
   const smallLineStyle = { ...lineStyle, fontSize: 8 };
+  const metaLineStyle = { ...lineStyle, fontSize: 10, lineHeight: 1.15 };
   const twoLineClamp = {
     display: '-webkit-box',
     WebkitBoxOrient: 'vertical',
-    WebkitLineClamp: 2,
+    WebkitLineClamp: 3,
     overflow: 'hidden',
     whiteSpace: 'normal',
     fontSize: 8,
@@ -473,8 +474,8 @@ export default function Quotations() {
         ].join(' || ');
         return (
           <div style={stackStyle}>
-            <div style={lineStyle}>{modelVariant}</div>
-            <div style={lineStyle}>{metaLine}</div>
+            <div style={metaLineStyle}>{modelVariant}</div>
+            <div style={metaLineStyle}>{metaLine}</div>
           </div>
         );
       }
@@ -483,6 +484,7 @@ export default function Quotations() {
   if (["backend","admin","owner"].includes(userRole)) {
     columns.push({ title: "Remarks / Remark Text", key: "remarks", width: 240, render: (_, r) => {
         const rem = remarksMap[r.serialNo];
+        const remarkText = String(rem?.text || '');
         const color = rem?.level === 'alert' ? 'red' : rem?.level === 'warning' ? 'gold' : rem?.level === 'ok' ? 'green' : 'default';
         return (
           <div style={stackStyle}>
@@ -492,7 +494,9 @@ export default function Quotations() {
                 <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.serialNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
               </Space>
             </div>
-            <div style={lineStyle}>{rem?.text || '—'}</div>
+            <Tooltip title={remarkText ? <span style={{ whiteSpace: 'pre-wrap' }}>{remarkText}</span> : null}>
+              <div style={lineStyle}>{remarkText || '—'}</div>
+            </Tooltip>
           </div>
         );
       }

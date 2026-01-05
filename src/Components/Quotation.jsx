@@ -277,7 +277,7 @@ export default function Quotation() {
   const [vehicleType, setVehicleType] = useState("scooter");
   const [fittings, setFittings] = useState(["Side Stand", "Floor Mat", "ISI Helmet", "Grip Cover"]);
   const [docsReq, setDocsReq] = useState(DOCS_REQUIRED);
-  const [extraVehicles, setExtraVehicles] = useState([]); // up to 2 records (V2, V3)
+  const [extraVehicles, setExtraVehicles] = useState([]); // up to 3 records (V2..V4)
   const [userStaffName, setUserStaffName] = useState();
   const [userRole, setUserRole] = useState("");
   // Defaults for restore if fields get cleared
@@ -1339,7 +1339,7 @@ export default function Quotation() {
 
   const addVehicle = () => {
     setExtraVehicles((prev) => {
-      if (prev.length >= 2) return prev;
+      if (prev.length >= 3) return prev;
       return [...prev, makeEmptyVehicle()];
     });
   };
@@ -1796,7 +1796,7 @@ export default function Quotation() {
               <Col span={24}>
                 <Divider orientation="left">Additional Vehicles</Divider>
                 {extraVehicles.map((ev, idx) => {
-                  const idx1 = idx + 2; // Vehicle 2/3
+                  const idx1 = idx + 2; // Vehicle 2..4
                   const evModels = manual ? [] : filteredModels(ev.company);
                   const evVariants = manual ? [] : filteredVariants(ev.company, ev.model);
                   const tset = tenuresForSet(ev.emiSet || "12");
@@ -1929,12 +1929,12 @@ export default function Quotation() {
                 <Button
                   icon={<PlusOutlined />}
                   onClick={addVehicle}
-                  disabled={extraVehicles.length >= 2}
+                  disabled={extraVehicles.length >= 3}
                 >
                   Add Vehicle
                 </Button>
-                {extraVehicles.length >= 2 && (
-                  <span style={{ marginLeft: 8, color: "#666" }}>(Maximum 3 vehicles per quotation)</span>
+                {extraVehicles.length >= 3 && (
+                  <span style={{ marginLeft: 8, color: "#666" }}>(Maximum 4 vehicles per quotation)</span>
                 )}
               </Col>
 

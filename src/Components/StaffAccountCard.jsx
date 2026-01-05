@@ -7,7 +7,7 @@ const { Text } = Typography;
 export default function StaffAccountCard() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbx1jOp5fr9sE78SfPsY7zxADJyiS3ea8jOuwJ-1iMREEMI5cekbISYJ-84XyP9WitRhPA/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -414,17 +414,21 @@ async function fetchLedgerTransactions({ GAS_URL, SECRET, branch, staff, mode })
     const n = Number(new Date(String(raw)));
     return Number.isFinite(n) ? n : 0;
   };
-  const rowGroupKey = (r) => ([
-    normKey(r?.branch),
-    normKey(r?.staff),
-    normKey(r?.sourceType),
-    normKey(r?.sourceId),
-    normKey(r?.customerMobile),
-    normKey(r?.paymentMode),
-    normKey(r?.cashAmount ?? r?.cashPending),
-    normKey(r?.onlineAmount ?? r?.onlinePending),
-    normKey(r?.utr),
-  ]).join('|');
+  const rowGroupKey = (r) => {
+    const sourceId = normKey(r?.sourceId || r?.sourceID || r?.jcNo || r?.source || '');
+    const tsKey = normKey(r?.dateTimeIso || r?.date || '');
+    return ([
+      normKey(r?.branch),
+      normKey(r?.staff),
+      normKey(r?.sourceType),
+      sourceId || tsKey,
+      normKey(r?.customerMobile),
+      normKey(r?.paymentMode),
+      normKey(r?.cashAmount ?? r?.cashPending),
+      normKey(r?.onlineAmount ?? r?.onlinePending),
+      normKey(r?.utr),
+    ]).join('|');
+  };
   const map = new Map();
   rows.forEach((r) => {
     const key = rowGroupKey(r);

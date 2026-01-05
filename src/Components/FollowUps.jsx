@@ -122,7 +122,7 @@ const kpiLabel = { fontSize: 11, color: '#64748b', marginTop: 6 };
  * - mode: 'quotation' | 'jobcard' (default: 'quotation')
  * - webhookUrl: GAS URL for the selected mode
  */
-export default function FollowUps({ mode = 'quotation', webhookUrl }) {
+export default function FollowUps({ mode = 'quotation', webhookUrl, prefillQuery }) {
   const navigate = useNavigate();
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -154,6 +154,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
   const [dateRange, setDateRange] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+
+  useEffect(() => {
+    if (prefillQuery === undefined) return;
+    const next = String(prefillQuery || '');
+    setQ((prev) => (prev === next ? prev : next));
+    setPage(1);
+  }, [prefillQuery]);
 
   const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
   // Jobcard follow-ups now include a Post Service action
@@ -197,6 +204,10 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
     if (isJobcard && filter !== 'all') setFilter('all');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isJobcard]);
+  React.useEffect(() => {
+    if (isBooking && filter !== 'all') setFilter('all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBooking]);
   React.useEffect(() => {
     if (isQuotation && filter === 'overdue') setFilter('all');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1180,27 +1191,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
             <div style={{ flex: 1, minWidth: isMobile ? '100%' : 320 }}>
               <div style={{ display: 'flex', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
                 <Space wrap={!isMobile} direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
-                  {!isJobcard ? (
-                    <div className="fu-seg" style={{ display: 'flex', alignItems: 'center', gap: 8, width: controlWidth, flexWrap: 'wrap' }}>
-                      <FilterOutlined style={{ color: '#64748b' }} />
-                      <Segmented
-                        value={filter}
-                        onChange={setFilter}
-                        block={isMobile}
-                        size={isMobile ? 'small' : 'middle'}
-                        options={isQuotation ? [
-                          { label: 'All', value: 'all' },
-                          { label: 'Due Today', value: 'today' },
-                          { label: 'Upcoming', value: 'upcoming' },
-                        ] : [
-                          { label: 'All', value: 'all' },
-                          { label: 'Due Today', value: 'today' },
-                          { label: 'Overdue', value: 'overdue' },
-                          { label: 'Upcoming', value: 'upcoming' },
-                        ]}
-                      />
-                    </div>
-                  ) : (
+                  {isJobcard ? (
                     <Select
                       value={jobStatus}
                       onChange={setJobStatus}
@@ -1211,7 +1202,26 @@ export default function FollowUps({ mode = 'quotation', webhookUrl }) {
                         { value: 'completed', label: 'Completed' },
                       ]}
                     />
-                  )}
+                  ) : !isBooking ? (
+                    <div className="fu-seg" style={{ display: 'flex', alignItems: 'center', gap: 8, width: controlWidth, flexWrap: 'wrap' }}>
+                      <FilterOutlined style={{ color: '#64748b' }} />
+                      <Segmented
+                        value={filter}
+                        onChange={setFilter}
+                        block={isMobile}
+                        size={isMobile ? 'small' : 'middle'}
+                        options={isQuotation ? [
+                          { label: 'All', value: 'all' },
+                          { label: 'Due Today', value: 'today' },
+                         
+                        ] : [
+                          { label: 'All', value: 'all' },
+                          { label: 'Due Today', value: 'today' },
+                         
+                        ]}
+                      />
+                    </div>
+                  ) : null}
 
                   <DatePicker.RangePicker
                     value={dateRange}

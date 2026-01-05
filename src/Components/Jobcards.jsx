@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
@@ -7,9 +7,11 @@ import { saveJobcardViaWebhook } from "../apiCalls/forms";
 import { useNavigate } from "react-router-dom";
 import { exportToCsv } from "../utils/csvExport";
 import { normalizeKey, uniqCaseInsensitive, toKeySet } from "../utils/caseInsensitive";
+import { handleSmartPrint } from "../utils/printUtils";
+import PostServiceSheet from "./PostServiceSheet";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbx1jOp5fr9sE78SfPsY7zxADJyiS3ea8jOuwJ-1iMREEMI5cekbISYJ-84XyP9WitRhPA/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -64,6 +66,10 @@ export default function Jobcards() {
   const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
   const [filterSourceRows, setFilterSourceRows] = useState([]);
+  const invoiceRef = useRef(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [invoiceData, setInvoiceData] = useState(null);
+  const [invoiceLoadingId, setInvoiceLoadingId] = useState(null);
 
   useEffect(() => {
     try {
@@ -154,6 +160,136 @@ export default function Jobcards() {
       _raw: o,
     };
   }, []);
+
+  const parsePayloadFromRow = (row) => {
+    if (!row) return null;
+    if (row.payload && typeof row.payload === 'object') return row.payload;
+    const raw =
+      row.payload ||
+      row.Payload ||
+      row.PAYLOAD ||
+      row?.values?.Payload ||
+      row?.values?.payload ||
+      row?.values?.PAYLOAD ||
+      row?._raw?.payload ||
+      row?._raw?.Payload ||
+      row?._raw?.PAYLOAD ||
+      row?._raw?.values?.Payload ||
+      row?._raw?.values?.payload ||
+      row?._raw?.values?.PAYLOAD ||
+      '';
+    if (raw && typeof raw === 'object') return raw;
+    if (raw && typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    if (row.formValues || row.values) return row;
+    return null;
+  };
+
+  const buildInvoicePayload = (payload, row) => {
+    if (!payload) return null;
+    const fv = payload.formValues || payload.values || {};
+    const labourRows = Array.isArray(payload.labourRows)
+      ? payload.labourRows
+      : Array.isArray(fv.labourRows)
+      ? fv.labourRows
+      : [];
+    const totalsIn = payload.totals || fv.totals || {};
+    const computedSub = labourRows.reduce(
+      (sum, r) => sum + Number(r?.qty || 0) * Number(r?.rate || 0),
+      0
+    );
+    const totals = {
+      labourSub: totalsIn.labourSub ?? computedSub,
+      labourGST: totalsIn.labourGST ?? 0,
+      labourDisc: totalsIn.labourDisc ?? 0,
+      grand: totalsIn.grand ?? computedSub,
+    };
+    const createdAt =
+      payload.postServiceAt ||
+      payload.createdAt ||
+      payload.savedAt ||
+      row?.postAt ||
+      row?.ts ||
+      new Date();
+    return {
+      vals: {
+        jcNo: row?.jcNo || fv.jcNo || "",
+        regNo: row?.regNo || fv.regNo || "",
+        custName: row?.name || fv.custName || fv.name || "",
+        custMobile: row?.mobile || fv.custMobile || fv.mobile || "",
+        km: fv.km || "",
+        model: row?.model || fv.model || "",
+        colour: fv.colour || row?.colour || "",
+        branch: row?.branch || fv.branch || "",
+        executive: row?.executive || fv.executive || "",
+        createdAt,
+        labourRows,
+        gstLabour: totalsIn.gstLabour || totalsIn.labourGST || 0,
+      },
+      totals,
+    };
+  };
+
+  const handleServiceInvoice = async (row) => {
+    if (!row) return;
+    const status = String(row.status || "").toLowerCase();
+    if (status !== 'completed') {
+      message.warning("Complete post-service to generate the service invoice.");
+      return;
+    }
+    const key = row.jcNo || row.key || row.mobile || '';
+    setInvoiceLoadingId(key);
+    try {
+      let payload = parsePayloadFromRow(row);
+      let built = payload ? buildInvoicePayload(payload, row) : null;
+      const hasItems = Array.isArray(built?.vals?.labourRows) && built.vals.labourRows.length > 0;
+      if (!built || !hasItems) {
+        const mobile = String(row.mobile || "").replace(/\D/g, "").slice(-10);
+        if (mobile.length === 10) {
+          const base = { action: 'search', mode: 'mobile', query: mobile };
+          const payloadReq = GAS_SECRET ? { ...base, secret: GAS_SECRET } : base;
+          const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload: payloadReq });
+          const js = resp?.data || resp;
+          const rows = Array.isArray(js?.rows) ? js.rows : (Array.isArray(js?.data) ? js.data : []);
+          if (rows.length) {
+            let target = rows[0];
+            if (row.jcNo) {
+              const match = rows.find((r) => {
+                const p = parsePayloadFromRow(r);
+                const fv = p?.formValues || p?.values || {};
+                const id =
+                  fv.jcNo ||
+                  r?.jcNo ||
+                  r?.values?.['JC No'] ||
+                  r?.values?.['JC No.'] ||
+                  r?.values?.['Job Card No'] ||
+                  '';
+                return String(id || '').trim() === String(row.jcNo || '').trim();
+              });
+              if (match) target = match;
+            }
+            const fetchedPayload = parsePayloadFromRow(target);
+            built = fetchedPayload ? buildInvoicePayload(fetchedPayload, row) : built;
+          }
+        }
+      }
+      if (!built) {
+        message.error("Could not load service invoice data.");
+        return;
+      }
+      setInvoiceData(built);
+      setInvoiceOpen(true);
+      setTimeout(() => {
+        try { handleSmartPrint(invoiceRef.current); } catch { /* ignore */ }
+        setTimeout(() => setInvoiceOpen(false), 500);
+      }, 50);
+    } catch {
+      message.error("Could not generate service invoice.");
+    } finally {
+      setInvoiceLoadingId(null);
+    }
+  };
 
   // Seed from cache for instant paint
   useEffect(() => {
@@ -435,9 +571,12 @@ export default function Jobcards() {
   if (["backend","admin","owner"].includes(userRole)) {
     columns.push({ title: "Remarks / Remark Text", key: "remarks", width: 250, render: (_, r) => {
         const rem = remarksMap[r.jcNo];
+        const remarkText = String(rem?.text || '');
         const level = String(rem?.level || '').toLowerCase();
         const color = level === 'alert' ? 'red' : level === 'warning' ? 'gold' : level === 'ok' ? 'green' : 'default';
-        const title = rem?.text ? rem.text : 'No remark yet';
+        const title = remarkText ? remarkText : 'No remark yet';
+        const isCompleted = String(r.status || '').toLowerCase() === 'completed';
+        const isInvoiceLoading = invoiceLoadingId === (r.jcNo || r.key || r.mobile || '');
         return (
           <div style={stackStyle}>
             <div style={lineStyle}>
@@ -446,9 +585,23 @@ export default function Jobcards() {
                   <Tag color={color}>{level ? level.toUpperCase() : '—'}</Tag>
                 </Tooltip>
                 <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+                <Tooltip title={isCompleted ? "Print service invoice" : "Complete post-service to enable invoice"}>
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    loading={isInvoiceLoading}
+                    disabled={!isCompleted}
+                    onClick={() => handleServiceInvoice(r)}
+                  >
+                    Service Invoice
+                  </Button>
+                </Tooltip>
               </Space>
             </div>
-            <div style={lineStyle}>{rem?.text || '—'}</div>
+            <Tooltip title={remarkText ? <span style={{ whiteSpace: 'pre-wrap' }}>{remarkText}</span> : null}>
+              <div style={lineStyle}>{remarkText || '—'}</div>
+            </Tooltip>
           </div>
         );
       }
@@ -577,6 +730,12 @@ export default function Jobcards() {
           <Input maxLength={140} showCount value={remarkModal.text} onChange={(e)=> setRemarkModal((s)=> ({ ...s, text: e.target.value }))} placeholder="Short note (optional)" />
         </Space>
       </Modal>
+      <PostServiceSheet
+        ref={invoiceRef}
+        active={invoiceOpen}
+        vals={invoiceData?.vals || {}}
+        totals={invoiceData?.totals || {}}
+      />
     </div>
   );
 }

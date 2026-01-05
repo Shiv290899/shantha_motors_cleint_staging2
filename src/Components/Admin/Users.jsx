@@ -30,6 +30,7 @@ export default function Users({ readOnly = false }) {
   const [editing, setEditing] = React.useState(null);
   const [branches, setBranches] = React.useState([]);
   const [form] = Form.useForm();
+  const getRowId = React.useCallback((row) => row?.id || row?._id || row?.userId || null, []);
 
   // Quick filters
   const [qText, setQText] = React.useState(""); // input value
@@ -111,9 +112,14 @@ export default function Users({ readOnly = false }) {
   React.useEffect(() => { setPage(1); }, [q, roleFilter, statusFilter, branchFilter]);
 
   const onEdit = (row) => {
-    setEditing(row);
+    const rowId = getRowId(row);
+    if (!rowId) {
+      message.error("User ID missing. Please refresh and try again.");
+      return;
+    }
+    setEditing({ ...row, id: rowId });
     form.setFieldsValue({
-      id: row.id,
+      id: rowId,
       name: row.name,
       email: row.email,
       phone: row.phone,
@@ -121,14 +127,21 @@ export default function Users({ readOnly = false }) {
       status: row.status,
       jobTitle: row.jobTitle,
       employeeCode: row.employeeCode,
-      primaryBranch: row.primaryBranch?._id || row.primaryBranch || undefined,
-      branches: Array.isArray(row.branches) ? row.branches.map((b) => (typeof b === 'string' ? b : b?._id)).filter(Boolean) : undefined,
+      primaryBranch: row.primaryBranch?._id || row.primaryBranch?.id || row.primaryBranch || undefined,
+      branches: Array.isArray(row.branches)
+        ? row.branches.map((b) => (typeof b === 'string' ? b : (b?._id || b?.id))).filter(Boolean)
+        : undefined,
       canSwitchBranch: !!row.canSwitchBranch,
     });
     setModalOpen(true);
   };
 
   const onDelete = async (row) => {
+    const rowId = getRowId(row);
+    if (!rowId) {
+      message.error("User ID missing. Please refresh and try again.");
+      return;
+    }
     Modal.confirm({
       title: `Delete ${row.name}?`,
       content: `This cannot be undone.`,
@@ -136,7 +149,7 @@ export default function Users({ readOnly = false }) {
       okText: "Delete",
       onOk: async () => {
         try {
-          const res = await deleteUser(row.id);
+          const res = await deleteUser(rowId);
           if (res?.success) {
             message.success("User deleted");
             fetchList();
@@ -166,11 +179,12 @@ export default function Users({ readOnly = false }) {
         canSwitchBranch: !!vals.canSwitchBranch,
       };
       setSaving(true);
-      if (!editing?.id) {
+      const editingId = getRowId(editing);
+      if (!editingId) {
         message.error("Cannot create users here. Use registration.");
         return;
       }
-      const res = await updateUser(editing.id, payload);
+      const res = await updateUser(editingId, payload);
       if (res?._status === 401 || res?._status === 403) {
         message.warning("Please login again to continue.");
         return;
@@ -192,26 +206,26 @@ export default function Users({ readOnly = false }) {
     }
   };
 
-  const branchOptions = branches.map((b) => ({ label: b.name, value: b.id }));
+  const branchOptions = branches.map((b) => ({ label: b.name, value: b.id || b._id }));
 
   const columns = [
-    { title: "Name", dataIndex: "name", key: "name", sorter: (a, b) => a.name.localeCompare(b.name) },
-    { title: "Email", dataIndex: "email", key: "email", width: 220 },
-    { title: "Phone", dataIndex: "phone", key: "phone", width: 140 },
-    { title: "Role", dataIndex: "role", key: "role", width: 130, render: (v) => <Tag color={v === 'admin' ? 'red' : v === 'owner' ? 'gold' : v === 'backend' ? 'purple' : v === 'mechanic' ? 'cyan' : v === 'staff' ? 'blue' : 'default'}>{v}</Tag> },
-    { title: "Primary Branch", key: "primaryBranch", width: 180, render: (_, r) => r.primaryBranch?.name || "—" },
-    { title: "Status", dataIndex: "status", key: "status", width: 130, render: (v) => (
+    { title: "Name", dataIndex: "name", key: "name", width: 160, ellipsis: true, sorter: (a, b) => a.name.localeCompare(b.name) },
+    { title: "Email", dataIndex: "email", key: "email", width: 180, ellipsis: true },
+    { title: "Phone", dataIndex: "phone", key: "phone", width: 110, ellipsis: true },
+    { title: "Role", dataIndex: "role", key: "role", width: 100, render: (v) => <Tag color={v === 'admin' ? 'red' : v === 'owner' ? 'gold' : v === 'backend' ? 'purple' : v === 'mechanic' ? 'cyan' : v === 'staff' ? 'blue' : 'default'}>{v}</Tag> },
+    { title: "Primary Branch", key: "primaryBranch", width: 140, ellipsis: true, render: (_, r) => r.primaryBranch?.name || "—" },
+    { title: "Status", dataIndex: "status", key: "status", width: 90, render: (v) => (
       v === "active" ? <Tag color="green">Active</Tag> : v === "inactive" ? <Tag>Inactive</Tag> : <Tag color="orange">Suspended</Tag>
     ) },
-    { title: "Last Login", dataIndex: "lastLoginAt", key: "lastLoginAt", width: 180, render: (v) => v ? dayjs(v).format("DD-MM-YYYY HH:mm") : "—" },
+    { title: "Last Login", dataIndex: "lastLoginAt", key: "lastLoginAt", width: 140, render: (v) => v ? dayjs(v).format("DD-MM-YYYY HH:mm") : "—" },
     ...(!readOnly ? [{
       title: "Actions",
       key: "actions",
-      width: 180,
+      width: 160,
       render: (_, row) => (
-        <Space>
-          <Button size="small" onClick={() => onEdit(row)}>Edit</Button>
-          <Button size="small" danger onClick={() => onDelete(row)}>Delete</Button>
+        <Space size={4} wrap>
+          <Button size="small" onClick={(e) => { e.stopPropagation(); onEdit(row); }}>Edit</Button>
+          <Button size="small" danger onClick={(e) => { e.stopPropagation(); onDelete(row); }}>Delete</Button>
         </Space>
       ),
     }] : []),
@@ -302,11 +316,11 @@ export default function Users({ readOnly = false }) {
         </div>
       </div>
       <Table
-        rowKey={(r) => r.id}
+        rowKey={(r) => getRowId(r) || `${r.email || ''}-${r.phone || ''}-${r.name || ''}`}
         dataSource={items}
         columns={columns}
         loading={loading}
-        scroll={{ x: 'max-content' }}
+        tableLayout="fixed"
         pagination={{
           current: page,
           pageSize,

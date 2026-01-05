@@ -617,7 +617,7 @@ export default function StockUpdate() {
   const actionsCol = {
     title: "Actions",
     key: "actions",
-    width: isMobile ? 120 : 170,
+    width: isMobile ? 20 : 40,
     render: (_, r) => (
       isAdminOwner ? (
         <Space size={4} wrap={false} style={{ whiteSpace: 'nowrap' }}>

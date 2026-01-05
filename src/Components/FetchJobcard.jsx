@@ -33,6 +33,8 @@ export default function FetchJobcard({
   setFollowUpNotes,
   setPostServiceLock,
   autoSearch,
+  prefillMode = "full", // full | basic
+  onAutoSearchStatusChange,
 }) {
   const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
   const [open, setOpen] = useState(false);
@@ -41,9 +43,15 @@ export default function FetchJobcard({
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
   const [notFoundText, setNotFoundText] = useState("");
+  const [applyPrefillMode, setApplyPrefillMode] = useState(prefillMode);
+  const applyModeRef = useRef(prefillMode);
 
   const { BRANCHES, MECHANIC, EXECUTIVES, VEHICLE_TYPES, SERVICE_TYPES } =
     useMemo(() => lists || {}, [lists]);
+  useEffect(() => {
+    applyModeRef.current = prefillMode;
+    setApplyPrefillMode(prefillMode);
+  }, [prefillMode]);
 
   // ---------- Column synonyms ----------
   const COL = useMemo(
@@ -109,19 +117,21 @@ export default function FetchJobcard({
     return stages.some((rx) => rx.test(v));
   };
 
-  const showNotFoundModal = () => {
+  const showNotFoundModal = (opts = {}) => {
+    const source = opts?.source;
+    const isInline = source === "inline";
     const pretty =
       mode === "vehicle"
         ? normalizeReg(query)
         : tenDigits(query) || String(query || "").trim();
     const label = mode === "vehicle" ? "vehicle number" : "mobile number";
     const txt = pretty
-      ? `The ${label} "${pretty}" is not in our job card records.`
-      : "No matching record found in our job card records.";
+      ? `No records found for ${label} "${pretty}".`
+      : "No records found.";
     setNotFoundText(txt);
     Modal.warning({
       centered: true,
-      title: "No job card found",
+      title: isInline ? "No records found" : "No job card found",
       content: txt,
       okText: "Got it",
     });
@@ -167,6 +177,25 @@ export default function FetchJobcard({
       false
     );
     return d.isValid() ? d : dayjs(0);
+  };
+
+  const payloadTimestampMs = (payload) => {
+    const p = payload || {};
+    const fv = p.formValues || {};
+    const raw =
+      p.savedAt ||
+      p.createdAt ||
+      p.ts ||
+      p.timestamp ||
+      p.postServiceAt ||
+      fv.createdAt ||
+      fv.savedAt ||
+      fv.timestamp ||
+      fv.submittedAt ||
+      fv.expectedDelivery ||
+      "";
+    const d = dayjs(raw);
+    return d.isValid() ? d.valueOf() : 0;
   };
 
   const buildPostLockState = (payloadMaybe, valuesMaybe) => {
@@ -320,7 +349,7 @@ export default function FetchJobcard({
     const executiveRaw = pick(row, COL.Executive);
     const expectedDelivery = parseDDMMYYYY(pick(row, COL.ExpectedDelivery));
     const regNo = formatReg(pick(row, COL.RegNo), "");
-    const model = pick(row, COL.Model);
+    const model = String(pick(row, COL.Model) || "").toUpperCase();
     const colour = pick(row, COL.Colour);
     const kmDigits = pick(row, COL.KM).replace(/\D/g, "");
     const custName = pick(row, COL.CustName);
@@ -374,8 +403,33 @@ export default function FetchJobcard({
     return { fields, serviceType, vehicleType };
   };
 
+  const applyBasicFields = (fields = {}) => {
+    const next = {};
+    const regNo = formatReg(fields.regNo || "", "");
+    const mobile = String(fields.custMobile || "").replace(/\D/g, "").slice(-10);
+    if (regNo) next.regNo = regNo;
+    if (mobile) next.custMobile = mobile;
+    if (String(fields.custName || "").trim()) next.custName = fields.custName;
+    if (String(fields.model || "").trim()) next.model = String(fields.model).toUpperCase();
+    if (String(fields.colour || "").trim()) next.colour = fields.colour;
+    if (Object.keys(next).length) form.setFieldsValue(next);
+    if (regNo) setRegDisplay?.(regNo);
+    if (setPostServiceLock) {
+      setPostServiceLock({ locked: false, at: null, mobile: null, amount: null, mode: null });
+    }
+    message.success("Customer details pre-filled.");
+    setOpen(false);
+    setMatches([]);
+    setQuery("");
+  };
+
   const applyRowToForm = (row) => {
     const { fields, serviceType, vehicleType } = mapRowToForm(row);
+
+    if (applyModeRef.current === "basic") {
+      applyBasicFields(fields);
+      return;
+    }
 
     // sync UI toggles first (controls visibility)
     setServiceTypeLocal?.(serviceType || null);
@@ -405,6 +459,18 @@ export default function FetchJobcard({
   // Apply using our saved payload JSON (when fetched via webhook)
   const applyPayloadToForm = (p) => {
     try {
+      if (applyModeRef.current === "basic") {
+        const fv = p?.formValues || {};
+        applyBasicFields({
+          regNo: fv.regNo || "",
+          custMobile: String(fv.custMobile || "").replace(/\D/g, "").slice(-10),
+          custName: fv.custName || "",
+          model: String(fv.model || "").toUpperCase(),
+          colour: fv.colour || "",
+        });
+        return;
+      }
+
       const fv = p?.formValues || {};
       const serviceType = fv.serviceType || null;
       const vehicleType = fv.vehicleType || null;
@@ -425,7 +491,7 @@ export default function FetchJobcard({
         executive: fv.executive || undefined,
         expectedDelivery: fv.expectedDelivery ? dayjs(fv.expectedDelivery, ["DD-MM-YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true) : null,
         regNo: fv.regNo || '',
-        model: fv.model || '',
+        model: String(fv.model || "").toUpperCase(),
         colour: fv.colour || '',
         km: fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '',
         fuelLevel: fv.fuelLevel || undefined,
@@ -469,8 +535,14 @@ export default function FetchJobcard({
   };
 
   // ---------- search ----------
-  const runSearch = async (overrideQuery, modeOverride) => {
+  const runSearch = async (overrideQuery, modeOverride, prefillOverride, options = {}) => {
     const modeNow = modeOverride || mode;
+    const nextPrefillMode = (typeof prefillOverride === "string" && prefillOverride) ? prefillOverride : prefillMode;
+    applyModeRef.current = nextPrefillMode;
+    setApplyPrefillMode(nextPrefillMode);
+    const autoPickLatest = !!options?.autoPickLatest;
+    const source = options?.source;
+    const isInline = source === "inline";
     const rawOverride =
       typeof overrideQuery === "string" || typeof overrideQuery === "number"
         ? String(overrideQuery)
@@ -478,6 +550,7 @@ export default function FetchJobcard({
     const raw = (rawOverride ?? query ?? "").trim();
     if (!raw) {
       message.warning(modeNow === "vehicle" ? "Enter vehicle no. (KA03AB1234)" : modeNow === "jc" ? "Enter a valid Job Card number." : "Enter a valid 10-digit mobile number.");
+      if (isInline) onAutoSearchStatusChange?.(false, source);
       return;
     }
     let qNorm = raw;
@@ -485,6 +558,7 @@ export default function FetchJobcard({
       const reg = normalizeReg(raw);
       if (!VEH_RX.test(reg)) {
         message.warning("Enter vehicle no. as KA03AB1234.");
+        if (isInline) onAutoSearchStatusChange?.(false, source);
         return;
       }
       qNorm = reg;
@@ -496,6 +570,7 @@ export default function FetchJobcard({
       const digits = tenDigits(raw);
       if (!digits || digits.length !== 10) {
         message.warning("Enter a valid 10-digit mobile number.");
+        if (isInline) onAutoSearchStatusChange?.(false, source);
         return;
       }
       qNorm = digits;
@@ -503,22 +578,29 @@ export default function FetchJobcard({
     }
     setNotFoundText("");
     setLoading(true);
+    if (isInline) onAutoSearchStatusChange?.(true, source);
     try {
       const result = await fetchRows(qNorm, modeNow);
       if (!result) throw new Error('No result');
       if (result.mode === 'webhook') {
         const rows = result.rows || [];
         if (!rows.length) {
-          showNotFoundModal();
+          showNotFoundModal({ source });
           setMatches([]);
           return;
         }
-        if (rows.length === 1) {
-          const p = rows[0]?.payload || rows[0];
+        const payloads = rows.map((r) => r?.payload || r);
+        if (autoPickLatest) {
+          const sorted = [...payloads].sort((a, b) => payloadTimestampMs(b) - payloadTimestampMs(a));
+          applyPayloadToForm(sorted[0]);
+          return;
+        }
+        if (payloads.length === 1) {
+          const p = payloads[0];
           applyPayloadToForm(p);
           return;
         }
-        setMatches(rows.map(r => r.payload || r).slice(0, 10));
+        setMatches(payloads.slice(0, 10));
         message.info(`Found ${rows.length} matches. Pick one.`);
         return;
       }
@@ -539,7 +621,7 @@ export default function FetchJobcard({
       }
 
       if (!candidates.length) {
-        showNotFoundModal();
+        showNotFoundModal({ source });
         setMatches([]);
         return;
       }
@@ -548,6 +630,11 @@ export default function FetchJobcard({
       candidates.sort(
         (a, b) => parseTimestamp(b).valueOf() - parseTimestamp(a).valueOf()
       );
+
+      if (autoPickLatest) {
+        applyRowToForm(candidates[0]);
+        return;
+      }
 
       if (candidates.length === 1) {
         applyRowToForm(candidates[0]);
@@ -561,6 +648,7 @@ export default function FetchJobcard({
       message.error("Could not fetch job cards. Check the Apps Script/CSV link.");
     } finally {
       setLoading(false);
+      if (isInline) onAutoSearchStatusChange?.(false, source);
     }
   };
 
@@ -574,8 +662,11 @@ export default function FetchJobcard({
     lastAutoKeyRef.current = nextKey;
     setMode(nextMode);
     setQuery(rawQuery);
-    setOpen(true);
-    setTimeout(() => { runSearch(rawQuery, nextMode); }, 0);
+    const shouldOpen = autoSearch?.openModal !== false;
+    setOpen(shouldOpen);
+    setTimeout(() => {
+      runSearch(rawQuery, nextMode, autoSearch?.prefill, { autoPickLatest: autoSearch?.autoPickLatest, source: autoSearch?.source });
+    }, 0);
   }, [autoSearch]);
 
   return (

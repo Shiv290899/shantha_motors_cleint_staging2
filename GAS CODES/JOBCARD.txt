@@ -807,7 +807,7 @@ function findExistingRowFull_(mobile10, jcNo){
     if (last <= 1) return null;
 
     const rows = s.getRange(2,1,last-1,ix.width).getValues();
-    if (jcNo && ix.idxJC >= 0) {
+  if (jcNo && ix.idxJC >= 0) {
       for (let i = rows.length - 1; i >= 0; i--){
         const r = rows[i];
         const jc = String(r[ix.idxJC] || '').trim();
@@ -817,7 +817,7 @@ function findExistingRowFull_(mobile10, jcNo){
         }
       }
     }
-    if (mobile10 && ix.idxMobile >= 0) {
+    if (!jcNo && mobile10 && ix.idxMobile >= 0) {
       for (let i = rows.length - 1; i >= 0; i--){
         const r = rows[i];
         const m = ten_(r[ix.idxMobile]);

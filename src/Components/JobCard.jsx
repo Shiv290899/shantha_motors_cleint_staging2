@@ -42,7 +42,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec";
+  "https://script.google.com/macros/s/AKfycbx1jOp5fr9sE78SfPsY7zxADJyiS3ea8jOuwJ-1iMREEMI5cekbISYJ-84XyP9WitRhPA/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 const JOBCARD_GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 
@@ -225,6 +225,8 @@ function normalizeINPhone(raw) {
 function buildWelcomeMsg(vals, totals) {
   const fmtDate =
     vals?.expectedDelivery ? dayjs(vals.expectedDelivery).format("DD-MM-YYYY HH:mm") : "—";
+  const createdAt =
+    vals?.createdAt ? dayjs(vals.createdAt).format("DD-MM-YYYY HH:mm") : "—";
   // Always use logged-in user's phone; ignore any legacy mappings
   const execPhone = getLoggedInPhone();
   const branch = vals?.branch || "—";
@@ -246,6 +248,7 @@ function buildWelcomeMsg(vals, totals) {
     `✅ Your bike service is confirmed at ${showroomEn}.\n\n` +
     `Welcome to ${showroomEn},\n${showroomKn}ಗೆ ಸ್ವಾಗತ 🏍️✨\n\n` +
     `🧾 Job Card: ${jc}\n` +
+    `🕒 Job Card Created: ${createdAt}\n` +
     `🏍️ Vehicle: ${reg}\n` +
     `📅 Delivery Date: ${fmtDate}\n` +
     `💰 Estimated Cost (ಅಂದಾಜು ವೆಚ್ಚ): ${estimate}\n\n` +
@@ -263,6 +266,8 @@ function buildMechanicMsg(vals) {
   const reg = (vals?.regNo ? String(vals.regNo).trim() : "") || "—";
   const serviceType = (vals?.serviceType ? String(vals.serviceType).trim() : "") || "—";
   const mat = (vals?.floorMat ? String(vals.floorMat).trim() : "") || "—";
+  const createdAt =
+    vals?.createdAt ? dayjs(vals.createdAt).format("DD-MM-YYYY HH:mm") : "—";
 
   const rawKm = String(vals?.km ?? "").toUpperCase().trim();
   const kmDigits = rawKm.replace(/\s*KM\s*$/i, "").replace(/\D/g, "");
@@ -274,6 +279,7 @@ function buildMechanicMsg(vals) {
   return [
     "*Job Card Details (Mechanic)* 🛠️",
     "",
+    `🕒 Job Card Created: ${createdAt}`,
     `👤 Customer Name: ${name}`,
     `📞 Mobile Number: ${mobile}`,
     `🔧 Model: ${model}`,
@@ -287,17 +293,21 @@ function buildMechanicMsg(vals) {
   ].join("\n");
 }
 
-function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
+function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp, allowSmsFallback = true }) {
   const waUrl = `https://wa.me/${mobileE164}?text=${encodeURIComponent(text)}`;
   const w = window.open(waUrl, "_blank", "noopener,noreferrer");
 
   const blocked = !w || w.closed || typeof w.closed === "undefined";
   if (blocked) {
     onFailToWhatsApp?.();
-    const smsUrl = `sms:+${mobileE164}?body=${encodeURIComponent(text)}`;
-    window.location.href = smsUrl;
-    return;
+    if (allowSmsFallback) {
+      const smsUrl = `sms:+${mobileE164}?body=${encodeURIComponent(text)}`;
+      window.location.href = smsUrl;
+    }
+    return { opened: false, blocked: true };
   }
+
+  if (!allowSmsFallback) return { opened: true, blocked: false };
 
   setTimeout(() => {
     try {
@@ -312,6 +322,7 @@ function openWhatsAppOrSMS({ mobileE164, text, onFailToWhatsApp }) {
       window.location.href = smsUrl;
     }
   }, 1000);
+  return { opened: true, blocked: false };
 }
 
 // Build a detailed post-service invoice WhatsApp/SMS message (Delivery Invoice)
@@ -454,6 +465,10 @@ export default function JobCard({ initialValues = null } = {}) {
   const [postOpen, setPostOpen] = useState(false);
   const [prePrinting, setPrePrinting] = useState(false); // lock Pre-service print
   const [postSaving, setPostSaving] = useState(false); // lock Post-service save/print
+  const [whatsAppOpen, setWhatsAppOpen] = useState(false);
+  const [whatsAppStep, setWhatsAppStep] = useState(1);
+  const [whatsAppDone, setWhatsAppDone] = useState({ customer: false, mechanic: false, pre: false });
+  const [whatsAppAutoBlocked, setWhatsAppAutoBlocked] = useState(false);
   // Split payments: two slots
   const [postPay1Mode, setPostPay1Mode] = useState('cash'); // default Cash
   const [postPay1Amt, setPostPay1Amt] = useState('');
@@ -469,6 +484,9 @@ export default function JobCard({ initialValues = null } = {}) {
   const [pendingItems, setPendingItems] = useState([]);
   const [pendingLoaded, setPendingLoaded] = useState(false);
   const [pendingAutoSearch, setPendingAutoSearch] = useState(null);
+  const [inlineAutoSearch, setInlineAutoSearch] = useState(null);
+  const [inlineFetchLoading, setInlineFetchLoading] = useState(false);
+  const [inlineFetchTarget, setInlineFetchTarget] = useState(null);
   const startActionCooldown = (ms = 6000) => {
     const until = Date.now() + ms;
     setActionCooldownUntil(until);
@@ -1016,6 +1034,45 @@ export default function JobCard({ initialValues = null } = {}) {
     form.setFieldsValue({ custMobile: val });
   };
 
+  const triggerInlineFetch = (mode) => {
+    if (mode === "vehicle") {
+      const raw = regDisplay || form.getFieldValue("regNo") || "";
+      const regNo = formatReg(raw, regDisplay || "");
+      if (!REGEX_FULL.test(regNo)) {
+        message.warning("Enter vehicle no. as KA03AB1234.");
+        return;
+      }
+      setInlineFetchTarget("vehicle");
+      setInlineFetchLoading(true);
+      setInlineAutoSearch({
+        mode: "vehicle",
+        query: regNo,
+        token: Date.now(),
+        prefill: "basic",
+        autoPickLatest: true,
+        openModal: false,
+        source: "inline",
+      });
+      return;
+    }
+    const mobile = String(form.getFieldValue("custMobile") || "").replace(/\D/g, "").slice(-10);
+    if (mobile.length !== 10) {
+      message.warning("Enter a valid 10-digit mobile number.");
+      return;
+    }
+    setInlineFetchTarget("mobile");
+    setInlineFetchLoading(true);
+    setInlineAutoSearch({
+      mode: "mobile",
+      query: mobile,
+      token: Date.now(),
+      prefill: "basic",
+      autoPickLatest: true,
+      openModal: false,
+      source: "inline",
+    });
+  };
+
   const serviceOptions = SERVICE_TYPES.map((t) => ({ label: t, value: t }));
 
   const normalizeFormValues = (rawVals = {}) => {
@@ -1390,6 +1447,10 @@ export default function JobCard({ initialValues = null } = {}) {
         setFollowUpAt(null);
         setFollowUpNotes('');
         setPostServiceLock(POST_LOCK_EMPTY);
+        setWhatsAppDone({ customer: false, mechanic: false, pre: false });
+        setWhatsAppStep(1);
+        setWhatsAppAutoBlocked(false);
+        setWhatsAppOpen(false);
         // Recompute button enablement for new form
         recomputeReady();
         message.success('Ready for the next Job Card');
@@ -1410,9 +1471,22 @@ export default function JobCard({ initialValues = null } = {}) {
     ...(labourRows || []).map((r) => r.desc),
     ...(vals?.obs ? vals.obs.split("\n").map((s) => s.trim()).filter(Boolean) : []),
   ];
+  const stepCardStyle = (step) => ({
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    padding: "12px 14px",
+    border: "1px solid #e5e7eb",
+    borderRadius: 8,
+    background: whatsAppStep === step ? "#f0fdf4" : "#fff",
+  });
 
   // --- Auto-save then WhatsApp ---
-  const handleShareWhatsApp = async () => {
+  const handleShareWhatsApp = async (opts = {}) => {
+    const options = opts && typeof opts.preventDefault === "function" ? {} : (opts || {});
+    const allowSmsFallback = options.allowSmsFallback !== false;
+    const onPopupBlocked = options.onPopupBlocked;
     try {
       if (Date.now() < actionCooldownUntil) return;
       startActionCooldown(6000);
@@ -1428,30 +1502,40 @@ export default function JobCard({ initialValues = null } = {}) {
       }
       const msg = buildWelcomeMsg(valsNow, totals);
       message.loading({ key: "share", content: "Preparing WhatsApp message…" });
-      openWhatsAppOrSMS({
+      const result = openWhatsAppOrSMS({
         mobileE164,
         text: msg,
+        allowSmsFallback,
         onFailToWhatsApp: () => {
-          message.info({
-            key: "share",
-            content: "WhatsApp may not be available. Falling back to SMS composer…",
-            duration: 2,
-          });
+          if (allowSmsFallback) {
+            message.info({
+              key: "share",
+              content: "WhatsApp may not be available. Falling back to SMS composer…",
+              duration: 2,
+            });
+          }
+          onPopupBlocked?.();
         },
       });
       setTimeout(() => {
         message.success({ key: "share", content: "Ready to send.", duration: 2 });
       }, 800);
+      return result;
     } catch {
       // validation error already shown
+      return null;
     }
   };
 
   // --- Auto-save then WhatsApp (Mechanic) ---
-  const handleShareMechanicWhatsApp = async () => {
+  const handleShareMechanicWhatsApp = async (opts = {}) => {
+    const options = opts && typeof opts.preventDefault === "function" ? {} : (opts || {});
+    const allowSmsFallback = options.allowSmsFallback !== false;
+    const onPopupBlocked = options.onPopupBlocked;
+    const skipCooldown = options.skipCooldown === true;
     try {
-      if (Date.now() < actionCooldownUntil) return;
-      startActionCooldown(6000);
+      if (!skipCooldown && Date.now() < actionCooldownUntil) return;
+      if (!skipCooldown) startActionCooldown(6000);
       await handleAutoSave(); // will throw if invalid
 
       const valsNow = normalizeFormValues(form.getFieldsValue(true));
@@ -1471,38 +1555,92 @@ export default function JobCard({ initialValues = null } = {}) {
 
       const msg = buildMechanicMsg(valsNow);
       message.loading({ key: "mechshare", content: "Preparing mechanic WhatsApp message…" });
-      openWhatsAppOrSMS({
+      const result = openWhatsAppOrSMS({
         mobileE164: mechanicE164,
         text: msg,
+        allowSmsFallback,
         onFailToWhatsApp: () => {
-          message.info({
-            key: "mechshare",
-            content: "WhatsApp may not be available. Falling back to SMS composer…",
-            duration: 2,
-          });
+          if (allowSmsFallback) {
+            message.info({
+              key: "mechshare",
+              content: "WhatsApp may not be available. Falling back to SMS composer…",
+              duration: 2,
+            });
+          }
+          onPopupBlocked?.();
         },
       });
       setTimeout(() => {
         message.success({ key: "mechshare", content: "Ready to send.", duration: 2 });
       }, 800);
+      return result;
     } catch {
       // validation error already shown
+      return null;
     }
   };
 
   // --- Auto-save then Pre-service print ---
   const handlePreService = async () => {
+    let ok = false;
     try {
       setPrePrinting(true);
       // Ensure spinner paints before heavy work
       await new Promise((r) => setTimeout(r, 0));
       await handleAutoSave(); // will throw if invalid
       await handlePrint("pre");
+      ok = true;
     } catch {
       // validation error already shown
     } finally {
       setPrePrinting(false);
     }
+    return ok;
+  };
+
+  const openWhatsAppFlow = () => {
+    setWhatsAppAutoBlocked(false);
+    setWhatsAppStep(() => {
+      if (!whatsAppDone.customer) return 1;
+      if (!whatsAppDone.mechanic) return 2;
+      return 3;
+    });
+    setWhatsAppOpen(true);
+  };
+
+  const handleWhatsAppCustomerStep = async () => {
+    if (!isReady || actionCooldownUntil > Date.now()) return;
+    setWhatsAppAutoBlocked(false);
+    const result = await handleShareWhatsApp();
+    if (!result) return;
+    const needsMechanic = !whatsAppDone.mechanic;
+    setWhatsAppDone((s) => ({ ...s, customer: true }));
+    setWhatsAppStep(needsMechanic ? 2 : 3);
+    if (!needsMechanic) return;
+    const mechResult = await handleShareMechanicWhatsApp({
+      allowSmsFallback: false,
+      onPopupBlocked: () => setWhatsAppAutoBlocked(true),
+      skipCooldown: true,
+    });
+    if (mechResult?.opened) {
+      setWhatsAppDone((s) => ({ ...s, mechanic: true }));
+      setWhatsAppStep(3);
+    }
+  };
+
+  const handleWhatsAppMechanicStep = async () => {
+    if (!isReady) return;
+    setWhatsAppAutoBlocked(false);
+    const result = await handleShareMechanicWhatsApp({ skipCooldown: true });
+    if (!result) return;
+    setWhatsAppDone((s) => ({ ...s, mechanic: true }));
+    setWhatsAppStep(3);
+  };
+
+  const handleWhatsAppPreServiceStep = async () => {
+    if (!isReady || prePrinting) return;
+    const ok = await handlePreService();
+    if (ok) setWhatsAppDone((s) => ({ ...s, pre: true }));
   };
 
   return (
@@ -1547,7 +1685,12 @@ export default function JobCard({ initialValues = null } = {}) {
                 setFollowUpAt={setFollowUpAt}
                 setFollowUpNotes={setFollowUpNotes}
                 setPostServiceLock={setPostServiceLock}
-                autoSearch={pendingAutoSearch || autoFetch}
+                autoSearch={inlineAutoSearch || pendingAutoSearch || autoFetch}
+                onAutoSearchStatusChange={(loading, source) => {
+                  if (source !== "inline") return;
+                  setInlineFetchLoading(!!loading);
+                  if (!loading) setInlineFetchTarget(null);
+                }}
               />
               <Button
                 onClick={async () => {
@@ -1643,6 +1786,24 @@ export default function JobCard({ initialValues = null } = {}) {
                     maxLength={10}
                     inputMode="latin"
                     style={{ textTransform: "uppercase" }}
+                    suffix={(
+                      <Button
+                        type="primary"
+                        size="small"
+                        loading={inlineFetchLoading && inlineFetchTarget === "vehicle"}
+                        disabled={inlineFetchLoading}
+                        onClick={() => triggerInlineFetch("vehicle")}
+                        style={{
+                          height: 22,
+                          paddingInline: 6,
+                          fontSize: 11,
+                          background: "#52c41a",
+                          borderColor: "#52c41a",
+                        }}
+                      >
+                        Fetch
+                      </Button>
+                    )}
                   />
                 </Form.Item>
               </Col>
@@ -1671,6 +1832,24 @@ export default function JobCard({ initialValues = null } = {}) {
                     onKeyPress={handleMobileKeyPress}
                     onChange={handleMobileChange}
                     placeholder="10-digit number"
+                    suffix={(
+                      <Button
+                        type="primary"
+                        size="small"
+                        loading={inlineFetchLoading && inlineFetchTarget === "mobile"}
+                        disabled={inlineFetchLoading}
+                        onClick={() => triggerInlineFetch("mobile")}
+                        style={{
+                          height: 22,
+                          paddingInline: 6,
+                          fontSize: 11,
+                          background: "#52c41a",
+                          borderColor: "#52c41a",
+                        }}
+                      >
+                        Fetch
+                      </Button>
+                    )}
                   />
                 </Form.Item>
               </Col>
@@ -1973,31 +2152,10 @@ export default function JobCard({ initialValues = null } = {}) {
               <Button
                   type="default"
                   icon={<FaWhatsapp style={{ color: "#25D366" }} />}
-                  onClick={handleShareWhatsApp}
+                  onClick={openWhatsAppFlow}
                   disabled={!isReady || actionCooldownUntil > Date.now()}
                 >
-                  Customer WhatsApp
-                </Button>
-              </Tooltip>
-            </Col>
-
-            <Col>
-              <Tooltip title={isReady ? "" : (notReadyWhy || "Fill all required fields")} placement="top">
-                <Button
-                  type="default"
-                  icon={<FaWhatsapp style={{ color: "#25D366" }} />}
-                  onClick={handleShareMechanicWhatsApp}
-                  disabled={!isReady || actionCooldownUntil > Date.now()}
-                >
-                  Mechanic WhatsApp
-                </Button>
-              </Tooltip>
-            </Col>
-
-            <Col>
-              <Tooltip title={isReady ? "" : (notReadyWhy || "Fill all required fields")} placement="top">
-                <Button type="primary" onClick={handlePreService} disabled={!isReady || actionCooldownUntil > Date.now() || prePrinting} loading={prePrinting} /* ★ */>
-                  Pre-service
+                  WhatsApp
                 </Button>
               </Tooltip>
             </Col>
@@ -2012,6 +2170,77 @@ export default function JobCard({ initialValues = null } = {}) {
         </Form>
         </div>
       </div>
+
+      <Modal
+        title="WhatsApp"
+        open={whatsAppOpen}
+        onCancel={() => setWhatsAppOpen(false)}
+        footer={null}
+        destroyOnClose={false}
+      >
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={stepCardStyle(1)}>
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                1. Customer WhatsApp {whatsAppDone.customer ? "✅" : ""}
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Required</div>
+            </div>
+            <Button
+              type="primary"
+              icon={<FaWhatsapp style={{ color: "#25D366" }} />}
+              onClick={handleWhatsAppCustomerStep}
+              disabled={!isReady || actionCooldownUntil > Date.now()}
+            >
+              Send
+            </Button>
+          </div>
+
+          <div style={stepCardStyle(2)}>
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                2. Mechanic WhatsApp {whatsAppDone.mechanic ? "✅" : ""}
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Required</div>
+              {whatsAppAutoBlocked && !whatsAppDone.mechanic ? (
+                <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+                  Tap to open Mechanic WhatsApp.
+                </div>
+              ) : null}
+              {!whatsAppDone.customer ? (
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                  Complete Customer WhatsApp first.
+                </div>
+              ) : null}
+            </div>
+            <Button
+              type="primary"
+              icon={<FaWhatsapp style={{ color: "#25D366" }} />}
+              onClick={handleWhatsAppMechanicStep}
+              disabled={!isReady || !whatsAppDone.customer}
+            >
+              Send
+            </Button>
+          </div>
+
+          <div style={stepCardStyle(3)}>
+            <div>
+              <div style={{ fontWeight: 600 }}>
+                3. Pre-service {whatsAppDone.pre ? "✅" : ""}
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Optional</div>
+            </div>
+            <Button
+              type="default"
+              onClick={handleWhatsAppPreServiceStep}
+              disabled={!isReady || prePrinting}
+              loading={prePrinting}
+            >
+              Print
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Post-service modal: split payments (two slots) + actions */}
       <Modal

@@ -233,8 +233,8 @@ export default function Branches({ readOnly = false }) {
   };
 
   const columns = [
-    { title: "Code", dataIndex: "code", key: "code", width: 110, sorter: (a, b) => a.code.localeCompare(b.code) },
-    { title: "Name", dataIndex: "name", key: "name", sorter: (a, b) => a.name.localeCompare(b.name), render: (v,r)=> (
+    { title: "Code", dataIndex: "code", key: "code", width: 80, sorter: (a, b) => a.code.localeCompare(b.code) },
+    { title: "Name", dataIndex: "name", key: "name", width: 180, ellipsis: true, sorter: (a, b) => a.name.localeCompare(b.name), render: (v,r)=> (
       <span>
         {v}{' '}
         <Tooltip title="Open in Google Maps">
@@ -242,24 +242,24 @@ export default function Branches({ readOnly = false }) {
         </Tooltip>
       </span>
     ) },
-    { title: "Type", dataIndex: "type", key: "type", width: 150, render: (v) => {
+    { title: "Type", dataIndex: "type", key: "type", width: 110, render: (v) => {
       const color = v === 'sales' ? 'geekblue' : v === 'service' ? 'cyan' : 'blue';
       return <Tag color={color}>{v}</Tag>;
     } },
-    { title: "City", key: "city", width: 140, render: (_, r) => r.address?.city || "—" },
-    { title: "Phone", dataIndex: "phone", key: "phone", width: 140 },
-    { title: "Staff", key: "staffCount", width: 90, render: (v, r) => (r.activeStaffCount ?? (Array.isArray(r.staff) ? r.staff.length : 0)) },
-    { title: "Boys", key: "boysCount", width: 90, render: (v, r) => (r.activeBoysCount ?? (Array.isArray(r.boys) ? r.boys.length : 0)) },
-    { title: "Mechanics", key: "mechCount", width: 110, render: (v, r) => (r.activeMechanicsCount ?? (Array.isArray(r.mechanics) ? r.mechanics.length : 0)) },
-    { title: "Status", dataIndex: "status", key: "status", width: 160, render: (v) => (
+    { title: "City", key: "city", width: 110, ellipsis: true, render: (_, r) => r.address?.city || "—" },
+    { title: "Phone", dataIndex: "phone", key: "phone", width: 110, ellipsis: true },
+    { title: "Staff", key: "staffCount", width: 60, render: (v, r) => (r.activeStaffCount ?? (Array.isArray(r.staff) ? r.staff.length : 0)) },
+    { title: "Boys", key: "boysCount", width: 60, render: (v, r) => (r.activeBoysCount ?? (Array.isArray(r.boys) ? r.boys.length : 0)) },
+    { title: "Mechanics", key: "mechCount", width: 80, render: (v, r) => (r.activeMechanicsCount ?? (Array.isArray(r.mechanics) ? r.mechanics.length : 0)) },
+    { title: "Status", dataIndex: "status", key: "status", width: 110, render: (v) => (
       v === "active" ? <Tag color="green">Active</Tag> : v === "inactive" ? <Tag>Inactive</Tag> : <Tag color="orange">Under Maintenance</Tag>
     ) },
     ...(!readOnly ? [{
       title: "Actions",
       key: "actions",
-      width: 180,
+      width: 140,
       render: (_, row) => (
-        <Space>
+        <Space size={4} wrap>
           <Button size="small" onClick={() => onEdit(row)}>Edit</Button>
           <Button size="small" danger onClick={() => onDelete(row)}>Delete</Button>
         </Space>
@@ -301,7 +301,7 @@ export default function Branches({ readOnly = false }) {
         dataSource={filtered}
         columns={columns}
         loading={loading}
-        scroll={{ x: 'max-content' }}
+        tableLayout="fixed"
         pagination={{
           current: page,
           pageSize,

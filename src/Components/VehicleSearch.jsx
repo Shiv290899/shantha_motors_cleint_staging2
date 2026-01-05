@@ -27,7 +27,7 @@ const { Text } = Typography;
 const DEFAULT_BOOKING_GAS_URL =
   "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbyywiLgLkeZcbvOn-7rjoyMMddLesuq2Bl9Vj_AQl2zSVdj_Y_bGAfg5H7AiF_3FwPhsw/exec";
+  "https://script.google.com/macros/s/AKfycbx1jOp5fr9sE78SfPsY7zxADJyiS3ea8jOuwJ-1iMREEMI5cekbISYJ-84XyP9WitRhPA/exec";
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 const BOOKING_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 

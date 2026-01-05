@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Typography, Modal, Upload, DatePicker, AutoComplete } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Tooltip, Typography, Modal, Upload, DatePicker, AutoComplete, Form, Divider, Row, Col } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from 'dayjs';
@@ -76,6 +76,11 @@ export default function Bookings() {
   const [editingChassisId, setEditingChassisId] = useState(null);
   const [chassisDraft, setChassisDraft] = useState('');
   const [chassisSaving, setChassisSaving] = useState(false);
+  const [assignModal, setAssignModal] = useState({ open: false, row: null });
+  const [assignDraft, setAssignDraft] = useState('');
+  const [assignSaving, setAssignSaving] = useState(false);
+  const [stockMoveSaving, setStockMoveSaving] = useState(false);
+  const [stockMoveForm] = Form.useForm();
 
   // User + branch scoping
   const [currentUser, setCurrentUser] = useState(null);
@@ -647,9 +652,47 @@ export default function Bookings() {
     }) || null;
   }, [stockItems, isStockAllowed]);
 
+  useEffect(() => {
+    if (!assignModal.open || !assignModal.row) return;
+    const row = assignModal.row;
+    const baseNote = row.bookingId ? `Booking ID ${row.bookingId}` : '';
+    stockMoveForm.setFieldsValue({
+      company: row.company || '',
+      model: row.model || '',
+      variant: row.variant || '',
+      color: row.color || '',
+      sourceBranch: row.branch || '',
+      chassis: '',
+      notes: baseNote ? `Added for ${baseNote}` : '',
+    });
+    setAssignDraft('');
+    loadStockItems();
+  }, [assignModal.open, assignModal.row, loadStockItems, stockMoveForm]);
+
+  const openAssignModal = (row) => {
+    if (!row?.bookingId) {
+      message.warning('Booking ID missing for this row.');
+      return;
+    }
+    setEditingChassisId(null);
+    setChassisDraft('');
+    setAssignModal({ open: true, row });
+  };
+
+  const closeAssignModal = () => {
+    if (assignSaving || stockMoveSaving) return;
+    setAssignModal({ open: false, row: null });
+    setAssignDraft('');
+    stockMoveForm.resetFields();
+  };
+
   const startChassisEdit = (row) => {
     if (!row?.bookingId) {
       message.warning('Booking ID missing for this row.');
+      return;
+    }
+    if (!row?.chassis) {
+      openAssignModal(row);
       return;
     }
     setEditingChassisId(row.bookingId);
@@ -663,21 +706,20 @@ export default function Bookings() {
     setChassisDraft('');
   };
 
-  const handleSaveChassis = async (row) => {
-    if (!row?.bookingId || chassisSaving) return;
-    const nextVal = normalizeChassis(chassisDraft);
-    const currentVal = normalizeChassis(row?.chassis || '');
-    if (nextVal === currentVal) {
-      cancelChassisEdit();
-      return;
+  const assignChassisToBooking = async (row, chassisValue) => {
+    if (!row?.bookingId) return false;
+    const nextVal = normalizeChassis(chassisValue);
+    if (!nextVal) {
+      message.error('Select a chassis from stock to assign.');
+      return false;
     }
-    setChassisSaving(true);
     const matched = findStockMatch(row, nextVal);
-    const ok = await updateBooking(row.bookingId, { chassis: nextVal }, row.mobile);
-    if (!ok) {
-      setChassisSaving(false);
-      return;
+    if (!matched) {
+      message.error('Chassis not found in stock. Add stock movement first.');
+      return false;
     }
+    const ok = await updateBooking(row.bookingId, { chassis: nextVal }, row.mobile);
+    if (!ok) return false;
     if (matched && nextVal) {
       const createdBy = currentUser?.name || currentUser?.email || 'user';
       const rowData = {
@@ -703,9 +745,75 @@ export default function Bookings() {
         message.error('Saved booking but failed to update stock.');
       }
     }
+    return true;
+  };
+
+  const handleAssignFromStock = async () => {
+    if (!assignModal.row || assignSaving) return;
+    setAssignSaving(true);
+    const ok = await assignChassisToBooking(assignModal.row, assignDraft);
+    setAssignSaving(false);
+    if (ok) {
+      setAssignModal({ open: false, row: null });
+      setAssignDraft('');
+      stockMoveForm.resetFields();
+    }
+  };
+
+  const handleAddStockMovement = async () => {
+    if (!assignModal.row || stockMoveSaving) return;
+    try {
+      const values = await stockMoveForm.validateFields();
+      setStockMoveSaving(true);
+      const row = assignModal.row;
+      const chassisVal = normalizeChassis(values.chassis);
+      const baseNote = row.bookingId ? `Booking ID ${row.bookingId}` : '';
+      const notesRaw = String(values.notes || '').trim();
+      const notes = baseNote ? (notesRaw ? `${notesRaw} | ${baseNote}` : baseNote) : notesRaw;
+      const payload = {
+        Chassis_No: chassisVal,
+        Company: values.company || row.company || '',
+        Model: values.model || row.model || '',
+        Variant: values.variant || row.variant || '',
+        Color: values.color || row.color || '',
+        Action: 'add',
+        Source_Branch: values.sourceBranch || row.branch || '',
+        Notes: notes,
+      };
+      const createdBy = currentUser?.name || currentUser?.email || 'user';
+      const resp = await createStock({ data: payload, createdBy });
+      const ok = !!(resp?.success ?? resp?.ok);
+      if (ok) {
+        message.success('Stock movement saved. Now assign from stock above.');
+        loadStockItems(true);
+        setAssignDraft(chassisVal);
+      } else {
+        message.error(resp?.message || 'Failed to save stock movement.');
+      }
+    } catch (err) {
+      if (err?.errorFields) return;
+      const apiMessage = err?.response?.data?.message || err?.message;
+      message.error(apiMessage || 'Failed to save stock movement.');
+    } finally {
+      setStockMoveSaving(false);
+    }
+  };
+
+  const handleSaveChassis = async (row) => {
+    if (!row?.bookingId || chassisSaving) return;
+    const nextVal = normalizeChassis(chassisDraft);
+    const currentVal = normalizeChassis(row?.chassis || '');
+    if (nextVal === currentVal) {
+      cancelChassisEdit();
+      return;
+    }
+    setChassisSaving(true);
+    const ok = await assignChassisToBooking(row, nextVal);
     setChassisSaving(false);
-    setEditingChassisId(null);
-    setChassisDraft('');
+    if (ok) {
+      setEditingChassisId(null);
+      setChassisDraft('');
+    }
   };
 
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
@@ -717,6 +825,13 @@ export default function Bookings() {
     const text = String(note || '').trim();
     return text ? `${ts} - ${text}` : ts;
   };
+  const assignRow = assignModal.row;
+  const assignVehicleLabel = assignRow
+    ? [assignRow.company, assignRow.model, assignRow.variant, assignRow.color].filter(Boolean).join(' ')
+    : '';
+  const sourceBranchChoices = assignRow
+    ? uniqCaseInsensitive([assignRow.branch, ...branchOptions].filter(Boolean))
+    : branchOptions;
 
   let columns = [
     { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => {
@@ -762,7 +877,7 @@ export default function Bookings() {
                 options={options}
                 allowClear
                 style={{ width: 200 }}
-                placeholder={stockLoading ? 'Loading stock...' : 'Type or pick chassis'}
+                placeholder={stockLoading ? 'Loading stock...' : 'Pick chassis from stock'}
                 disabled={chassisSaving}
                 onChange={(val) => setChassisDraft(normalizeChassis(val))}
                 onKeyDown={(e) => {
@@ -786,27 +901,30 @@ export default function Bookings() {
             <Text type="secondary">
               {matched
                 ? `In stock at ${matched.sourceBranch || matched.branch || 'branch'} - will be allotted on save.`
-                : (options.length ? 'Pick from stock to auto-allot, or type to set manually.' : 'No stock for this model in current branches; type to set manually.')}
+                : (options.length ? 'Pick from stock list to allot. If missing, add stock movement first.' : 'No stock for this model in current branches. Add stock movement first.')}
             </Text>
           </Space>
         );
       }
       const lbl = stockLabel(r.chassis, r.availability);
       const statusText = String(r.status || 'pending').replace(/_/g, ' ');
+      const canAssign = !r.chassis;
       return (
         <div style={stackStyle}>
           <div style={wrapLineStyle}>
             <Space size={6} align="center" wrap>
               <span
                 style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', cursor: 'pointer' }}
-                title="Edit chassis"
-                onClick={() => startChassisEdit(r)}
+                title={canAssign ? 'Assign chassis' : 'Edit chassis'}
+                onClick={() => (canAssign ? openAssignModal(r) : startChassisEdit(r))}
               >
                 {r.chassis || '-'}
               </span>
-              <Button size="small" type="link" onClick={() => startChassisEdit(r)}>
-                {r.chassis ? 'Edit' : 'Assign'}
-              </Button>
+              {canAssign ? (
+                <Button size="small" type="link" onClick={() => openAssignModal(r)}>
+                  Assign
+                </Button>
+              ) : null}
             </Space>
           </div>
           <div style={wrapLineStyle}>
@@ -937,9 +1055,11 @@ export default function Bookings() {
                   Remark
                 </Button>
               </Space>
-              <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {remarksMap[r.bookingId]?.text || '—'}
-              </div>
+              <Tooltip title={remarksMap[r.bookingId]?.text ? <span style={{ whiteSpace: 'pre-wrap' }}>{remarksMap[r.bookingId].text}</span> : null}>
+                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {remarksMap[r.bookingId]?.text || '—'}
+                </div>
+              </Tooltip>
             </Space>
           ) : null}
         </Space>
@@ -1075,6 +1195,125 @@ export default function Bookings() {
         row={detailModal.row}
         webhookUrl={GAS_URL_STATIC}
       />
+
+      <Modal
+        open={assignModal.open}
+        title={assignRow ? `New Stock Movement – ${assignRow.bookingId || assignRow.name || ''}` : 'New Stock Movement'}
+        onCancel={closeAssignModal}
+        footer={null}
+        width={760}
+        destroyOnClose
+        maskClosable={!assignSaving && !stockMoveSaving}
+        closable={!assignSaving && !stockMoveSaving}
+      >
+        {assignRow ? (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontWeight: 600 }}>
+              {assignRow.name || 'Customer'}{assignRow.mobile ? ` • ${assignRow.mobile}` : ''}
+            </div>
+            <div style={{ color: '#6b7280' }}>
+              {assignRow.branch || '—'}{assignVehicleLabel ? ` • ${assignVehicleLabel}` : ''}
+            </div>
+            {assignRow.bookingId ? (
+              <div style={{ color: '#6b7280' }}>Booking ID: {assignRow.bookingId}</div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <Divider orientation="left" style={{ marginTop: 0 }}>New Stock Movement</Divider>
+        <Form form={stockMoveForm} layout="vertical">
+          <Row gutter={[12, 8]}>
+            <Col xs={24} md={12}>
+              <Form.Item name="company" label="Company">
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="model" label="Model">
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="variant" label="Variant">
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="color" label="Color">
+                <Input disabled />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="sourceBranch"
+                label="Source Branch"
+                rules={[{ required: true, message: 'Source branch is required' }]}
+              >
+                {sourceBranchChoices.length ? (
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    placeholder="Select branch"
+                    options={sourceBranchChoices.map((b) => ({ label: b, value: b }))}
+                  />
+                ) : (
+                  <Input placeholder="Enter source branch" />
+                )}
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="chassis"
+                label="Chassis No."
+                rules={[{ required: true, message: 'Chassis number is required' }]}
+              >
+                <Input
+                  placeholder="Enter chassis number"
+                  onChange={(e) => stockMoveForm.setFieldsValue({ chassis: normalizeChassis(e.target.value) })}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="notes" label="Notes">
+            <Input.TextArea rows={2} placeholder="Optional notes" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" onClick={handleAddStockMovement} loading={stockMoveSaving} disabled={!assignRow}>
+              Save Stock Movement
+            </Button>
+            <Text type="secondary">After saving, assign the chassis below.</Text>
+          </Space>
+        </Form>
+
+        <Divider orientation="left">Assign from Stock</Divider>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <AutoComplete
+            value={assignDraft}
+            options={assignRow ? stockOptionsForRow(assignRow) : []}
+            allowClear
+            style={{ width: '100%' }}
+            placeholder={stockLoading ? 'Loading stock...' : 'Pick chassis from stock'}
+            disabled={assignSaving}
+            onChange={(val) => setAssignDraft(normalizeChassis(val))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleAssignFromStock();
+              }
+            }}
+            filterOption={(inputValue, option) =>
+              String(option?.value || '').toLowerCase().includes(String(inputValue || '').toLowerCase()) ||
+              String(option?.label || '').toLowerCase().includes(String(inputValue || '').toLowerCase())
+            }
+          />
+          <Space>
+            <Button type="primary" onClick={handleAssignFromStock} loading={assignSaving} disabled={!assignRow}>
+              Assign Chassis
+            </Button>
+            <Text type="secondary">Only chassis from stock list can be assigned.</Text>
+          </Space>
+        </Space>
+      </Modal>
 
       <Modal
         open={remarkModal.open}

@@ -27,6 +27,7 @@ import { listBranchesPublic } from "../apiCalls/branches";
 import { listUsersPublic } from "../apiCalls/adminUsers";
 import BookingPrintSheet from "./BookingPrintSheet";
 import FetchBooking from "./FetchBooking";
+import BookingHistoryButton from "./BookingHistoryButton";
 import { handleSmartPrint } from "../utils/printUtils";
 import { normalizeKey, uniqCaseInsensitive } from "../utils/caseInsensitive";
 import dayjs from "dayjs";
@@ -2303,23 +2304,31 @@ export default function BookingForm({
               </Text>
             </div>
             <div style={{ flex: 1 }} />
-            <FetchBooking
-              form={form}
-              webhookUrl={BOOKING_GAS_URL}
-              setSelectedCompany={setSelectedCompany}
-              setSelectedModel={setSelectedModel}
-              onApplied={({ bookingId, mobile, vehicle }) => {
-                setPaymentsOnlyMode(true);
-                setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
-                setHasFetchedBookingFlag(true);
-                const availability = String(vehicle?.availability || '').toLowerCase();
-                const chassisVal = vehicle?.chassisNo || form.getFieldValue('chassisNo');
-                const isAllot = availability === 'allot' || String(chassisVal || '') === '__ALLOT__';
-                const hasChassis = Boolean(chassisVal && String(chassisVal) !== '__ALLOT__');
-                setChassisLocked(Boolean(hasChassis && !isAllot));
-                message.info('Payments-only update mode enabled');
-              }}
-            />
+            <Space size={8} wrap>
+              <FetchBooking
+                form={form}
+                webhookUrl={BOOKING_GAS_URL}
+                setSelectedCompany={setSelectedCompany}
+                setSelectedModel={setSelectedModel}
+                onApplied={({ bookingId, mobile, vehicle }) => {
+                  setPaymentsOnlyMode(true);
+                  setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
+                  setHasFetchedBookingFlag(true);
+                  const availability = String(vehicle?.availability || '').toLowerCase();
+                  const chassisVal = vehicle?.chassisNo || form.getFieldValue('chassisNo');
+                  const isAllot = availability === 'allot' || String(chassisVal || '') === '__ALLOT__';
+                  const hasChassis = Boolean(chassisVal && String(chassisVal) !== '__ALLOT__');
+                  setChassisLocked(Boolean(hasChassis && !isAllot));
+                  message.info('Payments-only update mode enabled');
+                }}
+              />
+              <BookingHistoryButton
+                form={form}
+                webhookUrl={BOOKING_GAS_URL}
+                bookingId={editRef?.bookingId}
+                mobile={editRef?.mobile}
+              />
+            </Space>
           </div>
         }
       >

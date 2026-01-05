@@ -26,12 +26,14 @@ export default function ProtectedRoute({ children, roles }) {
         if (result?.success && result?.data) {
           nextUser = result.data;
           try { localStorage.setItem("user", JSON.stringify(result.data)); } catch (e) { void e; }
+        } else if (result?.code === 401 || result?.code === 403) {
+          nextUser = null;
         }
       } catch {
         // ignore fetch errors; fall back to cached user
       } finally {
         if (!cancelled) {
-          if (nextUser) setUser(nextUser);
+          setUser(nextUser || null);
           setLoading(false);
         }
       }

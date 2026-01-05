@@ -48,13 +48,26 @@ export const LoginUser = async (values) => {
 export const GetCurrentUser = async () => {
   try {
     const token = localStorage.getItem('token');
-    const { data } = await axiosInstance.get("/users/get-valid-user", {
+    const { data, status } = await axiosInstance.get("/users/get-valid-user", {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       params: token ? { token } : undefined, // fallback path if a proxy strips headers
+      validateStatus: () => true,
     });
-    return data;
+    if (status === 401 || status === 403) {
+      try { localStorage.removeItem("token"); } catch { /* ignore */ }
+      try { localStorage.removeItem("user"); } catch { /* ignore */ }
+      return { success: false, code: status, message: data?.message || "Unauthorized" };
+    }
+    if (status >= 200 && status < 300) return data;
+    return { success: false, code: status, message: data?.message || "Failed to fetch user" };
   } catch (error) {
     console.error("GetCurrentUser failed", error);
+    const status = error?.response?.status;
+    if (status === 401 || status === 403) {
+      try { localStorage.removeItem("token"); } catch { /* ignore */ }
+      try { localStorage.removeItem("user"); } catch { /* ignore */ }
+      return { success: false, code: status, message: error?.response?.data?.message || "Unauthorized" };
+    }
   }
 };
 
