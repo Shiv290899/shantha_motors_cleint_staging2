@@ -11,6 +11,7 @@ const HEADERS = {
   company: ['Company', 'Company Name'],
   model: ['Model', 'Model Name'],
   variant: ['Variant'],
+  color: ['Color', 'Colours', 'Colors', 'Colour', 'Available Colors'],
   price: ['On-Road Price', 'On Road Price', 'OnRoadPrice', 'Price'],
 }
 
@@ -63,24 +64,55 @@ const normalizeRow = (row = {}) => {
     row.onroadprice ||
     row.price ||
     0;
-  const price = Number(String(rawPrice || 0).replace(/[",\s₹]/g, '')) || 0;
+  const rawColor = pick(row, HEADERS.color) || row.color || row.colors || ''
+  const num = (v) => Number(String(v || 0).replace(/[",\s₹]/g, '')) || 0
+  const isNumericLike = (v) => {
+    const s = String(v || '').replace(/[",\s₹]/g, '')
+    return s !== '' && !Number.isNaN(Number(s))
+  }
   const company = pick(row, HEADERS.company) || row.company || ''
   const model = pick(row, HEADERS.model) || row.model || ''
   const variant = pick(row, HEADERS.variant) || row.variant || ''
+  let price = num(rawPrice)
+  let color = String(rawColor || '').trim()
+  const rawKey = row.key || row.Key || ''
+  const rawUpdatedAt = row.UpdatedAt || row.updatedAt || row.updated_at || row.updated || ''
+  const rawUpdatedBy = row.UpdatedBy || row.updatedBy || row.updated_by || row.user || ''
+  const looksLikeDate = (v) => {
+    const d = new Date(v)
+    return !Number.isNaN(d.getTime())
+  }
+  const looksLikeKey = (v) => String(v || '').includes('|')
+  const fallbackKey = buildCatalogKey(company, model, variant)
+  let updatedAt = rawUpdatedAt
+  let updatedBy = rawUpdatedBy
+  let key = rawKey || fallbackKey
+  if (!looksLikeKey(key) || key === '') key = fallbackKey
+  const maybeShifted = !isNumericLike(rawPrice) && isNumericLike(rawColor) && price === 0
+  if (maybeShifted) {
+    price = num(rawColor)
+    color = ''
+    if (looksLikeKey(rawPrice)) key = rawPrice
+    if (!rawUpdatedBy && looksLikeDate(rawKey)) {
+      updatedAt = rawKey
+      updatedBy = rawUpdatedAt
+    }
+  }
   return {
     id: row.id || row._id || row.rowId || row._row || undefined,
     company,
     model,
     variant,
+    color,
     onRoadPrice: price,
-    updatedAt: row.UpdatedAt || row.updatedAt || row.updated_at || row.updated || '',
-    updatedBy: row.UpdatedBy || row.updatedBy || row.updated_by || row.user || '',
-    key: row.key || row.Key || buildCatalogKey(company, model, variant),
+    updatedAt,
+    updatedBy,
+    key,
   }
 }
 
 export default function VehicleCatalogManager({ csvFallbackUrl }) {
-  const GAS_URL = import.meta.env.VITE_VEHICLE_CATALOG_GAS_URL || 'https://script.google.com/macros/s/AKfycby1Op7Uo6tADosF89SkiZMsJVl-95zxsSb_uo7p_3JqynUp30Bf0sFRQF2NF6PO-628Qg/exec'
+  const GAS_URL = import.meta.env.VITE_VEHICLE_CATALOG_GAS_URL || 'https://script.google.com/macros/s/AKfycbw0zvptYU-X0yBRFytBJZeli0Dr-uOBFDSfpYgQeWv7nKMWXD73piVndyyTiARU0FL-Lg/exec'
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -175,6 +207,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
       company: record.company,
       model: record.model,
       variant: record.variant,
+      color: record.color,
       onRoadPrice: record.onRoadPrice,
     })
     setModalOpen(true)
@@ -201,7 +234,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
     const q = search.trim().toLowerCase()
     const variantQ = filterVariant.trim().toLowerCase()
     return rows.filter((r) => {
-      const matchesSearch = !q || [r.company, r.model, r.variant, r.updatedBy].some((f) =>
+      const matchesSearch = !q || [r.company, r.model, r.variant, r.color, r.updatedBy].some((f) =>
         String(f || '').toLowerCase().includes(q))
       const matchesCompany = filterCompany === 'all' || norm(r.company) === filterCompany
       const matchesVariant = !variantQ || norm(r.variant).includes(variantQ)
@@ -232,6 +265,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
       ;['company','model','variant'].forEach((k) => {
         if (values[k]) values[k] = String(values[k]).toUpperCase()
       })
+      if (values.color) values.color = String(values.color).toUpperCase().trim()
       setSaving(true)
       const payload = {
         ...values,
@@ -265,6 +299,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
     { title: 'Company', dataIndex: 'company', key: 'company', sorter: (a, b) => a.company.localeCompare(b.company) },
     { title: 'Model', dataIndex: 'model', key: 'model', sorter: (a, b) => a.model.localeCompare(b.model) },
     { title: 'Variant', dataIndex: 'variant', key: 'variant', sorter: (a, b) => a.variant.localeCompare(b.variant) },
+    { title: 'Colors', dataIndex: 'color', key: 'color', render: (v) => v || <Text type="secondary">-</Text> },
     { title: 'On-Road Price (₹)', dataIndex: 'onRoadPrice', key: 'onRoadPrice', render: (v) => v ? v.toLocaleString('en-IN') : <Text type="secondary">0</Text>, sorter: (a, b) => (a.onRoadPrice || 0) - (b.onRoadPrice || 0) },
     { title: 'Updated At', dataIndex: 'updatedAt', key: 'updatedAt', render: (v) => v ? dayjs(v).format('DD-MM-YYYY HH:mm') : <Text type="secondary">-</Text> },
     { title: 'Updated By', dataIndex: 'updatedBy', key: 'updatedBy', render: (v) => v || <Text type="secondary">-</Text> },
@@ -289,6 +324,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
       { key: 'company', label: 'Company' },
       { key: 'model', label: 'Model' },
       { key: 'variant', label: 'Variant' },
+      { key: 'color', label: 'Color' },
       { key: 'onRoadPrice', label: 'On-Road Price' },
       { key: 'updatedAt', label: 'Updated At' },
       { key: 'updatedBy', label: 'Updated By' },
@@ -297,6 +333,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
       company: r.company,
       model: r.model,
       variant: r.variant,
+      color: r.color,
       onRoadPrice: r.onRoadPrice,
       updatedAt: r.updatedAt,
       updatedBy: r.updatedBy,
@@ -341,7 +378,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
         </Space>
         <Space wrap>
           <Input
-            placeholder="Search company/model/variant/user"
+            placeholder="Search company/model/variant/color/user"
             allowClear
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -413,6 +450,14 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
           </Form.Item>
           <Form.Item name="variant" label="Variant" rules={[{ required: true, message: 'Enter variant' }]}>
             <Input placeholder="e.g., DISC" allowClear style={{ textTransform: 'uppercase' }} onChange={(e) => form.setFieldsValue({ variant: (e.target.value || '').toUpperCase() })} />
+          </Form.Item>
+          <Form.Item name="color" label="Colors (comma-separated)">
+            <Input
+              placeholder="e.g., RED, BLACK, BLUE"
+              allowClear
+              style={{ textTransform: 'uppercase' }}
+              onChange={(e) => form.setFieldsValue({ color: (e.target.value || '').toUpperCase() })}
+            />
           </Form.Item>
           <Form.Item name="onRoadPrice" label="On-Road Price (₹)" rules={[{ required: true, message: 'Enter price' }]}>
             <InputNumber style={{ width: '100%' }} min={0} step={500} parser={(v) => Number((v || '').toString().replace(/[^\d.-]/g, ''))} formatter={(v) => (v ? Number(v).toLocaleString('en-IN') : '')} />

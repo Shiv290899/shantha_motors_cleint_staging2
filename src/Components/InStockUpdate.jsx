@@ -50,8 +50,15 @@ export default function InStockUpdate() {
   // Vehicle catalog (for prefilled dropdowns in Edit)
   const CATALOG_CSV_URL = import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
     "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv";
-  const HEADERS = { company: ["Company","Company Name"], model: ["Model","Model Name"], variant: ["Variant"], color: ["Color","Colours"] };
+  const HEADERS = { company: ["Company","Company Name"], model: ["Model","Model Name"], variant: ["Variant"], color: ["Color","Colours","Colors","Colour","Available Colors"] };
   const pick = (row, keys) => String(keys.map((k)=> row[k] ?? "").find((v)=> v !== "") || "").trim();
+  const splitColors = (value) => {
+    if (!value) return [];
+    return String(value)
+      .split(/[|,/;\n]+/)
+      .map((c) => c.trim())
+      .filter(Boolean);
+  };
   const normalizeCatalogRow = (row={}) => ({ company: pick(row, HEADERS.company), model: pick(row, HEADERS.model), variant: pick(row, HEADERS.variant), color: pick(row, HEADERS.color) });
   const parseCsv = (text) => { const rows=[]; let r=[],c="",q=false; for(let i=0;i<text.length;i++){ const ch=text[i],n=text[i+1]; if(ch==='"'&&!q){q=true;continue;} if(ch==='"'&&q){ if(n==='"'){c+='"';i++;continue;} q=false; continue;} if(ch===','&&!q){ r.push(c); c=""; continue;} if((ch==='\n'||ch==='\r')&&!q){ if(c!==""||r.length){ r.push(c); rows.push(r); r=[]; c="";} if(ch==='\r'&&n==='\n') i++; continue;} c+=ch;} if(c!==""||r.length){ r.push(c); rows.push(r);} return rows; };
   const fetchSheetRowsCSV = async (url) => { const res = await fetch(url, { cache: 'no-store' }); if(!res.ok) throw new Error('Sheet fetch failed'); const csv = await res.text(); if(csv.trim().startsWith('<')) throw new Error('Expected CSV, got HTML'); const rows=parseCsv(csv); if(!rows.length) return []; const headers = rows[0].map(h=> (h||'').trim()); return rows.slice(1).map(r=>{ const obj={}; headers.forEach((h,i)=> obj[h]= r[i] ?? ''); return obj; }); };
@@ -64,7 +71,17 @@ export default function InStockUpdate() {
   const companyOptions = useMemo(()=> [...new Set(catalog.map(r=>r.company))], [catalog]);
   const modelOptions = useMemo(()=> [...new Set(catalog.filter(r=>r.company===selCompany).map(r=>r.model))], [catalog, selCompany]);
   const variantOptions = useMemo(()=> [...new Set(catalog.filter(r=>r.company===selCompany && r.model===selModel).map(r=>r.variant))], [catalog, selCompany, selModel]);
-  const colorOptions = useMemo(()=> { const dyn=catalog.filter(r=>r.company===selCompany && r.model===selModel && r.variant===selVariant).map(r=>r.color).filter(Boolean); return dyn.length? Array.from(new Set(dyn)): []; }, [catalog, selCompany, selModel, selVariant]);
+  const colorOptions = useMemo(()=> {
+    const dyn = catalog
+      .filter(r=>r.company===selCompany && r.model===selModel && r.variant===selVariant)
+      .flatMap((r)=> splitColors(r.color));
+    const map = new Map();
+    dyn.forEach((c) => {
+      const key = String(c).toLowerCase();
+      if (!map.has(key)) map.set(key, c);
+    });
+    return Array.from(map.values());
+  }, [catalog, selCompany, selModel, selVariant]);
 
   // Current user for prefill & createdBy
   const currentUser = useMemo(() => { try { return JSON.parse(localStorage.getItem('user')||'null'); } catch { return null; } }, []);

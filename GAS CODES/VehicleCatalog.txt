@@ -1,6 +1,6 @@
 /**
  * Vehicle Catalog Web App (Google Apps Script)
- * Supports list / upsert / delete for Company, Model, Variant, OnRoadPrice, plus audit (UpdatedAt/UpdatedBy).
+ * Supports list / upsert / delete for Company, Model, Variant, Color, OnRoadPrice, plus audit (UpdatedAt/UpdatedBy).
  *
  * Deploy:
  *  - File > Project properties > copy Script ID for reference.
@@ -10,7 +10,7 @@
  *  - After deploy, copy the Web App URL and set it in your client env as VITE_VEHICLE_CATALOG_GAS_URL.
  *
  * Expected sheet layout (first row headers):
- *  Company | Model | Variant | OnRoadPrice | Key | UpdatedAt | UpdatedBy
+ *  Company | Model | Variant | Color | OnRoadPrice | Key | UpdatedAt | UpdatedBy
  */
 
 // Target sheet: https://docs.google.com/spreadsheets/d/1XSwT6GQiXUsH_zH8VEymsrCfHb1QW_FbdKwMSqnE4_U/edit?gid=0#gid=0
@@ -20,10 +20,23 @@ const SHEET_NAME = 'Catalog';
 function getSheet_() {
   const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
   const sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
-  const headers = ['Company', 'Model', 'Variant', 'OnRoadPrice', 'Key', 'UpdatedAt', 'UpdatedBy'];
-  const firstRow = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
-  const missing = headers.some((h, i) => String(firstRow[i] || '') !== h);
-  if (missing) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  const headers = ['Company', 'Model', 'Variant', 'Color', 'OnRoadPrice', 'Key', 'UpdatedAt', 'UpdatedBy'];
+  const width = Math.max(sheet.getLastColumn(), headers.length);
+  const firstRow = width ? sheet.getRange(1, 1, 1, width).getValues()[0] : [];
+  if (!firstRow.length) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    return sheet;
+  }
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const hasHeader = (h) => firstRow.findIndex((v) => norm(v) === norm(h)) !== -1;
+  let updated = false;
+  headers.forEach((h) => {
+    if (!hasHeader(h)) {
+      firstRow.push(h);
+      updated = true;
+    }
+  });
+  if (updated) sheet.getRange(1, 1, 1, firstRow.length).setValues([firstRow]);
   return sheet;
 }
 
@@ -83,10 +96,12 @@ function handleUpsert_(payload) {
   required.forEach((k) => {
     if (!payload[k]) throw new Error('Missing ' + k);
   });
+  const colorRaw = payload.color || payload.colors || payload.Color || payload.Colours || '';
   const rec = {
     Company: String(payload.company).trim(),
     Model: String(payload.model).trim(),
     Variant: String(payload.variant).trim(),
+    Color: String(colorRaw || '').trim(),
     OnRoadPrice: Number(payload.onRoadPrice || 0) || 0,
     UpdatedBy: payload.updatedBy ? String(payload.updatedBy).trim() : '',
   };
@@ -155,4 +170,52 @@ function parseBody_(e) {
     return obj;
   }
   return {};
+}
+
+// Run once if Colors show prices and OnRoadPrice is 0 (data shifted by one column).
+function fixShiftedColumns_() {
+  const sheet = getSheet_();
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const idx = (name) => headers.findIndex((h) => norm(h) === norm(name));
+  const colColor = idx('Color');
+  const colPrice = idx('OnRoadPrice');
+  const colKey = idx('Key');
+  const colUpdatedAt = idx('UpdatedAt');
+  const colUpdatedBy = idx('UpdatedBy');
+  if ([colColor, colPrice, colKey, colUpdatedAt, colUpdatedBy].some((i) => i < 0)) {
+    throw new Error('Missing one or more required headers.');
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+  const range = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn());
+  const values = range.getValues();
+  const isNumericLike = (v) => {
+    const s = String(v || '').replace(/[",\s₹]/g, '');
+    return s !== '' && !isNaN(Number(s));
+  };
+  const looksLikeKey = (v) => String(v || '').includes('|');
+  const looksLikeDate = (v) => !isNaN(new Date(v).getTime());
+  let changed = false;
+  values.forEach((row) => {
+    const colorVal = row[colColor];
+    const priceVal = row[colPrice];
+    const keyVal = row[colKey];
+    const updatedAtVal = row[colUpdatedAt];
+    const updatedByVal = row[colUpdatedBy];
+    const shouldShift =
+      isNumericLike(colorVal) &&
+      !isNumericLike(priceVal) &&
+      looksLikeKey(priceVal) &&
+      !updatedByVal &&
+      looksLikeDate(keyVal);
+    if (!shouldShift) return;
+    row[colUpdatedBy] = updatedAtVal;
+    row[colUpdatedAt] = keyVal;
+    row[colKey] = priceVal;
+    row[colPrice] = colorVal;
+    row[colColor] = '';
+    changed = true;
+  });
+  if (changed) range.setValues(values);
 }

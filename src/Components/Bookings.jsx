@@ -706,14 +706,14 @@ export default function Bookings() {
     setChassisDraft('');
   };
 
-  const assignChassisToBooking = async (row, chassisValue) => {
+  const assignChassisToBooking = async (row, chassisValue, options = {}) => {
     if (!row?.bookingId) return false;
     const nextVal = normalizeChassis(chassisValue);
     if (!nextVal) {
       message.error('Select a chassis from stock to assign.');
       return false;
     }
-    const matched = findStockMatch(row, nextVal);
+    const matched = options?.matchedOverride || findStockMatch(row, nextVal);
     if (!matched) {
       message.error('Chassis not found in stock. Add stock movement first.');
       return false;
@@ -760,8 +760,24 @@ export default function Bookings() {
     }
   };
 
+  const handleSaveAndAssign = async () => {
+    if (!assignModal.row || stockMoveSaving || assignSaving) return;
+    const chassisTyped = normalizeChassis(stockMoveForm.getFieldValue('chassis'));
+    if (chassisTyped) {
+      await handleAddStockMovement();
+      return;
+    }
+    const fromStock = normalizeChassis(assignDraft);
+    if (fromStock) {
+      await handleAssignFromStock();
+      return;
+    }
+    message.warning('Enter chassis number or pick from stock.');
+  };
+
   const handleAddStockMovement = async () => {
     if (!assignModal.row || stockMoveSaving) return;
+    let closeAfter = false;
     try {
       const values = await stockMoveForm.validateFields();
       setStockMoveSaving(true);
@@ -784,9 +800,24 @@ export default function Bookings() {
       const resp = await createStock({ data: payload, createdBy });
       const ok = !!(resp?.success ?? resp?.ok);
       if (ok) {
-        message.success('Stock movement saved. Now assign from stock above.');
-        loadStockItems(true);
-        setAssignDraft(chassisVal);
+        const matchedOverride = {
+          chassisNo: chassisVal,
+          company: payload.Company || row.company || '',
+          model: payload.Model || row.model || '',
+          variant: payload.Variant || row.variant || '',
+          color: payload.Color || row.color || '',
+          sourceBranch: payload.Source_Branch || row.branch || '',
+          status: 'in_stock',
+        };
+        const assigned = await assignChassisToBooking(row, chassisVal, { matchedOverride });
+        if (assigned) {
+          message.success('Stock movement saved and chassis assigned.');
+          closeAfter = true;
+        } else {
+          message.warning('Stock movement saved. Assign chassis from stock below.');
+          loadStockItems(true);
+          setAssignDraft(chassisVal);
+        }
       } else {
         message.error(resp?.message || 'Failed to save stock movement.');
       }
@@ -796,6 +827,7 @@ export default function Bookings() {
       message.error(apiMessage || 'Failed to save stock movement.');
     } finally {
       setStockMoveSaving(false);
+      if (closeAfter) closeAssignModal();
     }
   };
 
@@ -1278,10 +1310,15 @@ export default function Bookings() {
             <Input.TextArea rows={2} placeholder="Optional notes" />
           </Form.Item>
           <Space>
-            <Button type="primary" onClick={handleAddStockMovement} loading={stockMoveSaving} disabled={!assignRow}>
-              Save Stock Movement
+            <Button
+              type="primary"
+              onClick={handleSaveAndAssign}
+              loading={stockMoveSaving || assignSaving}
+              disabled={!assignRow}
+            >
+              Save & Assign
             </Button>
-            <Text type="secondary">After saving, assign the chassis below.</Text>
+            <Text type="secondary">Type chassis above or pick from stock below.</Text>
           </Space>
         </Form>
 

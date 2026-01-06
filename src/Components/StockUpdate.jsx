@@ -17,7 +17,7 @@ const HEADERS = {
   company: ["Company", "Company Name"],
   model: ["Model", "Model Name"],
   variant: ["Variant"],
-  color: ["Color", "Colours"],
+  color: ["Color", "Colours", "Colors", "Colour", "Available Colors"],
 };
 
 const parseCsv = (text) => {
@@ -51,6 +51,13 @@ const fetchSheetRowsCSV = async (url) => {
 };
 
 const pick = (row, keys) => String(keys.map((k) => row[k] ?? "").find((v) => v !== "") || "").trim();
+const splitColors = (value) => {
+  if (!value) return [];
+  return String(value)
+    .split(/[|,/;\n]+/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+};
 
 const normalizeCatalogRow = (row = {}) => ({
   company: pick(row, HEADERS.company),
@@ -225,17 +232,22 @@ export default function StockUpdate() {
     { name: "Maroon", hex: "#800000" },
   ]), []);
 
-  const colors = useMemo(() => {
+  const catalogColors = useMemo(() => {
     const dyn = catalog
       .filter((r) => r.company === company && r.model === model && r.variant === variant)
-      .map((r) => r.color)
-      .filter(Boolean);
+      .flatMap((r) => splitColors(r.color));
     const map = new Map();
-    PRESET_COLORS.forEach((c) => map.set(c.name.toLowerCase(), c.name));
-    dyn.forEach((c) => map.set(String(c).toLowerCase(), c));
-    const out = Array.from(map.values());
-    return out.length ? out : PRESET_COLORS.map((c) => c.name);
-  }, [catalog, company, model, variant, PRESET_COLORS]);
+    dyn.forEach((c) => {
+      const key = String(c).toLowerCase();
+      if (!map.has(key)) map.set(key, c);
+    });
+    return Array.from(map.values());
+  }, [catalog, company, model, variant]);
+
+  const colors = useMemo(
+    () => (catalogColors.length ? catalogColors : PRESET_COLORS.map((c) => c.name)),
+    [catalogColors, PRESET_COLORS]
+  );
 
   const swatch = (name) => {
     const m = PRESET_COLORS.find((x) => x.name.toLowerCase() === String(name || '').toLowerCase());
@@ -350,6 +362,13 @@ export default function StockUpdate() {
   const isVehicleLocked = action !== 'add' && !isEdit; // allow editing vehicle fields while editing
   const isChassisLocked = action !== 'add' || isEdit;
   const isSourceLocked = lockSourceBranch || action !== 'add';
+
+  useEffect(() => {
+    if (isVehicleLocked) return;
+    if (catalogColors.length !== 1) return;
+    const current = form.getFieldValue('color');
+    if (!current) form.setFieldsValue({ color: catalogColors[0] });
+  }, [catalogColors, form, isVehicleLocked]);
 
   const fetchList = async () => {
     setLoadingList(true);
@@ -934,27 +953,32 @@ export default function StockUpdate() {
               </Form.Item>
               {!isVehicleLocked && (
                 <Space wrap size="small" style={{ marginTop: -8, marginBottom: 8 }}>
-                  {PRESET_COLORS.map((c) => (
-                    <Tooltip title={c.name} key={c.name}>
-                      <Button
-                        size="small"
-                        onClick={() => form.setFieldsValue({ color: c.name })}
-                        style={{
-                          height: 28,
-                          borderRadius: 14,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          padding: '0 10px',
-                          border: `1px solid ${c.border || '#d1d5db'}`,
-                          background: '#fff'
-                        }}
-                      >
-                        <span style={{ width: 14, height: 14, borderRadius: 7, background: c.hex, border: `1px solid ${c.border || '#d1d5db'}` }} />
-                        <span>{c.name}</span>
-                      </Button>
-                    </Tooltip>
-                  ))}
+                  {colors.filter(Boolean).map((c) => {
+                    const name = String(c || '').trim();
+                    if (!name) return null;
+                    const s = swatch(name);
+                    return (
+                      <Tooltip title={name} key={name}>
+                        <Button
+                          size="small"
+                          onClick={() => form.setFieldsValue({ color: name })}
+                          style={{
+                            height: 28,
+                            borderRadius: 14,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '0 10px',
+                            border: `1px solid ${s.border || '#d1d5db'}`,
+                            background: '#fff'
+                          }}
+                        >
+                          <span style={{ width: 14, height: 14, borderRadius: 7, background: s.bg, border: `1px solid ${s.border || '#d1d5db'}` }} />
+                          <span>{name}</span>
+                        </Button>
+                      </Tooltip>
+                    );
+                  })}
                 </Space>
               )}
             </Col>
