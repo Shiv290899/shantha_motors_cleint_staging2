@@ -664,9 +664,16 @@ function getServiceHistory_(params){
 
 /** Upsert by JC No (fallback to mobile if JC is missing). */
 function upsertByMobile_(d){
-  const s = sh_();
-  ensureCoreOptionalCols_(s);
-  let ix = headerIx_(s);
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    return { success:false, message:'lock_timeout' };
+  }
+  try {
+    const s = sh_();
+    ensureCoreOptionalCols_(s);
+    let ix = headerIx_(s);
 
   const fvIncoming = d.formValues || {};
   const jcIncoming = String(
@@ -742,8 +749,11 @@ function upsertByMobile_(d){
 
   if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(mergedPayload);
 
-  s.getRange(hitRow,1,1,ix.width).setValues([row]);
-  return { success:true, upsert:true, updated:true, row: hitRow };
+    s.getRange(hitRow,1,1,ix.width).setValues([row]);
+    return { success:true, upsert:true, updated:true, row: hitRow };
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
 }
 
 function insertNew_(d, mobileCanonical){

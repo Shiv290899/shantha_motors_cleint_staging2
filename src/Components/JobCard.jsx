@@ -42,7 +42,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbx1jOp5fr9sE78SfPsY7zxADJyiS3ea8jOuwJ-1iMREEMI5cekbISYJ-84XyP9WitRhPA/exec";
+  "https://script.google.com/macros/s/AKfycbwFqLWDHtZqh_s8LzYoKyD3k0J6ycVcnrtcQYMdK08UcCWzQqMl-mucIA4jnEKxTttDlg/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 const JOBCARD_GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 
@@ -448,6 +448,12 @@ export default function JobCard({ initialValues = null } = {}) {
   const [execOptions, setExecOptions] = useState([]); // [{name, phone}]
   // Optimistic outbox for background sync
   const OUTBOX_KEY = 'JobCard:outbox';
+  const SAVE_COOLDOWN_MS = 6000;
+  const saveGuardRef = useRef({ jcNo: '', ts: 0, inFlight: false });
+  const markAutoSaveDone = (jcNo) => {
+    const guard = saveGuardRef.current;
+    if (guard.jcNo === jcNo) guard.inFlight = false;
+  };
   const readJson = (k, def) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : def; } catch { return def; } };
   const writeJson = (k, obj) => { try { localStorage.setItem(k, JSON.stringify(obj)); } catch {
     //sfj
@@ -1156,6 +1162,15 @@ export default function JobCard({ initialValues = null } = {}) {
         message.success(`JC No. assigned: ${jc}`);
       }
 
+      const guard = saveGuardRef.current;
+      const now = Date.now();
+      if (guard.jcNo === jc && (guard.inFlight || (now - guard.ts) < SAVE_COOLDOWN_MS)) {
+        return;
+      }
+      guard.jcNo = jc;
+      guard.ts = now;
+      guard.inFlight = true;
+
       const amt = Number.isFinite(totals.grand) ? Math.round(totals.grand) : 0;
       const kmOnlyDigits = String(vals.km || "").replace(/\D/g, "");
       const floorMatStr =
@@ -1211,6 +1226,7 @@ export default function JobCard({ initialValues = null } = {}) {
           const ok = (resp?.data || resp)?.success !== false;
           if (ok) removeOutboxById(outboxId);
         } catch { /* keep queued */ }
+        finally { markAutoSaveDone(jc); }
       }, 0);
     } catch (e) {
       if (e?.errorFields) {
