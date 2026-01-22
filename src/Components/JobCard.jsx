@@ -238,6 +238,11 @@ function buildWelcomeMsg(vals, totals) {
   const obsBlock = obsLines.length
     ? `*Customer Observations:*\n${obsLines.map((s) => `- ${s}`).join("\n")}\n\n`
     : "";
+  const mechanicName = (vals?.mechanic ? String(vals.mechanic).trim() : "") || "";
+  const mechanicPhone = mechanicName ? getMechanicContact(mechanicName) : "";
+  const mechanicBlock = mechanicName
+    ? `👷 Assigned Mechanic: ${mechanicName}${mechanicPhone ? ` (☎️ ${mechanicPhone})` : ""}\n`
+    : "";
 
   const isNH = String(branch).trim() === "Byadarahalli";
   const showroomEn = isNH ? "NH Motors" : "Shantha Motors";
@@ -252,6 +257,7 @@ function buildWelcomeMsg(vals, totals) {
     `🏍️ Vehicle: ${reg}\n` +
     `📅 Delivery Date: ${fmtDate}\n` +
     `💰 Estimated Cost (ಅಂದಾಜು ವೆಚ್ಚ): ${estimate}\n\n` +
+    mechanicBlock +
     obsBlock +
     `ℹ️ Final prices may vary based on actual service needs.\n\n` +
     `Need any help? Just reply here.\n\n` +
