@@ -1,0 +1,778 @@
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
+import useDebouncedValue from "../hooks/useDebouncedValue";
+// Sheet-only remarks; no backend remarks API
+import dayjs from "dayjs";
+import { saveJobcardViaWebhook } from "../apiCalls/forms";
+import { useNavigate } from "react-router-dom";
+import { exportToCsv } from "../utils/csvExport";
+import { normalizeKey, uniqCaseInsensitive, toKeySet } from "../utils/caseInsensitive";
+import { handleSmartPrint } from "../utils/printUtils";
+import PostServiceSheet from "./PostServiceSheet";
+
+// GAS endpoints (module-level) so both list + remark share same URL/secret
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwFqLWDHtZqh_s8LzYoKyD3k0J6ycVcnrtcQYMdK08UcCWzQqMl-mucIA4jnEKxTttDlg/exec";
+const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
+const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
+
+const { Text } = Typography;
+
+// Header aliases for common Job Card sheet headers
+const HEAD = {
+  ts: ["Timestamp", "Time", "Date"],
+  name: ["Customer Name", "Customer", "Name", "Customer_Name"],
+  mobile: ["Mobile", "Phone", "Mobile Number"],
+  branch: ["Branch"],
+  executive: ["Executive"],
+  jcNo: ["JC No.", "JC No", "Job Card No", "JobCard No", "JCNumber"],
+  regNo: ["Vehicle No", "Vehicle_No", "Registration Number", "RegNo", "Reg No"],
+  model: ["Model", "Bike Model"],
+  serviceType: ["Service Type", "Service", "Service_Type"],
+  vehicleType: ["Vehicle Type", "Type of Vehicle", "Vehicle_Type"],
+  amount: ["Service Amount", "Collected Amount", "Collected_Amount", "Amount"],
+  paymentMode: ["Payment Mode", "Mode of Payment", "Payment_Mode", "paymentMode"],
+  payload: ["Payload"],
+};
+
+const pick = (obj, aliases) => String(aliases.map((k) => obj?.[k] ?? "").find((v) => v !== "") || "").trim();
+
+export default function Jobcards() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
+  const navigate = useNavigate();
+
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [branchFilter, setBranchFilter] = useState("all");
+  const [serviceFilter, setServiceFilter] = useState("all"); // free | paid | all
+  const [statusFilter, setStatusFilter] = useState("all"); // pending | completed | all
+  const [q, setQ] = useState("");
+  const debouncedQ = useDebouncedValue(q, 300);
+  const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
+  const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
+  const [userRole, setUserRole] = useState("");
+  const [allowedBranches, setAllowedBranches] = useState([]);
+  // Controlled pagination
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [renderMode, setRenderMode] = useState('pagination');
+  const [loadedCount, setLoadedCount] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  // Default to server pagination enabled unless explicitly disabled by env
+  const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
+  
+  const [remarksMap, setRemarksMap] = useState({});
+  const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
+  const [remarkSaving, setRemarkSaving] = useState(false);
+  const [hasCache, setHasCache] = useState(false);
+  const [filterSourceRows, setFilterSourceRows] = useState([]);
+  const invoiceRef = useRef(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [invoiceData, setInvoiceData] = useState(null);
+  const [invoiceLoadingId, setInvoiceLoadingId] = useState(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (!raw) return;
+      const u = JSON.parse(raw);
+      setUserRole(String(u?.role || '').toLowerCase());
+      const list = [];
+      const pb = u?.formDefaults?.branchName || u?.primaryBranch?.name || '';
+      if (pb) list.push(pb);
+      if (Array.isArray(u?.branches)) {
+        u.branches.forEach((b)=>{ const nm = typeof b === 'string' ? b : (b?.name || ''); if (nm) list.push(nm); });
+      }
+      setAllowedBranches(Array.from(new Set(list.filter(Boolean))));
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    const isPriv = ["owner","admin","backend"].includes(userRole);
+    if (!isPriv && allowedBranches.length && branchFilter === 'all') {
+      setBranchFilter(allowedBranches[0]);
+    }
+  }, [userRole, allowedBranches, branchFilter]);
+
+  // Cache key (covers both server/client pagination inputs)
+  const cacheKey = (() => {
+    const start = dateRange && dateRange[0] ? dateRange[0].startOf('day').valueOf() : '';
+    const end = dateRange && dateRange[1] ? dateRange[1].endOf('day').valueOf() : '';
+    return `Jobcards:list:${JSON.stringify({ branchFilter, serviceFilter, statusFilter, q: debouncedQ||'', start, end, page, pageSize, USE_SERVER_PAG })}`;
+  })();
+
+  // Row normalizer (used for main list and filter source fetch)
+  const mapJobRow = useCallback((o, idx = 0) => {
+    const obj = (o && o.values) ? o.values : o;
+    const payloadRaw = (o && o.payload) ? o.payload : (obj ? obj[HEAD.payload[0]] : undefined) || '';
+    let payload = null;
+    try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
+    const fv = (payload && payload.formValues) ? payload.formValues : {};
+    const company = fv.company || '';
+    const model = fv.model || pick(obj, HEAD.model);
+    const regNo = fv.regNo || pick(obj, HEAD.regNo);
+    const serviceAmount = (() => {
+      const g = payload?.totals?.grand;
+      if (g !== undefined && g !== null && g !== '') return String(g);
+      return String(pick(obj, HEAD.amount) || '');
+    })();
+    const payMode = (() => {
+      const fromSheet = pick(obj, HEAD.paymentMode);
+      return String(fromSheet || payload?.paymentMode || '');
+    })();
+    const postAt = (payload && payload.postServiceAt) || (obj && (obj.Post_Service_At || obj['Post Service At'])) || '';
+    const status = (() => {
+      const hasPost = String(postAt || '').trim().length > 0;
+      const hasPayments = Array.isArray(payload?.payments) && payload.payments.some(p => Number(p?.amount || 0) > 0);
+      if (hasPost || hasPayments) return 'completed';
+      const hasPaymentMode = String(payMode || '').trim().length > 0;
+      const hasAmount = String(serviceAmount || '').trim().length > 0;
+      if (hasPaymentMode && hasAmount) return 'completed';
+      return 'pending';
+    })();
+    const remarkLevelRaw = payload?.remark?.level || obj?.RemarkLevel || obj?.['Remark Level'] || '';
+    const remarkTextRaw = payload?.remark?.text || obj?.RemarkText || obj?.['Remark Text'] || '';
+    const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
+    const serviceType = fv.serviceType || fv.service || pick(obj, HEAD.serviceType);
+    return {
+      key: idx,
+      ts: pick(obj, HEAD.ts),
+      tsMs: parseTsMs(pick(obj, HEAD.ts)),
+      name: fv.name || pick(obj, HEAD.name),
+      mobile: fv.mobile || pick(obj, HEAD.mobile),
+      branch: fv.branch || pick(obj, HEAD.branch),
+      executive: fv.executive || pick(obj, HEAD.executive),
+      jcNo: fv.jcNo || pick(obj, HEAD.jcNo),
+      regNo,
+      model,
+      company,
+      serviceType: serviceType || '',
+      vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
+      amount: serviceAmount,
+      paymentMode: payMode,
+      postAt,
+      status,
+      RemarkLevel: remarkLevelRaw || '',
+      RemarkText: remarkTextRaw || '',
+      _remarkLevel: remarkLevelNorm,
+      _remarkText: remarkTextRaw || '',
+      payload,
+      _raw: o,
+    };
+  }, []);
+
+  const parsePayloadFromRow = (row) => {
+    if (!row) return null;
+    if (row.payload && typeof row.payload === 'object') return row.payload;
+    const raw =
+      row.payload ||
+      row.Payload ||
+      row.PAYLOAD ||
+      row?.values?.Payload ||
+      row?.values?.payload ||
+      row?.values?.PAYLOAD ||
+      row?._raw?.payload ||
+      row?._raw?.Payload ||
+      row?._raw?.PAYLOAD ||
+      row?._raw?.values?.Payload ||
+      row?._raw?.values?.payload ||
+      row?._raw?.values?.PAYLOAD ||
+      '';
+    if (raw && typeof raw === 'object') return raw;
+    if (raw && typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    if (row.formValues || row.values) return row;
+    return null;
+  };
+
+  const buildInvoicePayload = (payload, row) => {
+    if (!payload) return null;
+    const fv = payload.formValues || payload.values || {};
+    const labourRows = Array.isArray(payload.labourRows)
+      ? payload.labourRows
+      : Array.isArray(fv.labourRows)
+      ? fv.labourRows
+      : [];
+    const totalsIn = payload.totals || fv.totals || {};
+    const computedSub = labourRows.reduce(
+      (sum, r) => sum + Number(r?.qty || 0) * Number(r?.rate || 0),
+      0
+    );
+    const totals = {
+      labourSub: totalsIn.labourSub ?? computedSub,
+      labourGST: totalsIn.labourGST ?? 0,
+      labourDisc: totalsIn.labourDisc ?? 0,
+      grand: totalsIn.grand ?? computedSub,
+    };
+    const createdAt =
+      payload.postServiceAt ||
+      payload.createdAt ||
+      payload.savedAt ||
+      row?.postAt ||
+      row?.ts ||
+      new Date();
+    return {
+      vals: {
+        jcNo: row?.jcNo || fv.jcNo || "",
+        regNo: row?.regNo || fv.regNo || "",
+        custName: row?.name || fv.custName || fv.name || "",
+        custMobile: row?.mobile || fv.custMobile || fv.mobile || "",
+        km: fv.km || "",
+        model: row?.model || fv.model || "",
+        colour: fv.colour || row?.colour || "",
+        branch: row?.branch || fv.branch || "",
+        executive: row?.executive || fv.executive || "",
+        createdAt,
+        labourRows,
+        gstLabour: totalsIn.gstLabour || totalsIn.labourGST || 0,
+      },
+      totals,
+    };
+  };
+
+  const handleServiceInvoice = async (row) => {
+    if (!row) return;
+    const status = String(row.status || "").toLowerCase();
+    if (status !== 'completed') {
+      message.warning("Complete post-service to generate the service invoice.");
+      return;
+    }
+    const key = row.jcNo || row.key || row.mobile || '';
+    setInvoiceLoadingId(key);
+    try {
+      let payload = parsePayloadFromRow(row);
+      let built = payload ? buildInvoicePayload(payload, row) : null;
+      const hasItems = Array.isArray(built?.vals?.labourRows) && built.vals.labourRows.length > 0;
+      if (!built || !hasItems) {
+        const mobile = String(row.mobile || "").replace(/\D/g, "").slice(-10);
+        if (mobile.length === 10) {
+          const base = { action: 'search', mode: 'mobile', query: mobile };
+          const payloadReq = GAS_SECRET ? { ...base, secret: GAS_SECRET } : base;
+          const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload: payloadReq });
+          const js = resp?.data || resp;
+          const rows = Array.isArray(js?.rows) ? js.rows : (Array.isArray(js?.data) ? js.data : []);
+          if (rows.length) {
+            let target = rows[0];
+            if (row.jcNo) {
+              const match = rows.find((r) => {
+                const p = parsePayloadFromRow(r);
+                const fv = p?.formValues || p?.values || {};
+                const id =
+                  fv.jcNo ||
+                  r?.jcNo ||
+                  r?.values?.['JC No'] ||
+                  r?.values?.['JC No.'] ||
+                  r?.values?.['Job Card No'] ||
+                  '';
+                return String(id || '').trim() === String(row.jcNo || '').trim();
+              });
+              if (match) target = match;
+            }
+            const fetchedPayload = parsePayloadFromRow(target);
+            built = fetchedPayload ? buildInvoicePayload(fetchedPayload, row) : built;
+          }
+        }
+      }
+      if (!built) {
+        message.error("Could not load service invoice data.");
+        return;
+      }
+      setInvoiceData(built);
+      setInvoiceOpen(true);
+      setTimeout(() => {
+        try { handleSmartPrint(invoiceRef.current); } catch { /* ignore */ }
+        setTimeout(() => setInvoiceOpen(false), 500);
+      }, 50);
+    } catch {
+      message.error("Could not generate service invoice.");
+    } finally {
+      setInvoiceLoadingId(null);
+    }
+  };
+
+  // Seed from cache for instant paint
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) { setHasCache(false); return; }
+      const cached = JSON.parse(raw);
+      if (cached && Array.isArray(cached.rows)) {
+        setRows(cached.rows);
+        setTotalCount(typeof cached.total === 'number' ? cached.total : cached.rows.length);
+        setHasCache(true);
+      } else { setHasCache(false); }
+    } catch { setHasCache(false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
+
+  // Server-mode: refetch on filters/page/date change
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      try {
+        if (!GAS_URL) {
+          message.info('Jobcards: Apps Script URL not configured — showing empty list.');
+          if (!cancelled) { setRows([]); setTotalCount(0); }
+          return;
+        }
+        const base = { action: 'list' };
+        const filters = {
+          q: debouncedQ || '',
+          branch: branchFilter !== 'all' ? branchFilter : '',
+          service: serviceFilter !== 'all' ? serviceFilter : '',
+          status: statusFilter !== 'all' ? statusFilter : '',
+        };
+        if (dateRange && dateRange[0] && dateRange[1]) {
+          filters.start = dateRange[0].startOf('day').valueOf();
+          filters.end = dateRange[1].endOf('day').valueOf();
+        }
+        const payload = USE_SERVER_PAG
+          ? (GAS_SECRET ? { ...base, page, pageSize, ...filters, secret: GAS_SECRET } : { ...base, page, pageSize, ...filters })
+          : (GAS_SECRET ? { ...base, secret: GAS_SECRET } : base);
+        const resp = await saveJobcardViaWebhook({
+          webhookUrl: GAS_URL,
+          method: 'GET',
+          payload,
+        });
+        const js = resp?.data || resp;
+        if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
+        const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
+        const data = dataArr.map((o, idx) => mapJobRow(o, idx));
+        const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
+        if (!cancelled) {
+          setRows(filteredRows);
+          const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
+          setTotalCount(nextTotal);
+          const map = {};
+          filteredRows.forEach(rr => {
+            if (!rr.jcNo) return;
+            const lvl = (typeof rr._remarkLevel !== 'undefined' ? rr._remarkLevel : rr.remarkLevel) ?? String(rr.RemarkLevel || '').toLowerCase();
+            const txt = (typeof rr._remarkText !== 'undefined' ? rr._remarkText : rr.remarkText) ?? rr.RemarkText ?? '';
+            map[rr.jcNo] = { level: lvl || '', text: txt || '' };
+          });
+          setRemarksMap(map);
+          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
+            //skdhj
+          }
+        }
+      } catch  {
+        message.error('Could not load job cards via Apps Script. Check JOBCARD Web App URL / access.');
+        if (!cancelled) { setRows([]); setTotalCount(0); }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const handler = () => load();
+    window.addEventListener('reload-jobcards', handler);
+    return () => { cancelled = true; window.removeEventListener('reload-jobcards', handler); };
+  }, [branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange, page, pageSize, USE_SERVER_PAG]);
+
+  const optionRows = filterSourceRows.length ? filterSourceRows : rows;
+
+  const branches = useMemo(() => {
+    const opts = uniqCaseInsensitive(optionRows.map((r) => r.branch));
+    const isPriv = ["owner","admin"].includes(userRole);
+    if (!isPriv && allowedBranches.length) {
+      const allowedLc = toKeySet(allowedBranches);
+      return ["all", ...opts.filter((b)=> allowedLc.has(normalizeKey(b)))];
+    }
+    return ["all", ...opts];
+  }, [optionRows, userRole, allowedBranches]);
+  const services = useMemo(() => {
+    return ["all", ...uniqCaseInsensitive(optionRows.map((r) => r.serviceType))];
+  }, [optionRows]);
+
+  const applyFilters = useCallback((list) => {
+    const allowedSet = toKeySet(allowedBranches);
+    const scoped = (list || []).filter((r)=>{
+      if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
+        if (!allowedSet.has(normalizeKey(r.branch))) return false;
+      }
+      if (branchFilter !== "all" && normalizeKey(r.branch) !== normalizeKey(branchFilter)) return false;
+      if (serviceFilter !== "all" && normalizeKey(r.serviceType) !== normalizeKey(serviceFilter)) return false;
+      if (statusFilter !== "all" && normalizeKey(r.status) !== normalizeKey(statusFilter)) return false;
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        const start = dateRange[0].startOf('day').valueOf();
+        const end = dateRange[1].endOf('day').valueOf();
+        const t = r.tsMs ?? parseTsMs(r.ts);
+        if (!t || t < start || t > end) return false;
+      }
+      if (debouncedQ) {
+        const s = debouncedQ.toLowerCase();
+        if (![
+          r.name, r.mobile, r.jcNo, r.regNo, r.model, r.branch, r.executive, r.paymentMode, r.status
+        ].some((v) => String(v || "").toLowerCase().includes(s))) return false;
+      }
+      return true;
+    });
+    return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
+  }, [allowedBranches, branchFilter, dateRange, debouncedQ, serviceFilter, statusFilter, userRole]);
+
+  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
+
+  // Reset pagination when filters/search/date change
+  useEffect(() => {
+    setPage(1);
+    setLoadedCount(pageSize);
+  }, [branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange]);
+  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
+
+  const loadExportRows = useCallback(async () => {
+    if (!USE_SERVER_PAG) return rows;
+    if (!GAS_URL) return rows;
+    const base = { action: 'list', page: 1, pageSize: 10000 };
+    const filters = {
+      q: debouncedQ || '',
+      branch: branchFilter !== 'all' ? branchFilter : '',
+      service: serviceFilter !== 'all' ? serviceFilter : '',
+      status: statusFilter !== 'all' ? statusFilter : '',
+    };
+    if (dateRange && dateRange[0] && dateRange[1]) {
+      filters.start = dateRange[0].startOf('day').valueOf();
+      filters.end = dateRange[1].endOf('day').valueOf();
+    }
+    const payload = GAS_SECRET ? { ...base, ...filters, secret: GAS_SECRET } : { ...base, ...filters };
+    const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+    const js = resp?.data || resp;
+    const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+    return dataArr.map((o, idx) => mapJobRow(o, idx)).filter((r)=>r.jcNo || r.name || r.mobile);
+  }, [USE_SERVER_PAG, GAS_URL, GAS_SECRET, branchFilter, dateRange, debouncedQ, mapJobRow, rows, serviceFilter, statusFilter]);
+
+  const handleExportCsv = async () => {
+    const msgKey = 'export-jobcards';
+    message.loading({ key: msgKey, content: 'Preparing CSV…', duration: 0 });
+    try {
+      const baseRows = USE_SERVER_PAG ? await loadExportRows() : rows;
+      const scoped = applyFilters(baseRows);
+      if (!scoped.length) {
+        message.info({ key: msgKey, content: 'No rows to export for current filters' });
+        return;
+      }
+      const headers = [
+        { key: 'ts', label: 'Timestamp' },
+        { key: 'jcNo', label: 'Job Card No' },
+        { key: 'name', label: 'Customer' },
+        { key: 'mobile', label: 'Mobile' },
+        { key: 'branch', label: 'Branch' },
+        { key: 'serviceType', label: 'Service Type' },
+        { key: 'vehicleType', label: 'Vehicle Type' },
+        { key: 'regNo', label: 'Vehicle No' },
+        { key: 'model', label: 'Model' },
+        { key: 'company', label: 'Company' },
+        { key: 'amount', label: 'Service Amount' },
+        { key: 'paymentMode', label: 'Payment Mode' },
+        { key: 'status', label: 'Status' },
+        { key: 'RemarkLevel', label: 'Remark Level' },
+        { key: 'RemarkText', label: 'Remark' },
+      ];
+      const rowsForCsv = scoped.map((r) => ({
+        ts: r.ts,
+        jcNo: r.jcNo,
+        name: r.name,
+        mobile: r.mobile,
+        branch: r.branch,
+        serviceType: r.serviceType,
+        vehicleType: r.vehicleType,
+        regNo: r.regNo,
+        model: r.model,
+        company: r.company,
+        amount: r.amount,
+        paymentMode: r.paymentMode,
+        status: r.status,
+        RemarkLevel: r.RemarkLevel || r._remarkLevel,
+        RemarkText: r.RemarkText || r._remarkText,
+      }));
+      exportToCsv({ filename: 'jobcards.csv', headers, rows: rowsForCsv });
+      message.success({ key: msgKey, content: `Exported ${rowsForCsv.length} job cards` });
+    } catch {
+      message.error({ key: msgKey, content: 'Export failed. Please try again.' });
+    }
+  };
+
+  // Fetch larger slice for filter dropdowns
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        if (!GAS_URL) return;
+        const payload = GAS_SECRET
+          ? { action: 'list', page: 1, pageSize: 5000, secret: GAS_SECRET }
+          : { action: 'list', page: 1, pageSize: 5000 };
+        const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+        const js = resp?.data || resp;
+        if (!js || (!js.ok && !js.success)) return;
+        const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
+        const mapped = dataArr.map((o, idx) => mapJobRow(o, idx));
+        if (!cancelled) setFilterSourceRows(mapped);
+      } catch { /* ignore */ }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+  const statusColor = (v) => {
+    const s = String(v || '').toLowerCase();
+    if (s === 'completed') return 'green';
+    if (s === 'pending') return 'orange';
+    return 'default';
+  };
+  const statusLabel = (v) => {
+    const s = String(v || '').toLowerCase();
+    if (s === 'completed') return 'Completed';
+    if (s === 'pending') return 'Pending';
+    return String(v || '—') || '—';
+  };
+  const stampRemark = (note) => {
+    const ts = dayjs().format('DD-MM-YYYY HH:mm');
+    const text = String(note || '').trim();
+    return text ? `${ts} - ${text}` : ts;
+  };
+
+  const columns = [
+    { title: "Time / Branch", key: "timeBranch", width: 90, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{formatTs(r.ts)}</div>
+        <div style={lineStyle}><Text type="secondary">{r.branch || '—'}</Text></div>
+      </div>
+    ) },
+    { title: "Customer / Mobile", key: "customerMobile", width: 100, render: (_, r) => (
+      <div style={stackStyle}>
+        <div style={lineStyle}>{r.name || '—'}</div>
+        <div style={lineStyle}><Text type="secondary">{r.mobile || '—'}</Text></div>
+      </div>
+    ) },
+    { title: "Service / Status", key: "serviceStatus", width: 200, render: (_, r) => {
+        const model = String(r.model || '').trim() || '—';
+        const serviceType = String(r.serviceType || '').trim() || '—';
+        const amount = String(r.amount || '').trim() || '—';
+        const paymentMode = String(r.paymentMode || '').trim();
+        const line1 = `${model} || ${serviceType} || ${amount} || ${paymentMode ? paymentMode.toUpperCase() : '—'}`;
+        const exec = String(r.executive || '').trim() || '—';
+        const reg = String(r.regNo || '').trim() || '—';
+        return (
+          <div style={stackStyle}>
+            <div style={lineStyle}>{line1}</div>
+            <div style={lineStyle}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Tag color={statusColor(r.status)}>{statusLabel(r.status)}</Tag>
+                <span>{`|| ${exec} || ${reg}`}</span>
+              </span>
+            </div>
+          </div>
+        );
+      }
+    },
+  ];
+  if (["backend","admin","owner"].includes(userRole)) {
+    columns.push({ title: "Remarks / Remark Text", key: "remarks", width: 250, render: (_, r) => {
+        const rem = remarksMap[r.jcNo];
+        const remarkText = String(rem?.text || '');
+        const level = String(rem?.level || '').toLowerCase();
+        const color = level === 'alert' ? 'red' : level === 'warning' ? 'gold' : level === 'ok' ? 'green' : 'default';
+        const title = remarkText ? remarkText : 'No remark yet';
+        const isCompleted = String(r.status || '').toLowerCase() === 'completed';
+        const isInvoiceLoading = invoiceLoadingId === (r.jcNo || r.key || r.mobile || '');
+        return (
+          <div style={stackStyle}>
+            <div style={lineStyle}>
+              <Space size={6}>
+                <Tooltip title={title}>
+                  <Tag color={color}>{level ? level.toUpperCase() : '—'}</Tag>
+                </Tooltip>
+                <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
+                <Tooltip title={isCompleted ? "Print service invoice" : "Complete post-service to enable invoice"}>
+                  <Button
+                    size="small"
+                    type="primary"
+                    ghost
+                    loading={isInvoiceLoading}
+                    disabled={!isCompleted}
+                    onClick={() => handleServiceInvoice(r)}
+                  >
+                    Service Invoice
+                  </Button>
+                </Tooltip>
+              </Space>
+            </div>
+            <Tooltip title={remarkText ? <span style={{ whiteSpace: 'pre-wrap' }}>{remarkText}</span> : null}>
+              <div style={lineStyle}>{remarkText || '—'}</div>
+            </Tooltip>
+          </div>
+        );
+      }
+    });
+  }
+
+  const total = USE_SERVER_PAG ? totalCount : rows.length;
+  const tableHeight = isMobile ? 420 : 600;
+  const visibleRows = USE_SERVER_PAG ? filtered : (renderMode === 'loadMore' ? filtered.slice(0, loadedCount) : filtered);
+
+  return (
+    <div style={{ paddingTop: 12 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+        <Space wrap>
+          <Select
+            value={branchFilter}
+            onChange={setBranchFilter}
+            style={{ minWidth: 120 }}
+            disabled={!['owner','admin','backend'].includes(userRole)}
+            options={branches.map(b => ({ value: b, label: b === 'all' ? 'All Branches' : b }))}
+          />
+          <Select value={serviceFilter} onChange={setServiceFilter} style={{ minWidth: 100 }}
+                  options={services.map(m => ({ value: m, label: m === 'all' ? 'All Services' : String(m).toUpperCase() }))} />
+          <Select value={statusFilter} onChange={setStatusFilter} style={{ minWidth: 100 }}
+                  options={[{ value: 'all', label: 'All Statuses' }, { value: 'pending', label: 'Pending' }, { value: 'completed', label: 'Completed' }]} />
+          
+          <DatePicker.RangePicker value={dateRange} onChange={(v)=>{ setDateRange(v); setQuickKey(null); }} allowClear />
+          <Button size="small" type={quickKey==='today'?'primary':'default'} onClick={()=>{ const t = dayjs(); setDateRange([t,t]); setQuickKey('today'); }}>Today</Button>
+          <Button size="small" type={quickKey==='yesterday'?'primary':'default'} onClick={()=>{ const y = dayjs().subtract(1,'day'); setDateRange([y,y]); setQuickKey('yesterday'); }}>Yesterday</Button>
+          <Button size="small" onClick={()=>{ setDateRange(null); setQuickKey(null); }}>Clear</Button>
+          <Input placeholder="Search name/mobile/jc/vehicle/model/mode" allowClear value={q} onChange={(e)=>setQ(e.target.value)} style={{ minWidth: 120 }} />
+        </Space>
+        <div style={{ flex: 1 }} />
+        <Space>
+          <Button type="primary" onClick={() => navigate('/jobcard')}>Job Card</Button>
+          <Tag color="blue">Total: {total}</Tag>
+          <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}</Tag>
+          {!USE_SERVER_PAG && (
+          <Select
+            size='small'
+            value={renderMode}
+            onChange={(v)=>{ setRenderMode(v); setLoadedCount(pageSize); }}
+            options={[{value:'pagination',label:'Pagination'},{value:'loadMore',label:'Load More'}]}
+            style={{ width: 130 }}
+          />)}
+          <Button onClick={handleExportCsv}>Export CSV</Button>
+          <Button loading={loading} onClick={() => {
+            const ev = new Event('reload-jobcards');
+            window.dispatchEvent(ev);
+          }}>Refresh</Button>
+        </Space>
+      </div>
+
+      <Table
+        dataSource={visibleRows}
+        columns={columns}
+        loading={loading && !hasCache}
+        size="small"
+        className="compact-table"
+        tableLayout="fixed"
+        pagination={USE_SERVER_PAG ? {
+          current: page,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          pageSizeOptions: ['10','25','50','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (t, range) => `${range[0]}-${range[1]} of ${t}`,
+        } : (renderMode==='pagination' ? {
+          current: page,
+          pageSize,
+          showSizeChanger: true,
+          pageSizeOptions: ['10','25','50','100'],
+          onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
+          showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
+        } : false)}
+        rowKey={(r) => `${r.jcNo}-${r.mobile}-${r.ts}-${r.key}`}
+        scroll={{ y: tableHeight }}
+      />
+
+      {!USE_SERVER_PAG && renderMode==='loadMore' && visibleRows.length < filtered.length ? (
+        <div style={{ display:'flex', justifyContent:'center', padding: 8 }}>
+          <Button onClick={()=> setLoadedCount((n)=> Math.min(n + pageSize, filtered.length))}>
+            Load more ({filtered.length - visibleRows.length} more)
+          </Button>
+        </div>
+      ) : null}
+
+      <Modal
+        open={remarkModal.open}
+        title={`Update Remark: ${remarkModal.refId}`}
+        confirmLoading={remarkSaving}
+        maskClosable={!remarkSaving}
+        keyboard={!remarkSaving}
+        closable={!remarkSaving}
+        cancelButtonProps={{ disabled: remarkSaving }}
+        onCancel={()=> {
+          if (remarkSaving) return;
+          setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+          setRemarkSaving(false);
+        }}
+        onOk={async ()=>{
+          setRemarkSaving(true);
+          try {
+            if (!GAS_URL) { message.error('Jobcards GAS URL not configured'); return; }
+            const stampedText = stampRemark(remarkModal.text);
+            const body = GAS_SECRET ? { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: stampedText };
+            const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
+            if (resp && (resp.ok || resp.success)) {
+              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
+              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: stampedText, _remarkLevel: remarkModal.level, _remarkText: stampedText } : x));
+              message.success('Remark saved to sheet');
+              setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+            } else { message.error('Save failed'); }
+          } catch { message.error('Save failed'); }
+          finally { setRemarkSaving(false); }
+        }}
+      >
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Select
+            value={remarkModal.level}
+            onChange={(v)=> setRemarkModal((s)=> ({ ...s, level: v }))}
+            options={[{value:'ok',label:'OK (Green)'},{value:'warning',label:'Warning (Yellow)'},{value:'alert',label:'Alert (Red)'}]}
+            style={{ width: 220 }}
+          />
+          <Input maxLength={140} showCount value={remarkModal.text} onChange={(e)=> setRemarkModal((s)=> ({ ...s, text: e.target.value }))} placeholder="Short note (optional)" />
+        </Space>
+      </Modal>
+      <PostServiceSheet
+        ref={invoiceRef}
+        active={invoiceOpen}
+        vals={invoiceData?.vals || {}}
+        totals={invoiceData?.totals || {}}
+      />
+    </div>
+  );
+}
+
+// --- Helpers (copied from Bookings/Quotations) ---
+function formatTs(v) {
+  if (!v) return <Text type="secondary">—</Text>;
+  try {
+    const ms = parseTsMs(v);
+    if (!ms) return String(v);
+    return dayjs(ms).format("DD-MM-YYYY HH:mm");
+  } catch { return String(v); }
+}
+
+function parseTsMs(v) {
+  if (!v) return null;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'number') return v;
+  const s = String(v).trim();
+  const dIso = new Date(s);
+  if (!isNaN(dIso.getTime())) return dIso.getTime();
+  const m = s.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?)?$/i);
+  if (m) {
+    const sep = m[2];
+    let a = parseInt(m[1], 10), b = parseInt(m[3], 10), y = parseInt(m[4], 10);
+    if (y < 100) y += 2000;
+    let month, day;
+    if (sep === '-') { day = a; month = b - 1; }
+    else if (a > 12) { day = a; month = b - 1; } else { month = a - 1; day = b; }
+    let hh = m[5] ? parseInt(m[5], 10) : 0;
+    const mm = m[6] ? parseInt(m[6], 10) : 0;
+    const ss = m[7] ? parseInt(m[7], 10) : 0;
+    const ap = (m[8] || '').toUpperCase();
+    if (ap === 'PM' && hh < 12) hh += 12;
+    if (ap === 'AM' && hh === 12) hh = 0;
+    const d = new Date(y, month, day, hh, mm, ss);
+    if (!isNaN(d.getTime())) return d.getTime();
+  }
+  return null;
+}

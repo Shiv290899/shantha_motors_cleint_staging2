@@ -1,0 +1,628 @@
+function doGet() {
+  return ContentService
+    .createTextOutput(JSON.stringify({ ok: true, service: 'MinorSales GAS', time: new Date().toISOString() }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Minor Sales Web App – Save cart items (one row per item) with Order ID.
+ * Frontend sends:
+ * {
+ *   action: 'minor_sales_save',
+ *   data: {
+ *     staffName, branchName, dateTimeIso, orderId,
+ *     summaryTotal, purchased: true,
+ *     items: [{ item, qty, unitPrice, amount }, ...],
+ *     customer: { name, mobile, paymentMode, utr? },
+ *     cashCollected?, onlineCollected? // optional split (frontend)
+ *   }
+ * }
+ */
+
+/* Optional: protect your endpoint */
+const WRITE_SECRET = ''; // set and require via payload.secret if you want
+
+const SHEET_NAME = 'MinorSales';
+const HEADERS = [
+  'Order ID','DateTime ISO','Staff','Branch',
+  'Items','Qty','Unit','Amount','Total','Purchased',
+  'Customer Name','Customer Mobile','Payment Mode','UTR / Reference',
+  'Items JSON'
+];
+
+/* ============== DAILY COLLECTIONS (JC / Booking / Minor Sales) ============== */
+
+// 👇 Master DailyCollections spreadsheet – SAME as JC script
+const DC_MASTER_SPREADSHEET_ID = '1oYOaFhEr7PgdF0BDC5A4V2zfPPoFtnhbxcP16jMqiGs';
+
+const DC_SHEET = 'DailyCollections';
+const DC_HEADERS = [
+  'Date','Branch','Staff',
+  'Booking Amount','JC Amount','Minor Sales Amount',
+  'Total', // legacy total
+  'Cash Amount','Online Amount','Total Collected',
+  'Opening Balance','Due Today','Collected Today','Closing Balance',
+  'Settlement Done','Settlement At','Updated At','Notes','Raw Payload'
+];
+
+function dcTodayStrIndia_() {
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+}
+
+function dcTsIndia_() {
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+}
+
+function dcToNum_(x) {
+  const n = Number(x || 0);
+  return isNaN(n) ? 0 : n;
+}
+
+// 👇 ALWAYS open the MASTER file, handle "@dropdown" hint row, ensure headers
+function dcGetSheet_() {
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string'
+    ? DC_MASTER_SPREADSHEET_ID
+    : '';
+  const ss = masterId
+    ? SpreadsheetApp.openById(masterId)
+    : SpreadsheetApp.getActiveSpreadsheet();
+
+  let sh = ss.getSheetByName(DC_SHEET);
+  if (!sh) sh = ss.insertSheet(DC_SHEET);
+
+  const w = Math.max(sh.getLastColumn(), DC_HEADERS.length);
+  const first = (w > 0) ? sh.getRange(1,1,1,w).getValues()[0] : [];
+  const lastRow = sh.getLastRow();
+  const a1 = String(first[0] || '').trim();
+  const looksLikeHint = /^type "@dropdown"/i.test(a1);
+
+  // If sheet is empty OR only has hint row, reset to headers
+  if (lastRow === 0 || (lastRow === 1 && (!a1 || looksLikeHint))) {
+    sh.clear();
+    sh.getRange(1,1,1,DC_HEADERS.length).setValues([DC_HEADERS]);
+  }
+
+  return sh;
+}
+
+/** ✅ Tolerant column finder */
+function findCol_(headers, candidates) {
+  const H = headers.map(h => String(h||'').trim().toLowerCase());
+  for (var i = 0; i < candidates.length; i++) {
+    const want = String(candidates[i]||'').trim().toLowerCase();
+    var idx = H.indexOf(want);
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+/** ✅ Tolerant dcIdx_ (works with "Minor Sales Amount" or "Minor Sales Amt") */
+function dcIdx_(headers) {
+  return {
+    Date:   findCol_(headers, ['Date']),
+    Branch: findCol_(headers, ['Branch']),
+    Staff:  findCol_(headers, ['Staff']),
+
+    Booking: findCol_(headers, ['Booking Amount']),
+    JC:      findCol_(headers, ['JC Amount']),
+    Minor:   findCol_(headers, ['Minor Sales Amount', 'Minor Sales Amt']),
+
+    Total:   findCol_(headers, ['Total']),
+    Cash:    findCol_(headers, ['Cash Amount']),
+    Online:  findCol_(headers, ['Online Amount']),
+    TotalCollected: findCol_(headers, ['Total Collected']),
+    Opening: findCol_(headers, ['Opening Balance']),
+    Due:     findCol_(headers, ['Due Today']),
+    CollectedToday: findCol_(headers, ['Collected Today']),
+    Closing: findCol_(headers, ['Closing Balance']),
+
+    Done:    findCol_(headers, ['Settlement Done']),
+    At:      findCol_(headers, ['Settlement At']),
+    UpdatedAt: findCol_(headers, ['Updated At']),
+    Raw:     findCol_(headers, ['Raw Payload']),
+    width:   headers.length
+  };
+}
+
+// Normalize value to yyyy-MM-dd in IST
+function dcNormDate_(val) {
+  var tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  if (val instanceof Date) return Utilities.formatDate(val, tz, 'yyyy-MM-dd');
+  var s = String(val || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  var d = new Date(s);
+  if (!isNaN(d.getTime())) return Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+  return s;
+}
+
+/**
+ * updateDailyCollection_(branch, staff, amount, type, opt?)
+ * type = 'booking' | 'jc' | 'minorsales'
+ * opt = { cashCollected?: number, onlineCollected?: number }
+ */
+function updateDailyCollection_(branch, staff, amount, type, opt) {
+  const b = String(branch || '').trim();
+  const s = String(staff || '').trim();
+  const amt = dcToNum_(amount);
+
+  // cash / online split (can be 0)
+  const cashInc   = dcToNum_(opt && opt.cashCollected);
+  const onlineInc = dcToNum_(opt && opt.onlineCollected);
+  const sourceId = opt && opt.sourceId ? String(opt.sourceId) : '';
+
+  if (!b || !s || !(amt > 0)) {
+    return { success:false, message:'missing branch/staff or amount<=0' };
+  }
+
+  if (sourceId && staffLedgerHasSourceId_(b, s, type, sourceId)) {
+    return { success:true, skipped:true, reason:'duplicate sourceId' };
+  }
+
+  const sh = dcGetSheet_();
+  const headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0];
+  const I = dcIdx_(headers);
+  const dateStr = dcTodayStrIndia_();
+
+  const last = sh.getLastRow();
+  let hit = -1;
+
+  // Find existing unsettled row for same Date + Branch + Staff
+  if (last > 1) {
+    const rows = sh.getRange(2,1,last-1,I.width).getValues();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i];
+      const sameDate   = dcNormDate_(r[I.Date]) === dateStr;
+      const sameBranch = String(r[I.Branch] || '').trim().toLowerCase() === b.toLowerCase();
+      const sameStaff  = String(r[I.Staff]  || '').trim().toLowerCase() === s.toLowerCase();
+      const notDone    = String(r[I.Done]   || '').toLowerCase() !== 'true';
+      if (sameDate && sameBranch && sameStaff && notDone) {
+        hit = i + 2;
+        break;
+      }
+    }
+  }
+
+  if (hit < 0) {
+    // Create new row
+    const row = new Array(I.width).fill('');
+    row[I.Date]   = dateStr;
+    row[I.Branch] = b;
+    row[I.Staff]  = s;
+
+    row[I.Booking] = 0;
+    row[I.JC]      = 0;
+    row[I.Minor]   = 0;
+
+    if (type === 'booking')         row[I.Booking] = amt;
+    else if (type === 'jc')         row[I.JC]      = amt;
+    else if (type === 'minorsales') row[I.Minor]   = amt;
+
+    // store split
+    if (I.Cash >= 0)   row[I.Cash]   = cashInc;
+    if (I.Online >= 0) row[I.Online] = onlineInc;
+
+    row[I.Total] = dcToNum_(row[I.Booking]) + dcToNum_(row[I.JC]) + dcToNum_(row[I.Minor]);
+    if (I.TotalCollected >= 0) row[I.TotalCollected] = dcToNum_(row[I.Cash]) + dcToNum_(row[I.Online]);
+    row[I.Done]  = false;
+    row[I.At]    = '';
+    row[I.Raw]   = JSON.stringify({
+      createdAt: dcTsIndia_(),
+      type,
+      amount: amt,
+      cash: cashInc,
+      online: onlineInc,
+      sourceIds: opt && opt.sourceId ? [String(opt.sourceId)] : []
+    });
+
+    sh.appendRow(row);
+    hit = sh.getLastRow();
+  } else {
+    // Update existing row
+    const cur = sh.getRange(hit,1,1,I.width).getValues()[0];
+    let raw = {};
+    try { raw = JSON.parse(String(cur[I.Raw] || '{}')); } catch (_) {}
+    const sourceId = opt && opt.sourceId ? String(opt.sourceId) : '';
+    const existingIds = Array.isArray(raw.sourceIds) ? raw.sourceIds.map(String) : [];
+    if (sourceId && existingIds.indexOf(sourceId) >= 0) {
+      return { success: true, skipped: true, reason: 'duplicate sourceId' };
+    }
+
+    if (type === 'booking')         cur[I.Booking] = dcToNum_(cur[I.Booking]) + amt;
+    else if (type === 'jc')         cur[I.JC]      = dcToNum_(cur[I.JC]) + amt;
+    else if (type === 'minorsales') cur[I.Minor]   = dcToNum_(cur[I.Minor]) + amt;
+
+    // increment split
+    if (I.Cash >= 0)   cur[I.Cash]   = dcToNum_(cur[I.Cash])   + cashInc;
+    if (I.Online >= 0) cur[I.Online] = dcToNum_(cur[I.Online]) + onlineInc;
+
+    cur[I.Total] = dcToNum_(cur[I.Booking]) + dcToNum_(cur[I.JC]) + dcToNum_(cur[I.Minor]);
+    if (I.TotalCollected >= 0) cur[I.TotalCollected] = dcToNum_(cur[I.Cash]) + dcToNum_(cur[I.Online]);
+
+    if (!Array.isArray(raw.logs)) raw.logs = [];
+    raw.logs.push({
+      at: dcTsIndia_(),
+      type,
+      amount: amt,
+      cash: cashInc,
+      online: onlineInc,
+      sourceId: sourceId
+    });
+    if (sourceId) {
+      if (!Array.isArray(raw.sourceIds)) raw.sourceIds = [];
+      if (raw.sourceIds.indexOf(sourceId) < 0) raw.sourceIds.push(sourceId);
+    }
+    cur[I.Raw] = JSON.stringify(raw);
+
+    sh.getRange(hit,1,1,I.width).setValues([cur]);
+  }
+
+  const outRow = sh.getRange(hit,1,1,I.width).getValues()[0];
+  // NEW: Append to StaffLedger (non-breaking)
+  try {
+    staffLedgerAppendFromDailyUpdate_(b, s, amt, type, opt);
+  } catch (_){ /* ignore ledger errors */ }
+
+  return {
+    success:true,
+    updatedRow: {
+      date:   outRow[I.Date],
+      branch: outRow[I.Branch],
+      staff:  outRow[I.Staff],
+      booking: dcToNum_(outRow[I.Booking]),
+      jc:      dcToNum_(outRow[I.JC]),
+      minor:   dcToNum_(outRow[I.Minor]),
+      cashAmount:   (I.Cash >= 0 ? dcToNum_(outRow[I.Cash]) : 0),
+      onlineAmount: (I.Online >= 0 ? dcToNum_(outRow[I.Online]) : 0),
+      total:   dcToNum_(outRow[I.Total]),
+      settled: String(outRow[I.Done]).toLowerCase() === 'true',
+      settledAt: outRow[I.At] || ''
+    }
+  };
+}
+
+/* ============== MAIN MinorSales doPost ============== */
+
+function doPost(e) {
+  try {
+    if (!e || !e.postData) return out({ success: false, error: 'No postData' }, 400);
+
+    var raw = String(e.postData.contents || '');
+    if (!raw) return out({ success: false, error: 'Empty body' }, 400);
+
+    var payload;
+    try { payload = JSON.parse(raw); }
+    catch (err) { return out({ success: false, error: 'Invalid JSON' }, 400); }
+
+    // Optional secret check
+    if (WRITE_SECRET) {
+      var bodySecret = String(payload && payload.secret || '');
+      if (bodySecret !== WRITE_SECRET) return out({ success: false, error: 'unauthorized' }, 401);
+    }
+
+    var action = String(payload && payload.action || '').toLowerCase();
+    var data = payload && payload.data || null;
+
+    if (action !== 'minor_sales_save' || !data) {
+      return out({ success: false, error: 'Unsupported action or missing data' }, 400);
+    }
+
+    // Extract / normalize
+    var orderId = String(data.orderId || '').trim();
+    if (!orderId) orderId = genOrderId();
+
+    var staffName   = u(data.staffName);
+    var branchName  = u(data.branchName);
+    var dateTimeIso = String(data.dateTimeIso || new Date().toISOString());
+    var summaryTotal = num(data.summaryTotal);
+    var purchased   = Boolean(data.purchased !== false); // default true
+    var items       = Array.isArray(data.items) ? data.items : [];
+
+    if (!items.length) {
+      return out({ success: false, error: 'No items provided' }, 400);
+    }
+
+    // ✅ fallback if summaryTotal missing/0
+    if (!(summaryTotal > 0)) {
+      summaryTotal = items.reduce(function(sum, it){
+        return sum + (Number(it && it.amount || 0));
+      }, 0);
+    }
+
+    var cust       = data.customer || {};
+    var custName   = u(cust.name || '');
+    var custMobile = mobile10(cust.mobile || '');
+    var payMode    = u(cust.paymentMode || '');
+    var utr        = String(cust.utr || '').trim();
+
+    var sh = getOrCreateSheet(SHEET_NAME);
+    ensureHeaders(sh, HEADERS);
+
+    // Build a single summary row for all items
+    var itemSummary = items.map(function(it){
+      var name = u(it && it.item || '');
+      var qty = num(it && it.qty);
+      if (!(qty > 0)) qty = 1;
+      var unit = num(it && it.unitPrice);
+      var amount = (it && (it.amount != null)) ? num(it.amount) : (qty * unit);
+      return name + ' x' + qty + ' @' + unit + ' = ' + amount;
+    }).join(' | ');
+
+    var totalQty = items.reduce(function(sum, it){
+      var q = num(it && it.qty);
+      if (!(q > 0)) q = 1;
+      return sum + q;
+    }, 0);
+
+    var row = [
+      orderId,
+      dateTimeIso,
+      staffName, branchName,
+      itemSummary, totalQty, '', summaryTotal, summaryTotal,
+      purchased,
+      custName, custMobile, payMode, utr || '',
+      JSON.stringify(items)
+    ];
+
+    // Overwrite existing row with same Order ID to prevent duplicates
+    var existingRow = findRowByOrderId_(sh, orderId);
+    if (existingRow > 0) {
+      sh.getRange(existingRow, 1, 1, HEADERS.length).setValues([row]);
+    } else {
+      sh.appendRow(row);
+    }
+
+    // 🔴 ALSO UPDATE DailyCollections: Minor Sales Amount with Cash/Online split
+    try {
+      if (purchased && branchName && staffName && summaryTotal > 0) {
+        // Prefer explicit split from frontend if present
+        var cashCollected   = num(data.cashCollected);
+        var onlineCollected = num(data.onlineCollected);
+
+        // If frontend didn't send split, derive from paymentMode
+        if (!(cashCollected > 0) && !(onlineCollected > 0)) {
+          var pm = String(payMode || '').toLowerCase();
+          if (pm === 'cash') {
+            cashCollected = summaryTotal;
+          } else if (pm) {
+            onlineCollected = summaryTotal;
+          } else {
+            // fallback: treat as cash
+            cashCollected = summaryTotal;
+          }
+        }
+
+        const ledgerCtx = {
+          sourceType: 'minorsales',
+          sourceId: orderId,
+          orderId: orderId,
+          customerName: custName,
+          customerMobile: custMobile,
+          paymentMode: String(payMode||'').toLowerCase(),
+          utr: utr || ''
+        };
+        updateDailyCollection_(branchName, staffName, summaryTotal, 'minorsales', {
+          cashCollected:   cashCollected,
+          onlineCollected: onlineCollected,
+          staffLedgerContext: ledgerCtx,
+          sourceId: orderId
+        });
+      }
+    } catch (errDC) {
+      // Don't break main response if DailyCollections fails
+    }
+
+    return out({ success: true, inserted: items.length, orderId: orderId }, 200);
+  } catch (err) {
+    return out({ success: false, error: String(err && err.message || err) }, 500);
+  }
+}
+
+/* ========== Helpers ========== */
+
+function out(obj, _status) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj || {}))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function getOrCreateSheet(name) {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  return sh;
+}
+
+function ensureHeaders(sh, headers) {
+  var width = headers.length;
+  var firstRow = sh.getRange(1, 1, 1, width).getValues()[0] || [];
+  var empty = firstRow.every(function(v){ return String(v || '').trim() === ''; });
+  var mismatch = headers.some(function(h, i){ return firstRow[i] !== h; });
+  if (empty || mismatch) {
+    sh.getRange(1, 1, 1, width).setValues([headers]);
+    sh.setFrozenRows(1);
+  }
+}
+
+function u(s) { return String(s || '').trim().toUpperCase(); }
+
+function num(x) {
+  var n = Number(x || 0);
+  return isNaN(n) ? 0 : n;
+}
+
+function mobile10(raw) {
+  return String(raw || '').replace(/\D/g, '').slice(-10);
+}
+
+function genOrderId() {
+  var dt = new Date();
+  var yy = String(dt.getFullYear()).slice(-2);
+  var mm = ('0' + (dt.getMonth() + 1)).slice(-2);
+  var dd = ('0' + dt.getDate()).slice(-2);
+  var rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return yy + mm + dd + '-' + rand;
+}
+
+// Find an existing MinorSales row by Order ID (case-insensitive)
+function findRowByOrderId_(sh, orderId) {
+  var oid = String(orderId || '').trim().toLowerCase();
+  if (!oid) return -1;
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var range = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (var i = 0; i < range.length; i++) {
+    var v = String(range[i][0] || '').trim().toLowerCase();
+    if (v && v === oid) return i + 2;
+  }
+  return -1;
+}
+
+/* ============================
+   StaffLedger (NEW HELPERS)
+============================ */
+const STAFF_LEDGER_SHEET = 'StaffLedger';
+const STAFF_LEDGER_HEADERS = [
+  'DateTime ISO','Date','Branch','Staff',
+  'Source Type','Source ID',
+  'Customer Name','Customer Mobile',
+  'Payment Mode','Cash Amount','Online Amount','UTR / Ref No',
+  'Collected Total','Settled Cash','Settled Online','Settled Total',
+  'Settled Flag','Settled At','Settled By','Raw Payload'
+];
+
+function slNowIsoIndia_(){
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(new Date(), tz, "yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+}
+function slDateIndia_(d){
+  const tz = Session.getScriptTimeZone() || 'Asia/Kolkata';
+  return Utilities.formatDate(d || new Date(), tz, 'yyyy-MM-dd');
+}
+
+function staffLedgerGetSheet_(){
+  const masterId = typeof DC_MASTER_SPREADSHEET_ID === 'string' ? DC_MASTER_SPREADSHEET_ID : '';
+  const ss = masterId ? SpreadsheetApp.openById(masterId) : SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(STAFF_LEDGER_SHEET);
+  if (!sh) sh = ss.insertSheet(STAFF_LEDGER_SHEET);
+  const width = Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length);
+  const first = width ? sh.getRange(1,1,1,width).getValues()[0] : [];
+  const hasAny = first.some(v => String(v||'').trim().length);
+  if (!hasAny) sh.getRange(1,1,1,STAFF_LEDGER_HEADERS.length).setValues([STAFF_LEDGER_HEADERS]);
+  return sh;
+}
+
+function staffLedgerIdx_(headers){
+  const H = headers.map(h => String(h||'').trim().toLowerCase());
+  const find = (name) => H.indexOf(String(name||'').trim().toLowerCase());
+  return {
+    DateTimeISO: find('datetime iso'),
+    Date: find('date'),
+    Branch: find('branch'),
+    Staff: find('staff'),
+    SrcType: find('source type'),
+    SrcId: find('source id'),
+    CustName: find('customer name'),
+    CustMobile: find('customer mobile'),
+    PayMode: find('payment mode'),
+    Cash: find('cash amount'),
+    Online: find('online amount'),
+    UTR: find('utr / ref no'),
+    Total: find('collected total'),
+    SCash: find('settled cash'),
+    SOnline: find('settled online'),
+    STotal: find('settled total'),
+    SFlag: find('settled flag'),
+    SAt: find('settled at'),
+    SBy: find('settled by'),
+    Raw: find('raw payload'),
+    width: headers.length
+  };
+}
+
+function appendStaffLedgerTransaction_(rowObj){
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const row = new Array(I.width).fill('');
+  const put = (i,v)=>{ if (i>=0) row[i] = (v==null?'':v); };
+  put(I.DateTimeISO, rowObj.dateTimeIso || slNowIsoIndia_());
+  put(I.Date, rowObj.date || slDateIndia_(new Date()));
+  put(I.Branch, rowObj.branch || '');
+  put(I.Staff, rowObj.staff || '');
+  put(I.SrcType, rowObj.sourceType || '');
+  put(I.SrcId, rowObj.sourceId || '');
+  put(I.CustName, rowObj.customerName || '');
+  put(I.CustMobile, rowObj.customerMobile || '');
+  put(I.PayMode, rowObj.paymentMode || '');
+  put(I.Cash, Number(rowObj.cashAmount||0)||0);
+  put(I.Online, Number(rowObj.onlineAmount||0)||0);
+  put(I.UTR, rowObj.utr || '');
+  const cash = Number(rowObj.cashAmount||0)||0;
+  const online = Number(rowObj.onlineAmount||0)||0;
+  put(I.Total, cash + online);
+  put(I.SCash, 0);
+  put(I.SOnline, 0);
+  put(I.STotal, 0);
+  put(I.SFlag, false);
+  put(I.SAt, '');
+  put(I.SBy, '');
+  try { put(I.Raw, JSON.stringify(rowObj.rawPayload || {})); } catch(_){ put(I.Raw, ''); }
+  sh.appendRow(row);
+  return { row: sh.getLastRow() };
+}
+
+function staffLedgerHasSourceId_(branch, staff, sourceType, sourceId){
+  const bKey = String(branch || '').trim().toLowerCase();
+  const sKey = String(staff || '').trim().toLowerCase();
+  const tKey = String(sourceType || '').trim().toLowerCase();
+  const idKey = String(sourceId || '').trim().toLowerCase();
+  if (!bKey || !sKey || !tKey || !idKey) return false;
+  const sh = staffLedgerGetSheet_();
+  const headers = sh.getRange(1,1,1,Math.max(sh.getLastColumn(), STAFF_LEDGER_HEADERS.length)).getValues()[0];
+  const I = staffLedgerIdx_(headers);
+  const last = sh.getLastRow();
+  if (last <= 1) return false;
+  const rows = sh.getRange(2,1,last-1,I.width).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (String(r[I.Branch]||'').trim().toLowerCase() !== bKey) continue;
+    if (String(r[I.Staff]||'').trim().toLowerCase() !== sKey) continue;
+    if (String(r[I.SrcType]||'').trim().toLowerCase() !== tKey) continue;
+    if (String(r[I.SrcId]||'').trim().toLowerCase() !== idKey) continue;
+    return true;
+  }
+  return false;
+}
+
+function staffLedgerAppendFromDailyUpdate_(branch, staff, amount, type, opt){
+  try{
+    const b = String(branch||'').trim();
+    const s = String(staff||'').trim();
+    const amt = num(amount);
+    if (!b || !s || !(amt>0)) return { skipped:true };
+    const ctx = (opt && opt.staffLedgerContext) || {};
+    let cash = num(opt && opt.cashCollected);
+    let online = num(opt && opt.onlineCollected);
+    if (!(cash>0) && !(online>0)){
+      const pm = String(ctx.paymentMode || '').toLowerCase();
+      if (pm === 'cash') cash = amt; else if (pm) online = amt; else cash = amt;
+    }
+    const pmode = (cash>0 && online>0) ? 'mixed' : (cash>0 ? 'cash' : (online>0 ? 'online' : ''));
+    const obj = {
+      branch: b,
+      staff: s,
+      sourceType: String(type||'').toLowerCase(),
+      sourceId: String(ctx.sourceId||ctx.orderId||'').trim(),
+      customerName: ctx.customerName || '',
+      customerMobile: String(ctx.customerMobile || '').replace(/\D/g,'').slice(-10),
+      paymentMode: pmode,
+      cashAmount: cash,
+      onlineAmount: online,
+      utr: String(ctx.utr||'').trim(),
+      rawPayload: { from: 'updateDailyCollection_', ctx }
+    };
+    return appendStaffLedgerTransaction_(obj);
+  }catch(err){ return { error: String(err) }; }
+}

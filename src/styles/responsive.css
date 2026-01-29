@@ -1,0 +1,92 @@
+/* Global responsive enhancements */
+
+html, body {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+img, video, canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Ant Design helpers */
+.ant-form-item-label > label {
+  white-space: normal; /* allow labels to wrap on mobile */
+}
+
+/* Tables: allow horizontal scroll on small screens */
+@media (max-width: 768px) {
+  .ant-table {
+    font-size: 13px;
+  }
+  .ant-table-wrapper {
+    overflow-x: auto;
+  }
+}
+
+/* Stock movements: compact table to fit one page */
+.stock-movements-table .ant-table-thead > tr > th,
+.stock-movements-table .ant-table-tbody > tr > td {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.stock-movements-table .ant-table-thead > tr > th {
+  font-weight: 600;
+  font-size: 11px;
+  white-space: normal;
+  text-overflow: clip;
+  overflow: visible;
+  line-height: 1.15;
+  word-break: break-word;
+}
+.stock-movements-table .ant-table-thead > tr > th .ant-table-column-title {
+  white-space: normal;
+  text-overflow: clip;
+  overflow: visible;
+  word-break: break-word;
+}
+@media (max-width: 480px) {
+  .stock-movements-table .ant-table-thead > tr > th {
+    font-size: 10px;
+    padding: 4px 6px;
+  }
+}
+.stock-movements-table .ant-tag {
+  font-size: 11px;
+  line-height: 1.1;
+  padding: 0 4px;
+}
+
+/* Compact tables for quotations/jobcards/bookings/display vehicles */
+.compact-table .ant-table-thead > tr > th,
+.compact-table .ant-table-tbody > tr > td {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.compact-table .ant-table-thead > tr > th {
+  font-weight: 600;
+}
+.compact-table .ant-tag {
+  font-size: 11px;
+  line-height: 1.1;
+  padding: 0 4px;
+}
+
+/* Controls comfortable tap targets on mobile */
+@media (max-width: 480px) {
+  .stock-movements-table .ant-table-thead > tr > th,
+  .stock-movements-table .ant-table-tbody > tr > td {
+    font-size: 8px;
+    padding: 4px 6px;
+  }
+  .stock-finder-table .ant-table-thead > tr > th,
+  .stock-finder-table .ant-table-tbody > tr > td {
+    font-size: 8px;
+    padding: 4px 6px;
+  }
+  .ant-btn, .ant-input, .ant-select-selector, .ant-input-number, .ant-segmented, .ant-radio-group {
+    min-height: 36px;
+  }
+}

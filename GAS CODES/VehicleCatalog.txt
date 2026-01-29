@@ -1,0 +1,221 @@
+/**
+ * Vehicle Catalog Web App (Google Apps Script)
+ * Supports list / upsert / delete for Company, Model, Variant, Color, OnRoadPrice, plus audit (UpdatedAt/UpdatedBy).
+ *
+ * Deploy:
+ *  - File > Project properties > copy Script ID for reference.
+ *  - Deploy > New deployment > Select type "Web app".
+ *  - Execute as: Me (the owner)
+ *  - Who has access: Anyone with the link
+ *  - After deploy, copy the Web App URL and set it in your client env as VITE_VEHICLE_CATALOG_GAS_URL.
+ *
+ * Expected sheet layout (first row headers):
+ *  Company | Model | Variant | Color | OnRoadPrice | Key | UpdatedAt | UpdatedBy
+ */
+
+// Target sheet: https://docs.google.com/spreadsheets/d/1XSwT6GQiXUsH_zH8VEymsrCfHb1QW_FbdKwMSqnE4_U/edit?gid=0#gid=0
+const SPREADSHEET_ID = '1XSwT6GQiXUsH_zH8VEymsrCfHb1QW_FbdKwMSqnE4_U'; // Sheet ID
+const SHEET_NAME = 'Catalog';
+
+function getSheet_() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
+  const headers = ['Company', 'Model', 'Variant', 'Color', 'OnRoadPrice', 'Key', 'UpdatedAt', 'UpdatedBy'];
+  const width = Math.max(sheet.getLastColumn(), headers.length);
+  const firstRow = width ? sheet.getRange(1, 1, 1, width).getValues()[0] : [];
+  if (!firstRow.length) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    return sheet;
+  }
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const hasHeader = (h) => firstRow.findIndex((v) => norm(v) === norm(h)) !== -1;
+  let updated = false;
+  headers.forEach((h) => {
+    if (!hasHeader(h)) {
+      firstRow.push(h);
+      updated = true;
+    }
+  });
+  if (updated) sheet.getRange(1, 1, 1, firstRow.length).setValues([firstRow]);
+  return sheet;
+}
+
+function buildKey_(obj) {
+  const toKey = (s) => String(s || '').trim().toUpperCase();
+  return [toKey(obj.Company), toKey(obj.Model), toKey(obj.Variant)].join('|');
+}
+
+function readRows_() {
+  const sheet = getSheet_();
+  const values = sheet.getDataRange().getValues();
+  if (values.length <= 1) return [];
+  const headers = values[0];
+  const rows = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = row[idx]; });
+    obj._row = i + 1; // 1-based row index in Sheet
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function writeRow_(sheet, rowIndex, obj) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const row = headers.map((h) => obj[h] ?? '');
+  sheet.getRange(rowIndex, 1, 1, headers.length).setValues([row]);
+}
+
+function doGet(e) {
+  const action = (e && e.parameter && e.parameter.action) ? String(e.parameter.action).toLowerCase() : 'list';
+  if (action === 'list') {
+    const rows = readRows_();
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, rows, count: rows.length })).setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, message: 'Vehicle Catalog API' })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  const payload = parseBody_(e);
+  const action = String(payload.action || 'upsert').toLowerCase();
+  try {
+    if (action === 'delete') {
+      return handleDelete_(payload);
+    }
+    return handleUpsert_(payload);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, message: err.message || String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function handleUpsert_(payload) {
+  const sheet = getSheet_();
+  const required = ['company', 'model', 'variant'];
+  required.forEach((k) => {
+    if (!payload[k]) throw new Error('Missing ' + k);
+  });
+  const colorRaw = payload.color || payload.colors || payload.Color || payload.Colours || '';
+  const rec = {
+    Company: String(payload.company).trim(),
+    Model: String(payload.model).trim(),
+    Variant: String(payload.variant).trim(),
+    Color: String(colorRaw || '').trim(),
+    OnRoadPrice: Number(payload.onRoadPrice || 0) || 0,
+    UpdatedBy: payload.updatedBy ? String(payload.updatedBy).trim() : '',
+  };
+  rec.Key = buildKey_(rec);
+  rec.UpdatedAt = new Date();
+
+  const rows = readRows_();
+  const lastRow = sheet.getLastRow();
+  const lookupKeyRaw = payload.key || payload.previousKey || payload.originalKey || '';
+  const targetKey = lookupKeyRaw ? String(lookupKeyRaw).toUpperCase() : rec.Key;
+  const rowIdRaw = payload.id || payload.rowId || payload.row || payload._row;
+  const rowId = rowIdRaw ? Number(rowIdRaw) : NaN;
+  let rowNumber = null;
+
+  if (!isNaN(rowId) && rowId >= 2 && rowId <= lastRow) {
+    const rowIdValue = Math.floor(rowId);
+    if (!lookupKeyRaw) {
+      rowNumber = rowIdValue;
+    } else {
+      const rowById = rows.find((r) => r._row === rowIdValue);
+      if (rowById && buildKey_(rowById) === targetKey) rowNumber = rowIdValue;
+    }
+  }
+
+  if (!rowNumber) {
+    const idx = rows.findIndex((r) => buildKey_(r) === targetKey);
+    if (idx >= 0) rowNumber = rows[idx]._row;
+  }
+
+  if (rowNumber) {
+    writeRow_(sheet, rowNumber, rec);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, updated: true, row: rowNumber, data: rec }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const nextRow = lastRow + 1;
+  writeRow_(sheet, nextRow, rec);
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, created: true, row: nextRow, data: rec }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function handleDelete_(payload) {
+  const sheet = getSheet_();
+  const rows = readRows_();
+  const targetKey = payload.key ? String(payload.key).toUpperCase() : buildKey_({
+    Company: payload.company,
+    Model: payload.model,
+    Variant: payload.variant,
+  });
+  const idx = rows.findIndex((r) => buildKey_(r) === targetKey);
+  if (idx < 0) throw new Error('Record not found');
+  const rowNumber = rows[idx]._row;
+  sheet.deleteRow(rowNumber);
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, deleted: true, row: rowNumber }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+function parseBody_(e) {
+  if (!e) return {};
+  if (e.postData && e.postData.contents) {
+    try { return JSON.parse(e.postData.contents); } catch (_) { /* fall through */ }
+  }
+  if (e.parameter) {
+    const obj = {};
+    Object.keys(e.parameter).forEach((k) => { obj[k] = e.parameter[k]; });
+    return obj;
+  }
+  return {};
+}
+
+// Run once if Colors show prices and OnRoadPrice is 0 (data shifted by one column).
+function fixShiftedColumns_() {
+  const sheet = getSheet_();
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  const norm = (s) => String(s || '').trim().toLowerCase();
+  const idx = (name) => headers.findIndex((h) => norm(h) === norm(name));
+  const colColor = idx('Color');
+  const colPrice = idx('OnRoadPrice');
+  const colKey = idx('Key');
+  const colUpdatedAt = idx('UpdatedAt');
+  const colUpdatedBy = idx('UpdatedBy');
+  if ([colColor, colPrice, colKey, colUpdatedAt, colUpdatedBy].some((i) => i < 0)) {
+    throw new Error('Missing one or more required headers.');
+  }
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+  const range = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn());
+  const values = range.getValues();
+  const isNumericLike = (v) => {
+    const s = String(v || '').replace(/[",\s₹]/g, '');
+    return s !== '' && !isNaN(Number(s));
+  };
+  const looksLikeKey = (v) => String(v || '').includes('|');
+  const looksLikeDate = (v) => !isNaN(new Date(v).getTime());
+  let changed = false;
+  values.forEach((row) => {
+    const colorVal = row[colColor];
+    const priceVal = row[colPrice];
+    const keyVal = row[colKey];
+    const updatedAtVal = row[colUpdatedAt];
+    const updatedByVal = row[colUpdatedBy];
+    const shouldShift =
+      isNumericLike(colorVal) &&
+      !isNumericLike(priceVal) &&
+      looksLikeKey(priceVal) &&
+      !updatedByVal &&
+      looksLikeDate(keyVal);
+    if (!shouldShift) return;
+    row[colUpdatedBy] = updatedAtVal;
+    row[colUpdatedAt] = keyVal;
+    row[colKey] = priceVal;
+    row[colPrice] = colorVal;
+    row[colColor] = '';
+    changed = true;
+  });
+  if (changed) range.setValues(values);
+}
