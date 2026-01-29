@@ -19,6 +19,7 @@ import {
   AutoComplete,
   Modal,
   Space,
+  Spin,
 } from "antd";
 import { InboxOutlined, CreditCardOutlined, PrinterOutlined } from "@ant-design/icons";
 import { listCurrentStocksPublic } from "../apiCalls/stocks";
@@ -31,6 +32,9 @@ import BookingHistoryButton from "./BookingHistoryButton";
 import { handleSmartPrint } from "../utils/printUtils";
 import { normalizeKey, uniqCaseInsensitive } from "../utils/caseInsensitive";
 import dayjs from "dayjs";
+import { useLocation } from "react-router-dom";
+import { consumeFollowUpBookingPrefill } from "../utils/followUpPrefill";
+import { buildBookingFormPatch } from "../utils/bookingFormPrefill";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
@@ -238,6 +242,10 @@ export default function BookingForm({
   const [dynamicLoading, setDynamicLoading] = useState(false);
   const [chassisLocked, setChassisLocked] = useState(false);
   const [activeBranchSet, setActiveBranchSet] = useState(null); // lower-case branch names
+  const location = useLocation();
+  const autoFetchRequest = location.state?.autoFetch;
+  const [autoFetchLoading, setAutoFetchLoading] = useState(Boolean(autoFetchRequest));
+  const followUpPrefillAppliedRef = useRef(false);
 
   // User context for auto-filling Executive and Branch
   const currentUser = useMemo(() => {
@@ -294,6 +302,22 @@ export default function BookingForm({
   const paymentReference2 = Form.useWatch("paymentReference2", form);
   const paymentReference3 = Form.useWatch("paymentReference3", form);
   const chassisNo = Form.useWatch("chassisNo", form);
+
+  const handleBookingApplied = useCallback(
+    ({ bookingId, mobile, vehicle }) => {
+      setPaymentsOnlyMode(true);
+      setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
+      setHasFetchedBookingFlag(true);
+      const availability = String(vehicle?.availability || "").toLowerCase();
+      const chassisVal = vehicle?.chassisNo || form.getFieldValue("chassisNo");
+      const isAllot =
+        availability === "allot" || String(chassisVal || "") === "__ALLOT__";
+      const hasChassis = Boolean(chassisVal && String(chassisVal) !== "__ALLOT__");
+      setChassisLocked(Boolean(hasChassis && !isAllot));
+      message.info("Payments-only update mode enabled");
+    },
+    [form]
+  );
 
   // Live-print watchers
   const wCustomerName = Form.useWatch("customerName", form);
@@ -794,6 +818,48 @@ export default function BookingForm({
     if (Object.keys(patch).length) form.setFieldsValue(patch);
   }, [form, executiveDefault, branchDefault]);
 
+  useEffect(() => {
+    if (!autoFetchRequest) return;
+    const onComplete = () => setAutoFetchLoading(false);
+    window.addEventListener("bookingPrefillComplete", onComplete);
+    return () => window.removeEventListener("bookingPrefillComplete", onComplete);
+  }, [autoFetchRequest]);
+
+  useEffect(() => {
+    if (!autoFetchRequest) return;
+    followUpPrefillAppliedRef.current = false;
+  }, [autoFetchRequest?.mode, autoFetchRequest?.query]);
+
+  useEffect(() => {
+    followUpPrefillAppliedRef.current = false;
+  }, [location.key]);
+
+  useEffect(() => {
+    if (followUpPrefillAppliedRef.current) return;
+    followUpPrefillAppliedRef.current = true;
+    const dispatchCompletion = () => {
+      if (typeof window === "undefined") return;
+      window.dispatchEvent(new CustomEvent("bookingPrefillComplete"));
+    };
+    const followUpData = consumeFollowUpBookingPrefill();
+    if (!followUpData?.payload) {
+      dispatchCompletion();
+      return;
+    }
+    try {
+      const { patch, metadata } = buildBookingFormPatch(followUpData.payload);
+      form.setFieldsValue(patch);
+      if (patch.company) setSelectedCompany?.(patch.company);
+      if (patch.bikeModel) setSelectedModel?.(patch.bikeModel);
+      message.success("Booking details filled.");
+      handleBookingApplied(metadata);
+    } catch (err) {
+      console.warn("Follow-up auto-prefill failed", err);
+    } finally {
+      dispatchCompletion();
+    }
+  }, [form, handleBookingApplied, setSelectedCompany, setSelectedModel]);
+
   // Load vehicle data from Google Sheet
   useEffect(() => {
     let cancelled = false;
@@ -1039,14 +1105,6 @@ export default function BookingForm({
       if (!skipCooldown) {
         if (Date.now() < actionCooldownUntil) return;
         startActionCooldown(6000);
-      }
-
-      // In normal mode require a document; in payments-only mode allow optional
-      if (!paymentsOnlyMode) {
-        if (!addressProofFiles || addressProofFiles.length === 0) {
-          message.error("Please upload a PDF document");
-          return;
-        }
       }
 
       if (!skipSubmittingState) setSubmitting(true);
@@ -1901,16 +1959,7 @@ export default function BookingForm({
       {/* Upload Document */}
       <Row gutter={[16, 16]}>
         <Col xs={24}>
-          <Form.Item
-            label="Upload Document (PDF only)"
-            required={!paymentsOnlyMode}
-            rules={paymentsOnlyMode ? [] : [
-              {
-                required: true,
-                message: "Please upload a PDF document",
-              },
-            ]}
-          >
+          <Form.Item label="Upload Document (PDF only)">
             <Dragger
               multiple={false}
               beforeUpload={beforeUpload}
@@ -2273,8 +2322,24 @@ export default function BookingForm({
         minHeight: "100dvh",
         display: "grid",
         alignItems: "start",
+        position: "relative",
       }}
     >
+      {autoFetchLoading && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 2000,
+            background: "rgba(255,255,255,0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Spin tip="Fetching booking details..." size="large" />
+        </div>
+      )}
       <Card
         bordered={false}
         style={{
@@ -2310,17 +2375,8 @@ export default function BookingForm({
                 webhookUrl={BOOKING_GAS_URL}
                 setSelectedCompany={setSelectedCompany}
                 setSelectedModel={setSelectedModel}
-                onApplied={({ bookingId, mobile, vehicle }) => {
-                  setPaymentsOnlyMode(true);
-                  setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
-                  setHasFetchedBookingFlag(true);
-                  const availability = String(vehicle?.availability || '').toLowerCase();
-                  const chassisVal = vehicle?.chassisNo || form.getFieldValue('chassisNo');
-                  const isAllot = availability === 'allot' || String(chassisVal || '') === '__ALLOT__';
-                  const hasChassis = Boolean(chassisVal && String(chassisVal) !== '__ALLOT__');
-                  setChassisLocked(Boolean(hasChassis && !isAllot));
-                  message.info('Payments-only update mode enabled');
-                }}
+                onApplied={handleBookingApplied}
+                autoSearch={autoFetchRequest}
               />
               <BookingHistoryButton
                 form={form}

@@ -341,6 +341,10 @@ function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
   const branch = vals?.branch || "—";
   const exec = vals?.executive || "Team";
   const execPhone = getLoggedInPhone();
+  const branchKey = String(branch).trim().toLowerCase();
+  const isNH = branchKey.includes("byadarahalli");
+  const brandEn = isNH ? "NH Motors" : "Shantha Motors";
+  const brandKn = isNH ? "ಎನ್ ಎಚ್ ಮೋಟರ್ಸ್" : "ಶಾಂತ ಮೋಟರ್ಸ್";
 
   const now = dayjs().format('DD-MM-YYYY HH:mm');
   const line = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -399,7 +403,7 @@ function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
 
   // Final WhatsApp message following the requested template
   const lines = [
-    `⭐️ *Shantha Motors* — ಶಾಂತ ಮೋಟರ್ಸ್`,
+    `⭐️ *${brandEn}* — ${brandKn}`,
     `Multi Brand Two Wheeler Sales & Service`,
     `────────────────────────`,
     `*✔️ Service Invoice*`,
@@ -427,7 +431,7 @@ function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
     ``,
     `────────────────────────`,
     ``,
-    `🙏 Thank you for choosing *Shantha Motors*!`,
+    `🙏 Thank you for choosing *${brandEn}*!`,
     `ಧನ್ಯವಾದಗಳು ❤️`,
     `— ${exec}, ${branch}${execPhone ? ` (☎️ ${execPhone})` : ''}`,
   ];
