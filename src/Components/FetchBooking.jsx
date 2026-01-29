@@ -1,5 +1,5 @@
 // FetchBooking.jsx
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import {
   Alert,
   Button,
@@ -13,7 +13,6 @@ import {
 } from "antd";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
-import { buildBookingFormPatch } from "../utils/bookingFormPrefill";
 
 /**
  * Fetch existing Booking by Booking ID or Mobile and fill the BookingForm.
@@ -28,7 +27,6 @@ export default function FetchBooking({
   setSelectedCompany,
   setSelectedModel,
   onApplied,
-  autoSearch,
 }) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState("mobile"); // 'mobile' | 'booking'
@@ -36,7 +34,6 @@ export default function FetchBooking({
   const [loading, setLoading] = useState(false);
   const [matches, setMatches] = useState([]);
   const [notFoundText, setNotFoundText] = useState("");
-  const autoSearchRequestRef = useRef(null);
   const tenDigits = (x) =>
     String(x || "").replace(/\D/g, "").slice(-10);
   const cleanBookingId = (x) =>
@@ -56,18 +53,17 @@ export default function FetchBooking({
     return stages.some((rx) => rx.test(v));
   };
 
-  const showNotFoundModal = (modeOverride) => {
-    const resolvedMode = modeOverride || mode;
+  const showNotFoundModal = () => {
     const pretty =
-      resolvedMode === "mobile"
+      mode === "mobile"
         ? tenDigits(query) || String(query || "").trim()
         : String(query || "").trim();
     const txt =
       pretty
         ? `The ${
-            resolvedMode === "mobile"
+            mode === "mobile"
               ? "mobile number"
-              : resolvedMode === "vehicle"
+              : mode === "vehicle"
               ? "vehicle number"
               : "booking ID"
           } "${pretty}" is not in our records.`
@@ -81,31 +77,28 @@ export default function FetchBooking({
     });
   };
 
-  const fetchRows = async (queryOverride, modeOverride) => {
+  const fetchRows = async (queryOverride) => {
     if (!webhookUrl) throw new Error("Booking webhook URL not configured");
-    const nextMode = modeOverride || mode || "mobile";
-    const qStr = String(queryOverride ?? query ?? "").trim();
-    const payloadBase = { action: "search", mode: nextMode, query: qStr };
+    const qStr = String(queryOverride ?? query ?? "");
+    const payloadBase = { action: "search", mode, query: qStr };
     const primary = await saveBookingViaWebhook({
       webhookUrl,
       method: "GET",
       payload: payloadBase,
     });
-    let rows = Array.isArray((primary?.data || primary)?.rows)
-      ? (primary?.data || primary).rows
-      : [];
-    if (!rows.length && nextMode === "vehicle") {
+    let rows = Array.isArray((primary?.data || primary)?.rows) ? (primary?.data || primary).rows : [];
+    // Try alternate mode for vehicle (some scripts expect 'reg')
+    if (!rows.length && mode === "vehicle") {
       const alt = await saveBookingViaWebhook({
         webhookUrl,
         method: "GET",
         payload: { ...payloadBase, mode: "reg" },
       }).catch(() => null);
-      const altRows = Array.isArray((alt?.data || alt)?.rows)
-        ? (alt?.data || alt).rows
-        : [];
+      const altRows = Array.isArray((alt?.data || alt)?.rows) ? (alt?.data || alt).rows : [];
       rows = altRows;
     }
-    if (!rows.length && nextMode === "vehicle") {
+    // Final fallback: list and filter by vehicle when searching by vehicle
+    if (!rows.length && mode === "vehicle") {
       try {
         const listResp = await saveBookingViaWebhook({
           webhookUrl,
@@ -113,11 +106,7 @@ export default function FetchBooking({
           payload: { action: "list" },
         });
         const lj = listResp?.data || listResp;
-        const dataArr = Array.isArray(lj?.rows)
-          ? lj.rows
-          : Array.isArray(lj?.data)
-          ? lj.data
-          : [];
+        const dataArr = Array.isArray(lj?.rows) ? lj.rows : Array.isArray(lj?.data) ? lj.data : [];
         const qreg = normalizeReg(qStr);
         const filtered = dataArr.filter((r) => {
           const vals = r?.values || {};
@@ -131,14 +120,8 @@ export default function FetchBooking({
               vals["Vehicle Number"] ||
               ""
           );
-          const regFromPayload = normalizeReg(
-            payload.vehicle?.regNo ||
-              payload.vehicle?.registrationNumber ||
-              payload.vehicleNo ||
-              payload.regNo ||
-              payload.registrationNumber ||
-              ""
-          );
+          const regFromPayload =
+            normalizeReg(payload.vehicle?.regNo || payload.vehicle?.registrationNumber || payload.vehicleNo || payload.regNo || payload.registrationNumber || "");
           const regFromRaw = normalizeReg(
             typeof payload.rawPayload === "string" ? payload.rawPayload : ""
           );
@@ -164,7 +147,101 @@ export default function FetchBooking({
   const applyToForm = (payload) => {
     try {
       const p = payloadFromRow(payload);
-      const { patch, metadata } = buildBookingFormPatch(p);
+      const v = p.vehicle || {};
+      const pvMode =
+        String(p.purchaseMode || p.purchaseType || "").toLowerCase() ||
+        "cash";
+      const toNumber = (x) =>
+        Number(String(x ?? 0).replace(/[,₹\s]/g, "")) || 0;
+      const apTypes = Array.isArray(p.addressProofTypes)
+        ? p.addressProofTypes
+        : String(p.addressProofTypes || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+      // Normalize split payments (supports new Cash+Online in same partial)
+      const split = [
+        { cash: 0, online: 0, ref: undefined },
+        { cash: 0, online: 0, ref: undefined },
+        { cash: 0, online: 0, ref: undefined },
+      ];
+      const payArr = Array.isArray(p.payments) ? p.payments : [];
+      const assignToPart = (pay, idxHint = 0) => {
+        const mode = String(pay?.mode || "").toLowerCase();
+        const amtVal = toNumber(pay?.amount);
+        if (!amtVal) return;
+        const part =
+          Number(pay?.part) && Number(pay?.part) >= 1 && Number(pay?.part) <= 3
+            ? Number(pay.part) - 1
+            : Math.min(Math.max(idxHint, 0), 2);
+        if (mode === "online") {
+          split[part].online += amtVal;
+          if (!split[part].ref) split[part].ref = pay?.reference || pay?.utr || pay?.ref || "";
+        } else {
+          split[part].cash += amtVal;
+        }
+      };
+      if (payArr.length) {
+        payArr.forEach((pay, idx) => assignToPart(pay, idx));
+      } else if (p.bookingAmount || p.paymentMode) {
+        assignToPart(
+          {
+            amount: p.bookingAmount,
+            mode: p.paymentMode || "cash",
+            reference: p.paymentReference || p.utr || p.ref,
+          },
+          0
+        );
+      }
+
+      const patch = {
+        executive: p.executive || undefined,
+        branch: p.branch || undefined,
+        customerName: p.customerName || p.name || "",
+        mobileNumber: tenDigits(p.mobileNumber || p.mobile || ""),
+        address: p.address || "",
+        company: v.company || "",
+        bikeModel: v.model || "",
+        variant: v.variant || "",
+        color: v.color || undefined,
+        chassisNo:
+          v.availability === "allot"
+            ? "__ALLOT__"
+            : v.chassisNo || undefined,
+        rtoOffice: p.rtoOffice || "KA",
+        purchaseType: pvMode,
+        financier:
+          pvMode === "loan" ? p.financier || undefined : undefined,
+        nohpFinancier:
+          pvMode === "nohp"
+            ? p.financier || p.nohpFinancier || undefined
+            : undefined,
+        disbursementAmount:
+          pvMode === "loan" || pvMode === "nohp"
+            ? toNumber(p.disbursementAmount) || undefined
+            : undefined,
+        addressProofMode: p.addressProofMode || p.addressProof || "aadhaar",
+        addressProofTypes: apTypes,
+        bookingAmount1Cash: split[0].cash || undefined,
+        bookingAmount1Online: split[0].online || undefined,
+        paymentReference1: split[0].ref || undefined,
+        bookingAmount2Cash: split[1].cash || undefined,
+        bookingAmount2Online: split[1].online || undefined,
+        paymentReference2: split[1].ref || undefined,
+        bookingAmount3Cash: split[2].cash || undefined,
+        bookingAmount3Online: split[2].online || undefined,
+        paymentReference3: split[2].ref || undefined,
+        // DP breakdown
+        downPayment: toNumber((p.dp && p.dp.downPayment) ?? p.downPayment),
+        extraFittingAmount: toNumber(
+          (p.dp && p.dp.extraFittingAmount) ?? p.extraFittingAmount
+        ),
+        affidavitCharges: toNumber(
+          (p.dp && p.dp.affidavitCharges) ?? p.affidavitCharges
+        ),
+      };
+
       form.setFieldsValue(patch);
       if (patch.company) setSelectedCompany?.(patch.company);
       if (patch.bikeModel) setSelectedModel?.(patch.bikeModel);
@@ -173,54 +250,43 @@ export default function FetchBooking({
       setMatches([]);
       setQuery("");
       try {
-        onApplied?.(metadata);
-      } catch {
-        // noop
-      }
-      window.dispatchEvent(new CustomEvent("bookingPrefillComplete"));
+        onApplied?.({
+          bookingId: p.bookingId || p.serialNo || undefined,
+          mobile: tenDigits(p.mobileNumber || p.mobile || ""),
+          vehicle: v,
+        });
+      } catch { /* noop */ }
     } catch (e) {
       console.warn("applyToForm error:", e);
       message.error("Could not apply booking details.");
-      window.dispatchEvent(new CustomEvent("bookingPrefillComplete"));
     }
   };
 
-  const runSearch = async ({ modeOverride, queryOverride, silent, autoSearch = false } = {}) => {
-    const raw = String(queryOverride ?? query ?? "").trim();
-    const nextMode = modeOverride || mode || "mobile";
-    const dispatchAutoCompletion = () => {
-      if (autoSearch && typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("bookingPrefillComplete"));
-      }
-    };
+  const runSearch = async () => {
+    const raw = String(query || "").trim();
     if (!raw) {
-      if (!silent) {
-        message.warning(
-          nextMode === "mobile"
-            ? "Enter 10-digit Mobile"
-            : nextMode === "vehicle"
-            ? "Enter vehicle no. (KA03AB1234)"
-            : "Enter Booking ID"
-        );
-      }
-      dispatchAutoCompletion();
+      message.warning(
+        mode === "mobile"
+          ? "Enter 10-digit Mobile"
+          : mode === "vehicle"
+          ? "Enter vehicle no. (KA03AB1234)"
+          : "Enter Booking ID"
+      );
       return;
     }
     let qNorm = raw;
-    if (nextMode === "mobile") {
+    if (mode === "mobile") {
       const digits = tenDigits(raw);
       if (digits.length !== 10) {
-        if (!silent) message.error("Enter a valid 10-digit mobile number.");
-        dispatchAutoCompletion();
+        message.error("Enter a valid 10-digit mobile number.");
         return;
       }
       qNorm = digits;
       setQuery(digits);
-    } else if (nextMode === "vehicle") {
+    } else if (mode === "vehicle") {
       const reg = normalizeReg(raw);
       if (!VEH_RX.test(reg)) {
-        if (!silent) message.error("Enter vehicle as KA03AB1234.");
-        dispatchAutoCompletion();
+        message.error("Enter vehicle as KA03AB1234.");
         return;
       }
       qNorm = reg;
@@ -229,14 +295,13 @@ export default function FetchBooking({
       qNorm = cleanBookingId(raw);
       setQuery(qNorm);
     }
-    setMode(nextMode);
     setNotFoundText("");
     setLoading(true);
     try {
-      const rows = await fetchRows(qNorm, nextMode);
+      const rows = await fetchRows(qNorm);
       const items = rows.map((r) => ({ payload: payloadFromRow(r) }));
       if (!items.length) {
-        if (!silent) showNotFoundModal(nextMode);
+        showNotFoundModal();
         setMatches([]);
         return;
       }
@@ -245,33 +310,14 @@ export default function FetchBooking({
         return;
       }
       setMatches(items.slice(0, 10));
-      if (!silent) message.info(`Found ${items.length} matches. Pick one.`);
+      message.info(`Found ${items.length} matches. Pick one.`);
     } catch (e) {
       console.warn("Booking search error:", e);
-      if (!silent) message.error("Could not fetch bookings. Check webhook.");
+      message.error("Could not fetch bookings. Check webhook.");
     } finally {
       setLoading(false);
-      if (autoSearch && typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("bookingPrefillComplete"));
-      }
     }
   };
-
-  useEffect(() => {
-    const queryValue = String(autoSearch?.query || "").trim();
-    if (!queryValue) return;
-    const nextMode = autoSearch?.mode || "mobile";
-    const key = `${nextMode}:${queryValue}`;
-    if (autoSearchRequestRef.current === key) return;
-    autoSearchRequestRef.current = key;
-    runSearch({
-      modeOverride: nextMode,
-      queryOverride: queryValue,
-      silent: true,
-      autoSearch: true,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoSearch?.mode, autoSearch?.query]);
 
   const renderItem = (item) => {
     const p = payloadFromRow(item.payload);
@@ -360,7 +406,7 @@ export default function FetchBooking({
             key="search"
             type="primary"
             loading={loading}
-            onClick={() => runSearch()}
+            onClick={runSearch}
           >
             Search
           </Button>,
@@ -401,7 +447,7 @@ export default function FetchBooking({
                 setQuery(cleanBookingId(val));
               }
             }}
-            onPressEnter={() => runSearch()}
+          onPressEnter={runSearch}
           allowClear
         />
           {notFoundText && (

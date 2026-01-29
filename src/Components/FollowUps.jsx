@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip, Popover, Card, Typography, Segmented, Badge, Divider, Avatar, Progress, Spin, Grid } from 'antd';
+import { Button, Table, Space, Tag, Select, DatePicker, message, Modal, Input, Tooltip, Popover, Card, Typography, Segmented, Badge, Divider, Avatar, Progress, Grid } from 'antd';
 import { CheckCircleOutlined, ReloadOutlined, FilterOutlined, SearchOutlined, CalendarOutlined, ShopOutlined, PhoneOutlined, FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { GetCurrentUser } from "../apiCalls/users";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
 import { useNavigate } from "react-router-dom";
 import BookingPrintQuickModal from './BookingPrintQuickModal';
-import { saveFollowUpBookingPrefill } from '../utils/followUpPrefill';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -116,17 +115,6 @@ const kpiCard = {
 
 const kpiNum = { fontSize: 22, fontWeight: 800, lineHeight: 1 };
 const kpiLabel = { fontSize: 11, color: '#64748b', marginTop: 6 };
-const rupeeFormatter =
-  typeof Intl !== 'undefined'
-    ? new Intl.NumberFormat('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
-    : null;
-
-const formatCurrency = (value) => {
-  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
-  const num = Number(value);
-  const formatted = rupeeFormatter ? rupeeFormatter.format(Math.abs(num)) : String(Math.abs(num));
-  return `${num < 0 ? '-' : ''}₹${formatted}`;
-};
 
 /**
  * FollowUps list component
@@ -134,7 +122,7 @@ const formatCurrency = (value) => {
  * - mode: 'quotation' | 'jobcard' (default: 'quotation')
  * - webhookUrl: GAS URL for the selected mode
  */
-export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
+export default function FollowUps({ mode = 'quotation', webhookUrl, prefillQuery }) {
   const navigate = useNavigate();
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -146,7 +134,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
   // Show follow-ups based on Branch only (not executive)
   // Set to false so we never filter by executive name
   const [mineOnly,] = useState(false);
-  const [selectedBranch, setSelectedBranch] = useState('all');
+  const [branchOnly, setBranchOnly] = useState(true);
   // Fetch all rows in one go for staff follow-ups
   const LIST_PAGE_SIZE = 10000;
   // Jobcard-only status filter: all | pending | completed
@@ -166,36 +154,13 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
   const [dateRange, setDateRange] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const [preparingBooking, setPreparingBooking] = useState(false);
 
-  const normalizedUserRole = String(userRole || '').toLowerCase();
-  const isPrivilegedUser = ['owner','admin'].includes(normalizedUserRole);
-  const resolvedMyBranch = String(me.branch || allowedBranches[0] || '').trim();
-  const branchFilterValue = isPrivilegedUser
-    ? (selectedBranch && selectedBranch !== 'all' ? selectedBranch : '')
-    : resolvedMyBranch;
-  const branchCacheKeyValue = isPrivilegedUser ? (selectedBranch || 'all') : (resolvedMyBranch || 'all');
-  const branchParamForFetch = isPrivilegedUser ? branchFilterValue : resolvedMyBranch;
-  const needsBranch = !isPrivilegedUser || Boolean(branchFilterValue);
-  const branchOptions = React.useMemo(() => {
-    const seen = new Set();
-    const list = [];
-    const add = (value) => {
-      const trimmed = String(value || '').trim();
-      if (!trimmed || seen.has(trimmed)) return;
-      seen.add(trimmed);
-      list.push(trimmed);
-    };
-    allowedBranches.forEach(add);
-    add(resolvedMyBranch);
-    return [
-      { value: 'all', label: 'All Branches' },
-      ...list.map((branch) => ({
-        value: branch,
-        label: branch === resolvedMyBranch ? `${branch} (My Branch)` : branch,
-      })),
-    ];
-  }, [allowedBranches, resolvedMyBranch]);
+  useEffect(() => {
+    if (prefillQuery === undefined) return;
+    const next = String(prefillQuery || '');
+    setQ((prev) => (prev === next ? prev : next));
+    setPage(1);
+  }, [prefillQuery]);
 
   const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
   // Jobcard follow-ups now include a Post Service action
@@ -233,17 +198,6 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
   const isJobcard = modeKey === 'jobcard';
   const isBooking = modeKey === 'booking';
   const isQuotation = !isJobcard && !isBooking;
-  const getRowEffectiveStatus = (row) => {
-    if (isBooking) {
-      const balanceStatus = getRowBalanceStatus(row);
-      if (balanceStatus) return balanceStatus;
-      if (row.bookingPayment?.hasTarget) {
-        return row.bookingPayment.isPending ? 'pending' : 'completed';
-      }
-    }
-    return String(row.status || '').toLowerCase();
-  };
-  const isRowPendingStatus = (row) => getRowEffectiveStatus(row) === 'pending';
 
   // Jobcard: force filter to 'all' so nothing gets hidden by date
   React.useEffect(() => {
@@ -271,11 +225,12 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
     const keyObj = {
       mode: modeKey,
       filter,
-      branch: branchCacheKeyValue,
+      branchOnly,
       jobStatus,
+      branch: me?.branch || '',
     };
     return `FollowUps:${JSON.stringify(keyObj)}`;
-  }, [modeKey, filter, branchCacheKeyValue, jobStatus]);
+  }, [modeKey, filter, branchOnly, jobStatus, me?.branch]);
 
   const toDayjs = (v) => {
     if (!v) return null;
@@ -362,452 +317,6 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
     );
   };
 
-  const parseMoneyValue = (value) => {
-    if (value === null || value === undefined || value === "") return 0;
-    const cleaned = String(value).replace(/[^0-9.-]/g, "");
-    const num = Number(cleaned);
-    return Number.isFinite(num) ? num : 0;
-  };
-
-  const sumByKeys = (obj = {}, keys = []) =>
-    keys.reduce((sum, key) => sum + parseMoneyValue(obj?.[key]), 0);
-
-  const sumPaymentsArray = (payments) =>
-    (Array.isArray(payments) ? payments : []).reduce(
-      (sum, pay) => sum + parseMoneyValue(pay?.amount),
-      0
-    );
-
-  const deriveBookingPaymentInfo = ({ payload = {}, values = {}, collected = 0 }) => {
-    const mainTarget = [
-      payload.bookingAmount,
-      payload.bookingTarget,
-      values["Booking Amount"],
-      values["Booking_Amount"],
-      values.bookingAmount,
-      values["Total Booking Amount"],
-    ]
-      .map(parseMoneyValue)
-      .find((v) => v > 0);
-    const fallbackTarget =
-      sumByKeys(payload, ["bookingAmount1", "bookingAmount2", "bookingAmount3"]) ||
-      sumByKeys(values, [
-        "Booking Amount 1",
-        "Booking Amount 2",
-        "Booking Amount 3",
-      ]);
-    const target = mainTarget || fallbackTarget || 0;
-
-    const paidCandidates = [
-      parseMoneyValue(payload.totalCollected),
-      parseMoneyValue(payload.cashCollected) + parseMoneyValue(payload.onlineCollected),
-      sumPaymentsArray(payload.payments),
-      sumByKeys(payload, [
-        "bookingAmount1Cash",
-        "bookingAmount1Online",
-        "bookingAmount2Cash",
-        "bookingAmount2Online",
-        "bookingAmount3Cash",
-        "bookingAmount3Online",
-      ]),
-      sumByKeys(values, [
-        "Booking Amount 1 Cash",
-        "Booking Amount 1 Online",
-        "Booking Amount 2 Cash",
-        "Booking Amount 2 Online",
-        "Booking Amount 3 Cash",
-        "Booking Amount 3 Online",
-      ]),
-      parseMoneyValue(values["Collected Amount"]),
-      parseMoneyValue(values.Amount),
-      parseMoneyValue(collected),
-    ];
-    const paid = Math.max(...paidCandidates, 0);
-
-    const hasTarget = target > 0;
-    const tolerance = 0.01;
-    const isPending = hasTarget ? paid + tolerance < target : null;
-    return { target, paid, hasTarget, isPending };
-  };
-
-  const BALANCE_TOLERANCE = 0.01;
-  const BALANCE_KEY_PATTERN = /balance/i;
-  const BALANCED_AMOUNT_KEY_PATTERNS = [
-    /(?:balanced|balance)\s*amount/i,
-    /balanceamount/i,
-    /balance_amt/i,
-  ];
-  const BALANCED_DP_KEY_PATTERNS = [
-    /(?:balanced|balance)\s*(?:dp|tp|tpic|tpi)/i,
-    /balancetp(?:ic)?/i,
-    /finance\s*dp/i,
-  ];
-
-const parseJsonValue = (value) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "object") return value;
-  if (typeof value !== "string") return null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-};
-
-const extractRawPayloadObject = (...sources) => {
-  for (const source of sources) {
-    if (!source && source !== 0) continue;
-    if (typeof source === "object") return source;
-    const parsed = parseJsonValue(source);
-    if (parsed) return parsed;
-  }
-  return null;
-};
-
-  const readNumberCandidate = (value) => {
-    if (value === null || value === undefined) return { found: false };
-    const valueType = typeof value;
-    if (valueType === "object" || valueType === "boolean") return { found: false };
-    const normalized =
-      valueType === "string" ? value.trim() : String(value).trim();
-    if (normalized === "") return { found: false };
-    const amount = parseMoneyValue(value);
-    if (!Number.isFinite(amount)) return { found: false };
-    return { found: true, value: amount };
-  };
-
-  const getNumberValue = (value) => {
-    const candidate = readNumberCandidate(value);
-    return candidate.found ? candidate.value : null;
-  };
-
-  const gatherNumbersByPattern = (source, pattern, depth = 3, seen = new WeakSet()) => {
-    if (!source || typeof source !== "object" || depth < 0) return [];
-    if (seen.has(source)) return [];
-    seen.add(source);
-    const entries = Array.isArray(source)
-      ? source.map((value, idx) => [String(idx), value])
-      : Object.entries(source);
-    const results = [];
-    for (const [key, value] of entries) {
-      if (pattern.test(String(key || ""))) {
-        const candidate = readNumberCandidate(value);
-        if (candidate.found) results.push(candidate.value);
-      }
-      if (value && typeof value === "object") {
-        results.push(
-          ...gatherNumbersByPattern(value, pattern, depth - 1, seen)
-        );
-      } else if (typeof value === "string") {
-        const parsed = parseJsonValue(value);
-        if (parsed && typeof parsed === "object") {
-          results.push(
-            ...gatherNumbersByPattern(parsed, pattern, depth - 1, seen)
-          );
-        }
-      }
-    }
-    return results;
-  };
-
-  function getRowBalanceStatus(row) {
-    if (!isBooking) return null;
-    const balanceValue = typeof row?.balanceValue === "number" ? row.balanceValue : null;
-    if (balanceValue !== null) {
-      return balanceValue > BALANCE_TOLERANCE ? "pending" : "completed";
-    }
-    const payloadCandidates = gatherNumbersByPattern(
-      row.payload,
-      BALANCE_KEY_PATTERN,
-      3
-    );
-    const valuesCandidates = gatherNumbersByPattern(
-      row.values,
-      BALANCE_KEY_PATTERN,
-      2
-    );
-    const candidates = [...payloadCandidates, ...valuesCandidates];
-    if (!candidates.length) return null;
-    const hasOutstanding = candidates.some((value) => value > BALANCE_TOLERANCE);
-    return hasOutstanding ? "pending" : "completed";
-  }
-
-  
-
- 
-
-  const gatherCandidateSources = (row) => {
-    const sources = [];
-    if (row?.payload && typeof row.payload === "object") {
-      sources.push(row.payload);
-    }
-    if (row?.values && typeof row.values === "object") {
-      sources.push(row.values);
-      if (row.values.payload) {
-        const parsed = parseJsonValue(row.values.payload);
-        if (parsed && typeof parsed === "object") sources.push(parsed);
-      }
-      if (row.values['Raw Payload'] || row.values['rawPayload']) {
-        const parsed = parseJsonValue(row.values['Raw Payload'] || row.values['rawPayload']);
-        if (parsed && typeof parsed === "object") sources.push(parsed);
-      }
-    }
-    if (row?.payload?.rawPayload) {
-      const parsed = parseJsonValue(row.payload.rawPayload);
-      if (parsed && typeof parsed === "object") sources.push(parsed);
-    }
-    if (row?.rawPayload) {
-      const parsed = parseJsonValue(row.rawPayload);
-      if (parsed && typeof parsed === "object") sources.push(parsed);
-    }
-    return sources;
-  };
-
-  const buildBalanceSources = ({ payload, values, rawPayload, fallback }) => {
-    const sources = [];
-    if (payload && typeof payload === "object") sources.push(payload);
-    if (values && typeof values === "object") sources.push(values);
-    if (rawPayload) {
-      const parsed = parseJsonValue(rawPayload);
-      if (parsed && typeof parsed === "object") sources.push(parsed);
-    }
-    if (fallback && typeof fallback === "object") sources.push(fallback);
-    return sources;
-  };
-
-
-  const scanPathsForNumbers = (sources, paths = []) => {
-    if (!Array.isArray(sources)) return [];
-    const results = [];
-    for (const source of sources) {
-      if (!source || typeof source !== "object") continue;
-      for (const path of paths) {
-        const value = readValueAtPath(source, path);
-        if (value === null || value === undefined) continue;
-        const candidate = readNumberCandidate(value);
-        if (candidate.found) results.push(candidate.value);
-      }
-    }
-    return results;
-  };
-
-  const readValueAtPath = (source, path = []) => {
-    if (!source || !path.length) return undefined;
-    return path.reduce((cur, key) => {
-      if (!cur || typeof cur !== "object") return undefined;
-      return cur[key];
-    }, source);
-  };
-
-  const _collectNumbersFromPaths = (row, paths = []) => {
-    const results = [];
-    const sources = gatherCandidateSources(row);
-    for (const source of sources) {
-      for (const path of paths) {
-        const value = readValueAtPath(source, path);
-        if (value === null || value === undefined) continue;
-        const candidate = readNumberCandidate(value);
-        if (candidate.found) results.push(candidate.value);
-      }
-    }
-    return results;
-  };
-
-  const getPurchaseTypeFromRow = (row) => {
-    const payload = row?.payload || {};
-    const values = row?.values || {};
-    const valueKeys = [
-      "purchaseMode",
-      "purchase_mode",
-      "purchase type",
-      "Purchase Mode",
-      "Purchase_Mode",
-      "Purchase Type",
-      "paymentMode",
-      "payment_mode",
-      "Payment Mode",
-      "Payment Type",
-      "paymentType",
-      "payment_type",
-    ];
-    const candidates = [
-      payload.purchaseMode,
-      payload.purchaseType,
-      payload.paymentType,
-      ...valueKeys.map((key) => values[key]),
-    ];
-    const found = candidates.find((c) => typeof c === "string" && c.trim());
-    return String(found || "cash").trim().toLowerCase();
-  };
-
-  const isFinancedPurchaseType = (type) => {
-    if (!type) return false;
-    const normalized = String(type).trim().toLowerCase();
-    return ["loan", "nohp", "hp", "finance"].includes(normalized);
-  };
-
-  const safePositiveNumber = (value) => {
-    const num = Number(value);
-    return Number.isFinite(num) && num >= 0 ? num : null;
-  };
-
-  const collectPaymentEntries = (...candidates) => {
-    const out = [];
-    const enqueueEntries = (item) => {
-      if (!item || typeof item !== "object") return;
-      if (Array.isArray(item)) {
-        item.forEach(enqueueEntries);
-        return;
-      }
-      if ("payments" in item && Array.isArray(item.payments)) {
-        enqueueEntries(item.payments);
-      }
-      if ("paymentSplit" in item && Array.isArray(item.paymentSplit)) {
-        item.paymentSplit.forEach((entry) => {
-          if (entry && typeof entry === "object") out.push(entry);
-        });
-      }
-      if ("paymentDetails" in item && Array.isArray(item.paymentDetails)) {
-        enqueueEntries(item.paymentDetails);
-      }
-      if (
-        !("payments" in item) &&
-        !("paymentSplit" in item) &&
-        !("paymentDetails" in item)
-      ) {
-        out.push(item);
-      }
-    };
-
-    candidates.forEach((source) => {
-      if (!source) return;
-      if (Array.isArray(source)) {
-        source.forEach(enqueueEntries);
-        return;
-      }
-      if (typeof source === "string") {
-        try {
-          const parsed = JSON.parse(source);
-          enqueueEntries(parsed);
-        } catch {
-          return;
-        }
-        return;
-      }
-      enqueueEntries(source);
-    });
-    return out;
-  };
-
-  const derivePaymentTotalsFromRow = ({ payload, values, rawPayload }) => {
-    const rawVals = values || {};
-    const candidatePayments = collectPaymentEntries(
-      payload?.payments,
-      rawVals.payments,
-      rawVals.paymentDetails,
-      payload?.paymentSplit,
-      rawVals.paymentSplit,
-      rawPayload?.payments,
-      rawPayload?.paymentSplit,
-      rawPayload?.paymentDetails
-    );
-    const sums = { cash: 0, online: 0, total: 0 };
-    candidatePayments.forEach((entry) => {
-      const amount = safePositiveNumber(entry?.amount);
-      if (amount === null) return;
-      const mode = String(entry?.mode || "").trim().toLowerCase();
-      if (mode === "cash") {
-        sums.cash += amount;
-      } else if (mode === "online") {
-        sums.online += amount;
-      }
-      sums.total += amount;
-    });
-    const totalDpCandidate =
-      safePositiveNumber(payload?.dp?.totalDp) ??
-      safePositiveNumber(payload?.totalDp) ??
-      safePositiveNumber(payload?.downPayment) ??
-      safePositiveNumber(rawVals.totalDp) ??
-      safePositiveNumber(rawVals.downPayment) ??
-      safePositiveNumber(rawPayload?.dp?.totalDp) ??
-      safePositiveNumber(rawPayload?.totalDp) ??
-      safePositiveNumber(rawPayload?.downPayment);
-    const hasTotalDp = totalDpCandidate !== null;
-    const totalDpValue = hasTotalDp ? totalDpCandidate : 0;
-    const balancedDpValue = Math.max(0, totalDpValue - sums.total);
-    return {
-      cashCollected: sums.cash,
-      onlineCollected: sums.online,
-      totalCollected: sums.total,
-      totalDp: totalDpValue,
-      balancedDp: balancedDpValue,
-      hasTotals: hasTotalDp,
-      hasPayments: candidatePayments.length > 0,
-    };
-  };
-  const FINANCED_BALANCE_PATHS = [
-    ["dp", "balancedDp"],
-    ["dp", "balanceTP"],
-    ["dp", "balanceTPIC"],
-    ["balanceTP"],
-    ["balancedDp"],
-    ["balance"],
-  ];
-  const CASH_BALANCE_PATHS = [
-    ["balancedAmount"],
-    ["balanceAmount"],
-    ["cash", "balancedAmount"],
-    ["balance"],
-    ["dp", "balancedDp"],
-  ];
-  const VEHICLE_COST_PATHS = [
-    ["cash", "totalVehicleCost"],
-    ["cash", "onRoadPrice"],
-    ["cash", "price"],
-    ["vehicle", "totalVehicleCost"],
-    ["vehicle", "onRoadPrice"],
-    ["vehicle", "price"],
-    ["totalVehicleCost"],
-    ["onRoadPrice"],
-    ["price"],
-  ];
-
-  const shouldSkipRowClick = (event) => {
-    const target = event?.target;
-    if (!target || typeof target.closest !== 'function') return false;
-    return Boolean(
-      target.closest("button, a, input, textarea, [role='button']")
-    );
-  };
-
-  const normalizeMobileForFetch = (value) => String(value || "").replace(/\D/g, "").slice(-10);
-
-  const handleBookingRowClick = (row) => {
-    if (!row) return;
-    setPreparingBooking(true);
-    saveFollowUpBookingPrefill({
-      payload: row.payload,
-      values: row.values,
-      bookingId: row.bookingId,
-      mobile: row.mobile,
-      serialNo: row.serialNo,
-    });
-    const mobileQuery = normalizeMobileForFetch(row.mobile || row.values?.Mobile || row.values?.mobile);
-    if (typeof onClose === 'function') {
-      onClose();
-    }
-    navigate("/bookingform", {
-      state: mobileQuery ? { autoFetch: { mode: "mobile", query: mobileQuery } } : undefined,
-    });
-    setPreparingBooking(false);
-  };
-
-  useEffect(() => {
-    return () => {
-      setPreparingBooking(false);
-    };
-  }, []);
-
   // Try to derive a usable file URL from payload or raw values
   const pickFileUrl = (payload, values) => {
     const v = values || {};
@@ -862,16 +371,21 @@ const extractRawPayloadObject = (...sources) => {
       // Use that and client-side filter instead of `followups`.
       const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
       const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
-      const requestBranch = branchParamForFetch;
       const payload = isBooking ? (() => {
+        // Branch-wise followups for Booking too (do not filter by executive)
+        const meBranch = (me.branch || allowedBranches[0] || '');
+        const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
         const base = BOOKING_SECRET
           ? { action: 'list', page: 1, pageSize: LIST_PAGE_SIZE, secret: BOOKING_SECRET }
           : { action: 'list', page: 1, pageSize: LIST_PAGE_SIZE };
-        return requestBranch ? { ...base, branch: requestBranch } : base;
+        return shouldRestrict ? { ...base, branch: meBranch } : base;
       })() : (() => {
+        // Jobcard: fetch full list for the branch, not just followups
+        const meBranch = (me.branch || allowedBranches[0] || '');
+        const shouldRestrict = !['owner','admin'].includes(userRole) ? true : !!branchOnly;
         return {
           action: 'list',
-          branch: requestBranch || '',
+          branch: shouldRestrict ? meBranch : '',
           page: 1,
           pageSize: LIST_PAGE_SIZE,
         };
@@ -949,18 +463,15 @@ const extractRawPayloadObject = (...sources) => {
 
       const items = list.map((r, i) => {
         const p = asPayload(r) || {};
+        // If booking payload stored a nested rawPayload JSON string, parse it for timestamps
+        let rp = null;
+        try {
+          if (typeof p.rawPayload === 'string') rp = JSON.parse(p.rawPayload);
+          else if (p.rawPayload && typeof p.rawPayload === 'object') rp = p.rawPayload;
+        } catch { rp = null; }
         const fv = p.formValues || {};
         // For booking list, values are top-level keys
         const values = (r && r.values) ? r.values : (r || {});
-        const rp = extractRawPayloadObject(
-          p.rawPayload,
-          values?.['Raw Payload'],
-          values?.rawPayload,
-          values?.RawPayload,
-          values?.rawpayload,
-          r.rawPayload,
-          r.payload?.rawPayload
-        );
         const fu = p.followUp || p.followup || p.follow_up || {};
         // Serial helpers (quotation vs jobcard)
         const serial = (() => {
@@ -1047,77 +558,6 @@ const extractRawPayloadObject = (...sources) => {
         const sortAtMs = sortAt && typeof sortAt.valueOf === 'function' ? sortAt.valueOf() : 0;
         const createdAt = savedAt || null;
 
-        const collectedAmountValue = fv.amount || values['Collected Amount'] || values.Amount || 0;
-        const bookingPayment = isBooking
-          ? deriveBookingPaymentInfo({ payload: p, values, collected: collectedAmountValue })
-          : null;
-        const helperRowForBalance = {
-          payload: p,
-          values,
-          rawPayload: rp || p.rawPayload || values?.rawPayload || values?.['Raw Payload'] || r.rawPayload,
-        };
-        const balanceSources = buildBalanceSources({
-          payload: p,
-          values,
-          rawPayload: helperRowForBalance.rawPayload,
-          fallback: rp || parseJsonValue(helperRowForBalance.rawPayload),
-        });
-        const financedPurchase = isFinancedPurchaseType(
-          getPurchaseTypeFromRow(helperRowForBalance)
-        );
-        const derivedTotals = derivePaymentTotalsFromRow({
-          payload: p,
-          values,
-          rawPayload: rp || helperRowForBalance.rawPayload,
-        });
-        const computedBookingStatus =
-          isBooking && derivedTotals.hasTotals
-            ? (derivedTotals.balancedDp > BALANCE_TOLERANCE ? 'pending' : 'completed')
-            : null;
-
-        const cashCandidates = scanPathsForNumbers(
-          balanceSources,
-          CASH_BALANCE_PATHS
-        );
-        const dpCandidates = scanPathsForNumbers(
-          balanceSources,
-          FINANCED_BALANCE_PATHS
-        );
-        const vehicleCostCandidates = scanPathsForNumbers(
-          balanceSources,
-          VEHICLE_COST_PATHS
-        );
-        const totalCollectedFromTotals = Number.isFinite(derivedTotals.totalCollected)
-          ? derivedTotals.totalCollected
-          : 0;
-        const totalVehicleCost = vehicleCostCandidates.length
-          ? Math.max(...vehicleCostCandidates)
-          : null;
-        const cashBalanceFromTotals =
-          totalVehicleCost !== null
-            ? Math.max(0, totalVehicleCost - totalCollectedFromTotals)
-            : null;
-        const cashValue =
-          getNumberValue(p?.cash?.balancedAmount) ??
-          getNumberValue(p?.balancedAmount) ??
-          getNumberValue(values?.balancedAmount) ??
-          getNumberValue(values?.balanceAmount) ??
-          (cashCandidates.length ? Math.max(...cashCandidates) : null) ??
-          (cashBalanceFromTotals !== null ? cashBalanceFromTotals : null);
-        const dpValue =
-          getNumberValue(p?.dp?.balancedDp) ??
-          getNumberValue(p?.balancedDp) ??
-          getNumberValue(values?.balancedDp) ??
-          (dpCandidates.length ? Math.max(...dpCandidates) : null) ??
-          (derivedTotals.hasTotals ? derivedTotals.balancedDp : null);
-
-        const balanceValue =
-          financedPurchase && dpValue !== null ? dpValue : cashValue;
-        const balanceLabel =
-          financedPurchase && balanceValue !== null
-            ? "Balanced DP"
-            : "Balanced Amount";
-
         return {
           key: serial || i,
           serialNo: serial || '-',
@@ -1142,17 +582,10 @@ const extractRawPayloadObject = (...sources) => {
           ),
           closeReason: fu.closeReason || p.closeReason || fv.closeReason || '',
           // For jobcard: force 'pending' until post-serviced; once post-serviced, we will hide it
-          status: isJobcard
-            ? (postServiced ? 'completed' : 'pending')
-            : isBooking
-              ? (computedBookingStatus || (() => {
-                  const s = fu.status || p.status || fv.status || values.Status || values['Booking Status'] || '';
-                  return String(s || 'pending').toLowerCase();
-                })())
-              : (() => {
-                  const s = fu.status || p.status || fv.status || values.Status || values['Booking Status'] || '';
-                  return String(s || 'pending').toLowerCase();
-                })(),
+          status: isJobcard ? (postServiced ? 'completed' : 'pending') : (() => {
+            const s = fu.status || p.status || fv.status || values.Status || values['Booking Status'] || '';
+            return String(s || 'pending').toLowerCase();
+          })(),
           price: Number((fv.onRoadPrice ?? p.onRoadPrice ?? fv.price ?? p.price) || 0),
           brand: (p.brand || '').toUpperCase() || 'SHANTHA',
           remarks: fv.remarks || p.remarks || values.Remarks || values.remarks || '',
@@ -1167,14 +600,6 @@ const extractRawPayloadObject = (...sources) => {
           postServiced,
           payload: p,
           values,
-          bookingPayment,
-          balanceValue,
-          balanceLabel,
-          cashCollected: derivedTotals.cashCollected,
-          onlineCollected: derivedTotals.onlineCollected,
-          totalCollected: derivedTotals.totalCollected,
-          totalDp: derivedTotals.hasTotals ? derivedTotals.totalDp : undefined,
-          balancedDp: derivedTotals.balancedDp,
         };
       });
       // Client-side filtering as a fallback (in case webhook returns unfiltered rows)
@@ -1189,13 +614,14 @@ const extractRawPayloadObject = (...sources) => {
         return arr;
       })() : items.filter((it) => {
         const itB = norm(it.branch);
-        const meB = norm(resolvedMyBranch);
-        const branchFilterNorm = branchFilterValue ? norm(branchFilterValue) : '';
+        const meB = norm(me.branch || allowedBranches[0] || '');
 
-        if (!isPrivilegedUser) {
+        // Strict branch gate for non-admin roles
+        if (!['owner','admin'].includes(userRole)) {
           if (!meB || itB !== meB) return false;
-        } else if (branchFilterNorm) {
-          if (itB !== branchFilterNorm) return false;
+        } else {
+          // Admins can opt into strict view with the toggle
+          if (branchOnly && meB && itB !== meB) return false;
         }
         // Do not filter by executive name (per requirement)
         // date filter
@@ -1207,11 +633,11 @@ const extractRawPayloadObject = (...sources) => {
         if (filter === 'upcoming') return d.isAfter(endToday);
         return true;
       });
-      const statusRank = (row) => (isRowPendingStatus(row) ? 0 : 1);
+      const statusRank = (s) => (String(s || '').toLowerCase() === 'pending' ? 0 : 1);
       // Pending first, then others; most recent first within each group
       filtered.sort((a, b) => {
-        const ra = statusRank(a);
-        const rb = statusRank(b);
+        const ra = statusRank(a.status);
+        const rb = statusRank(b.status);
         if (ra !== rb) return ra - rb;
         const tb = Number(b.sortAtMs || 0);
         const ta = Number(a.sortAtMs || 0);
@@ -1233,36 +659,21 @@ const extractRawPayloadObject = (...sources) => {
   // Fetch when ready: ensure branch is resolved for staff before first call
   useEffect(() => {
     if (!webhookUrl) return;
-    const branchNeeded = needsBranch;
-    const branchAvailable = Boolean(branchParamForFetch);
-    if (branchNeeded && !branchAvailable) {
+    const needsBranch = !['owner','admin'].includes(userRole) || !!branchOnly;
+    const hasBranch = Boolean(String(me.branch || allowedBranches[0] || '').trim());
+    if (needsBranch && !hasBranch) {
+      // Wait for branch resolution to avoid empty first render
       return;
     }
     fetchFollowUps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    webhookUrl,
-    filter,
-    mineOnly,
-    selectedBranch,
-    resolvedMyBranch,
-    mode,
-    normalizedUserRole,
-    allowedBranches.length,
-    jobStatus,
-    needsBranch,
-    branchParamForFetch,
-    isPrivilegedUser,
-  ]);
+  }, [webhookUrl, filter, mineOnly, branchOnly, me.branch, mode, userRole, allowedBranches.length, jobStatus]);
 
   const updateFollowUp = async (serialNo, patch) => {
     try {
       // Ensure branch travels with update (some GAS scripts depend on it)
-      const branchForUpdate = !isPrivilegedUser
-        ? (resolvedMyBranch || patch?.branch || allowedBranches[0] || '')
-        : (branchFilterValue || patch?.branch || resolvedMyBranch);
       const withBranch = {
-        branch: branchForUpdate,
+        branch: branchOnly ? (me.branch || allowedBranches[0] || '') : (patch?.branch || ''),
         ...patch,
       };
       // Normalise notes fields for maximum compatibility with various GAS handlers
@@ -1352,21 +763,29 @@ const extractRawPayloadObject = (...sources) => {
   }, [allRows, dateRange, q]);
 
   const summary = React.useMemo(() => {
-    const rows = Array.isArray(filteredRows) ? filteredRows : [];
-    const total = rows.length;
-    const pending = rows.filter((r) => getRowEffectiveStatus(r) === 'pending').length;
-    const completed = rows.filter((r) => getRowEffectiveStatus(r) !== 'pending').length;
-    return {
-      total,
-      pending,
-      completed,
-      other: 0,
-    };
-  }, [filteredRows, isBooking]);
+  const rows = Array.isArray(filteredRows) ? filteredRows : [];
+  const total = rows.length;
+
+  const statusOf = (r) => String(r?.status || '').toLowerCase();
+
+  // Pending = only pending
+  const pending = rows.filter(r => statusOf(r) === 'pending').length;
+
+  // Completed = everything NOT pending
+  // (converted, completed, not_interested, unreachable, etc.)
+  const completed = rows.filter(r => statusOf(r) !== 'pending').length;
+
+  return {
+    total,
+    pending,
+    completed,
+    other: 0,
+  };
+}, [filteredRows]);
 
   useEffect(() => {
     setPage(1);
-  }, [q, dateRange, filter, jobStatus, selectedBranch, mode]);
+  }, [q, dateRange, filter, jobStatus, branchOnly, mode]);
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredRows.length / pageSize));
@@ -1507,8 +926,7 @@ const extractRawPayloadObject = (...sources) => {
           style={iconBtnStyle}
           title="Print booking"
           aria-label="Print booking"
-          onClick={(event) => {
-            event.stopPropagation();
+          onClick={() => {
             if (!r.bookingId) {
               message.warning('Booking ID missing for print');
               return;
@@ -1519,13 +937,6 @@ const extractRawPayloadObject = (...sources) => {
           🖨️
         </Button>
       </div>
-    </div>
-  );
-
-  const renderBookingBalance = (r) => (
-    <div style={stackStyle}>
-      <div style={lineStyle}>{formatCurrency(r.balanceValue)}</div>
-      <div style={smallLineStyle}>{r.balanceLabel || 'Balance'}</div>
     </div>
   );
 
@@ -1566,19 +977,16 @@ const extractRawPayloadObject = (...sources) => {
       const model = String(r.model || '').trim();
       const variant = String(r.variant || '').trim();
       const color = String(r.color || '').trim();
-      const secondLineParts = [color].filter(Boolean);
-      const secondLine = secondLineParts.length ? secondLineParts.join(' | ') : '—';
       return (
         <div style={stackStyle}>
           <div style={smallLineStyle}>{[model, variant].filter(Boolean).join(' || ') || '—'}</div>
-          <div style={smallLineStyle}>{secondLine}</div>
+          <div style={smallLineStyle}>{color || '—'}</div>
         </div>
       );
     } },
     { title: 'Invoice + Insurance', key: 'invoiceInsurance', width: 140, render: (_, r) => renderBookingInvoiceInsurance(r) },
     { title: 'RTO + Vehicle No', key: 'rtoVehicle', width: 140, render: (_, r) => renderBookingRtoVehicle(r) },
     { title: 'Status + File', key: 'statusFile', width: 170, render: (_, r) => renderBookingStatusFile(r) },
-    { title: 'Balance', key: 'balance', width: 140, render: (_, r) => renderBookingBalance(r) },
   ] : [
     { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => (
       <div style={stackStyle}>
@@ -1648,7 +1056,6 @@ const extractRawPayloadObject = (...sources) => {
         {renderBookingInvoiceInsurance(r)}
         {renderBookingRtoVehicle(r)}
         {renderBookingStatusFile(r)}
-        {renderBookingBalance(r)}
       </div>
     ) },
   ] : [
@@ -1836,11 +1243,11 @@ const extractRawPayloadObject = (...sources) => {
                     />
                   </div>
 
-                  {isPrivilegedUser && (
+                  {['owner','admin'].includes(userRole) && (
                     <Select
-                      value={selectedBranch}
-                      onChange={(v) => setSelectedBranch(v)}
-                      options={branchOptions}
+                      value={branchOnly ? 'mybranch' : 'all'}
+                      onChange={(v)=>setBranchOnly(v==='mybranch')}
+                      options={[{value:'mybranch',label:'My Branch'},{value:'all',label:'All Branches'}]}
                       style={{ minWidth: isMobile ? '100%' : 150, width: controlWidth }}
                     />
                   )}
@@ -1872,15 +1279,10 @@ const extractRawPayloadObject = (...sources) => {
             sticky={!isMobile}
             tableLayout={isMobile ? 'auto' : 'fixed'}
             className="compact-table"
-            rowClassName={(r) => (isRowPendingStatus(r) ? 'row-pending' : '')}
-            onRow={(row) => ({
-              onClick: (event) => {
-                if (!isBooking) return;
-                if (shouldSkipRowClick(event)) return;
-                handleBookingRowClick(row);
-              },
-              style: isBooking ? { cursor: 'pointer' } : undefined,
-            })}
+            rowClassName={(r) => {
+              const s = String(r.status || '').toLowerCase();
+              return s === 'pending' ? 'row-pending' : '';
+            }}
             locale={{
               emptyText: (
                 <div style={{ padding: 26, textAlign: 'center' }}>
@@ -2007,27 +1409,6 @@ const extractRawPayloadObject = (...sources) => {
           webhookUrl={webhookUrl}
           secret={BOOKING_SECRET}
         />
-      )}
-      {preparingBooking && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 1900,
-            background: "rgba(255,255,255,0.9)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            pointerEvents: "all",
-          }}
-        >
-          <div style={{ textAlign: "center", color: "#111" }}>
-            <Spin tip="Preparing booking form..." size="large" />
-            <div style={{ marginTop: 12, fontWeight: 600 }}>
-              Redirecting to booking form...
-            </div>
-          </div>
-        </div>
       )}
       </div>
     </ErrorBoundary>
