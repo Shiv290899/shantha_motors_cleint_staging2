@@ -454,6 +454,13 @@ const parseJsonValue = (value) => {
   }
 };
 
+const safePositiveNumber = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 ? num : null;
+};
+
+
+
 const extractRawPayloadObject = (...sources) => {
   for (const source of sources) {
     if (!source && source !== 0) continue;
@@ -646,9 +653,68 @@ const extractRawPayloadObject = (...sources) => {
     return ["loan", "nohp", "hp", "finance"].includes(normalized);
   };
 
-  const safePositiveNumber = (value) => {
-    const num = Number(value);
-    return Number.isFinite(num) && num >= 0 ? num : null;
+  const computePendingBalance_ = ({ payload = {}, values = {}, rawPayload = null, purchaseType } = {}) => {
+    if (!payload || typeof payload !== "object") {
+      return { pendingAmount: null, pendingLabel: "" };
+    }
+    const rawObj =
+      extractRawPayloadObject(
+        rawPayload,
+        values?.rawPayload,
+        values?.["Raw Payload"],
+        payload?.rawPayload,
+        payload?.["Raw Payload"]
+      ) || {};
+
+    const bookingAmount =
+      [
+        parseMoneyValue(payload?.bookingAmount),
+        parseMoneyValue(values?.["Booking Amount"]),
+        parseMoneyValue(values?.bookingAmount),
+        parseMoneyValue(values?.["Booking_Amount"]),
+        parseMoneyValue(rawObj?.bookingAmount),
+      ].find((v) => v > 0) ?? 0;
+
+    const totalVehicleCost =
+      [
+        parseMoneyValue(rawObj?.totalVehicleCost),
+        parseMoneyValue(rawObj?.cash?.totalVehicleCost),
+        parseMoneyValue(rawObj?.cash?.onRoadPrice),
+        parseMoneyValue(payload?.totalVehicleCost),
+        parseMoneyValue(payload?.onRoadPrice),
+        parseMoneyValue(values?.["Total Vehicle Cost"]),
+        parseMoneyValue(values?.["On Road Price"]),
+      ].find((v) => v > 0) ?? 0;
+
+    const totalDpDirect =
+      [
+        parseMoneyValue(rawObj?.totalDp),
+        parseMoneyValue(rawObj?.dp?.totalDp),
+        parseMoneyValue(payload?.totalDp),
+        parseMoneyValue(payload?.dp?.totalDp),
+        parseMoneyValue(values?.["Total DP"]),
+      ].find((v) => v > 0) ?? 0;
+    const totalDpCalculated = (
+      parseMoneyValue(rawObj?.downPayment || payload?.downPayment || values?.["Down Payment"]) +
+      parseMoneyValue(rawObj?.extraFittingAmount || payload?.extraFittingAmount || values?.["Extra Fitting Amount"]) +
+      parseMoneyValue(rawObj?.affidavitCharges || payload?.affidavitCharges || values?.["Affidavit Charges"])
+    );
+    const totalDp = totalDpDirect || totalDpCalculated || 0;
+
+    const normalizedPurchaseType = String(
+      purchaseType ||
+      payload?.purchaseMode ||
+      values?.["Purchase Mode"] ||
+      rawObj?.purchaseMode ||
+      "cash"
+    ).trim().toLowerCase();
+    const isFinanced = ["loan", "nohp", "hp", "finance"].includes(normalizedPurchaseType);
+    const label = isFinanced ? "Balanced DP" : "Balance Amount";
+    const baseAmount = isFinanced ? totalDp - bookingAmount : totalVehicleCost - bookingAmount;
+    const pending = Math.max(0, Number.isFinite(baseAmount) ? baseAmount : 0);
+    payload.pendingBalance = pending;
+    payload.pendingType = label;
+    return { pendingAmount: pending, pendingLabel: label };
   };
 
   const collectPaymentEntries = (...candidates) => {
@@ -1051,10 +1117,17 @@ const extractRawPayloadObject = (...sources) => {
         const bookingPayment = isBooking
           ? deriveBookingPaymentInfo({ payload: p, values, collected: collectedAmountValue })
           : null;
+        const parsedPayloadFallback =
+          rp ||
+          p.rawPayload ||
+          values?.rawPayload ||
+          values?.['Raw Payload'] ||
+          values?.RawPayload ||
+          r.rawPayload;
         const helperRowForBalance = {
           payload: p,
           values,
-          rawPayload: rp || p.rawPayload || values?.rawPayload || values?.['Raw Payload'] || r.rawPayload,
+          rawPayload: parsedPayloadFallback,
         };
         const balanceSources = buildBalanceSources({
           payload: p,
@@ -1069,6 +1142,13 @@ const extractRawPayloadObject = (...sources) => {
           payload: p,
           values,
           rawPayload: rp || helperRowForBalance.rawPayload,
+        });
+        const purchaseType = getPurchaseTypeFromRow(helperRowForBalance);
+        const pendingInfo = computePendingBalance_({
+          payload: p,
+          values,
+          rawPayload: helperRowForBalance.rawPayload,
+          purchaseType,
         });
         const computedBookingStatus =
           isBooking && derivedTotals.hasTotals
@@ -1111,12 +1191,19 @@ const extractRawPayloadObject = (...sources) => {
           (dpCandidates.length ? Math.max(...dpCandidates) : null) ??
           (derivedTotals.hasTotals ? derivedTotals.balancedDp : null);
 
+        const computedBalanceValue = Number.isFinite(pendingInfo?.pendingAmount)
+          ? pendingInfo.pendingAmount
+          : null;
+        const computedBalanceLabel = pendingInfo?.pendingLabel || "";
         const balanceValue =
-          financedPurchase && dpValue !== null ? dpValue : cashValue;
+          computedBalanceValue !== null
+            ? computedBalanceValue
+            : financedPurchase && dpValue !== null
+              ? dpValue
+              : cashValue;
         const balanceLabel =
-          financedPurchase && balanceValue !== null
-            ? "Balanced DP"
-            : "Balanced Amount";
+          computedBalanceLabel ||
+          (financedPurchase && balanceValue !== null ? "Balanced DP" : "Balanced Amount");
 
         return {
           key: serial || i,
