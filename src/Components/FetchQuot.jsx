@@ -119,15 +119,27 @@ export default function FetchQuot({
   const payloadFromWebhook = (row) => {
     const pv = row && typeof row === 'object' ? row.payload : null;
     const values = row && typeof row === 'object' ? (row.values || {}) : {};
+    const toNumber = (x) => Number(String(x || 0).replace(/[,₹\s]/g, '')) || 0;
+    const downPaymentFromValues =
+      toNumber(
+        values.downPayment ||
+        values.DownPayment ||
+        values["Down Payment"] ||
+        values.DP ||
+        values.dp ||
+        values["Down_Payment"]
+      );
     if (pv && typeof pv === 'object') {
       const branch = values.branch || values.Branch || '';
       if (branch) {
         pv.branch = pv.branch || branch;
         pv.formValues = { ...(pv.formValues || {}), branch: (pv.formValues && pv.formValues.branch) || branch };
       }
+      if (!pv.downPayment && downPaymentFromValues > 0) {
+        pv.downPayment = downPaymentFromValues;
+      }
       return pv;
     }
-    const toNumber = (x) => Number(String(x || 0).replace(/[,₹\s]/g, '')) || 0;
     return {
       version: 0,
       brand: 'SHANTHA',
@@ -136,7 +148,7 @@ export default function FetchQuot({
       fittings: [],
       docsReq: [],
       emiSet: '12',
-      downPayment: 0,
+      downPayment: downPaymentFromValues || 0,
       onRoadPrice: toNumber(values.onRoadPrice || values.OnRoadPrice || values['On-Road Price']),
       company: values.company || values.Company || '',
       model: values.bikeModel || values.Model || '',
@@ -154,6 +166,7 @@ export default function FetchQuot({
         executive: values.executive || values.Executive_Name || EXECUTIVES[0]?.name || '',
         remarks: values.remarks || values.Remarks || '',
         branch: values.branch || values.Branch || '',
+        downPayment: downPaymentFromValues || 0,
       },
       extraVehicles: [],
     };
@@ -194,6 +207,7 @@ export default function FetchQuot({
         bikeModel: fv.bikeModel || data.model || "",
         variant: fv.variant || data.variant || "",
         onRoadPrice: Number(fv.onRoadPrice ?? data.onRoadPrice ?? 0),
+        downPayment: Number(fv.downPayment ?? data.downPayment ?? 0),
         executive: fv.executive || EXECUTIVES[0]?.name || "",
         remarks: fv.remarks || "",
         branch: fv.branch || data.branch || "", // <-- branch set here

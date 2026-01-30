@@ -597,7 +597,7 @@ export default function JobCard({ initialValues = null } = {}) {
     () => ({
       jcNo: "",
       createdAt: dayjs(),
-      expectedDelivery: null,
+      expectedDelivery: dayjs(),
       branch: undefined,
       executive: undefined,
       mechanic: "",
@@ -680,7 +680,7 @@ export default function JobCard({ initialValues = null } = {}) {
     try {
       const fv = sourceInit.formValues || sourceInit;
       const parseDay = (v) => {
-        if (!v) return null;
+        if (!v) return dayjs();
         const d = dayjs(v, ["DD-MM-YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true);
         return d.isValid() ? d : null;
       };

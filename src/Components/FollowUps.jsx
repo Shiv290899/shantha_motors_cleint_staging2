@@ -7,6 +7,8 @@ import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms"
 import { useNavigate } from "react-router-dom";
 import BookingPrintQuickModal from './BookingPrintQuickModal';
 import { saveFollowUpBookingPrefill } from '../utils/followUpPrefill';
+import PostServiceSheet from "./PostServiceSheet";
+import { handleSmartPrint } from "../utils/printUtils";
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -128,6 +130,71 @@ const formatCurrency = (value) => {
   return `${num < 0 ? '-' : ''}₹${formatted}`;
 };
 
+const QUOT_RATE_LOW = 9;
+const QUOT_RATE_HIGH = 11;
+const QUOT_PROCESSING_FEE = 8000;
+
+const rateForQuotation = (price, dp) => {
+  const p = Number(price || 0);
+  const d = Number(dp || 0);
+  const dpPct = p > 0 ? d / p : 0;
+  return dpPct >= 0.3 ? QUOT_RATE_LOW : QUOT_RATE_HIGH;
+};
+
+const monthlyForQuotation = (price, dp, months) => {
+  const principalBase = Math.max(Number(price || 0) - Number(dp || 0), 0);
+  const principal = principalBase + QUOT_PROCESSING_FEE;
+  const years = months / 12;
+  const rate = rateForQuotation(price, dp);
+  const totalInterest = principal * (rate / 100) * years;
+  const total = principal + totalInterest;
+  return months > 0 ? total / months : 0;
+};
+
+const tenuresForSet = (s) => (String(s || "") === "12" ? [12, 18, 24, 36] : [24, 30, 36, 48]);
+
+const buildEmiText = (price, dp, emiSet) => {
+  const tenures = tenuresForSet(emiSet);
+  if (!Number(price || 0)) return "";
+  const parts = tenures.map((mo) => `${mo}:${formatCurrency(monthlyForQuotation(price, dp, mo))}`);
+  return parts.length ? `EMI(${emiSet || "12"}): ${parts.join(" | ")}` : "";
+};
+
+const buildQuotationOfferingsText = (row) => {
+  if (!row) return "";
+  const remarks = String(row.remarks || "").trim();
+  const p = row.payload || {};
+  const fv = p.formValues || {};
+  const extra = Array.isArray(p.extraVehicles) ? p.extraVehicles : [];
+  const offerings = [];
+  const addVehicleOffer = (label, priceRaw, dpRaw, emiSetRaw) => {
+    const price = Number(priceRaw || 0);
+    const dp = Number(dpRaw || 0);
+    if (!(price || dp)) return;
+    const parts = [];
+    if (price) parts.push(`Price ${formatCurrency(price)}`);
+    if (dp) parts.push(`DP ${formatCurrency(dp)}`);
+    const emiText = buildEmiText(price, dp, emiSetRaw || p.emiSet || "12");
+    if (emiText) parts.push(emiText);
+    offerings.push(`${label}: ${parts.join(" | ")}`);
+  };
+  addVehicleOffer(
+    "V1",
+    fv.onRoadPrice ?? p.onRoadPrice,
+    fv.downPayment ?? p.downPayment,
+    p.emiSet
+  );
+  extra.forEach((ev, idx) => {
+    addVehicleOffer(
+      `V${idx + 2}`,
+      ev.onRoadPrice,
+      ev.downPayment,
+      ev.emiSet || p.emiSet
+    );
+  });
+  return [remarks, ...offerings].filter(Boolean).join(" • ");
+};
+
 /**
  * FollowUps list component
  * Props:
@@ -162,6 +229,10 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
   const [rescheduleSaving, setRescheduleSaving] = useState(false);
   const [closingSaving, setClosingSaving] = useState(false);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
+  const invoiceRef = React.useRef(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [invoiceData, setInvoiceData] = useState(null);
+  const [invoiceLoadingId, setInvoiceLoadingId] = useState(null);
   const [q, setQ] = useState('');
   const [dateRange, setDateRange] = useState(null);
   const [page, setPage] = useState(1);
@@ -1385,6 +1456,7 @@ const extractRawPayloadObject = (...sources) => {
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
   const lineStyle = { whiteSpace: isMobile ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: isMobile ? 'clip' : 'ellipsis' };
   const smallLineStyle = { ...lineStyle, fontSize: isMobile ? 11 : 10 };
+  const tinyLineStyle = { ...lineStyle, fontSize: isMobile ? 10 : 9 };
   const twoLineClamp = {
     display: '-webkit-box',
     WebkitBoxOrient: 'vertical',
@@ -1393,6 +1465,11 @@ const extractRawPayloadObject = (...sources) => {
     whiteSpace: 'normal',
     fontSize: isMobile ? 9 : 8,
     lineHeight: 1,
+  };
+  const offeringClamp = {
+    ...twoLineClamp,
+    WebkitLineClamp: isMobile ? 3 : 4,
+    fontSize: isMobile ? 8 : 7,
   };
 
   const filteredRows = React.useMemo(() => {
@@ -1484,13 +1561,153 @@ const extractRawPayloadObject = (...sources) => {
     navigate(qs ? `/jobcard?${qs}` : '/jobcard');
   };
 
+  const parsePayloadFromRow = (row) => {
+    if (!row) return null;
+    if (row.payload && typeof row.payload === 'object') return row.payload;
+    const raw =
+      row.payload ||
+      row.Payload ||
+      row.PAYLOAD ||
+      row?.values?.Payload ||
+      row?.values?.payload ||
+      row?.values?.PAYLOAD ||
+      row?._raw?.payload ||
+      row?._raw?.Payload ||
+      row?._raw?.PAYLOAD ||
+      row?._raw?.values?.Payload ||
+      row?._raw?.values?.payload ||
+      row?._raw?.values?.PAYLOAD ||
+      '';
+    if (raw && typeof raw === 'object') return raw;
+    if (raw && typeof raw === 'string') {
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    if (row.formValues || row.values) return row;
+    return null;
+  };
+
+  const buildInvoicePayload = (payload, row) => {
+    if (!payload) return null;
+    const fv = payload.formValues || payload.values || {};
+    const labourRows = Array.isArray(payload.labourRows)
+      ? payload.labourRows
+      : Array.isArray(fv.labourRows)
+      ? fv.labourRows
+      : [];
+    const totalsIn = payload.totals || fv.totals || {};
+    const computedSub = labourRows.reduce(
+      (sum, r) => sum + Number(r?.qty || 0) * Number(r?.rate || 0),
+      0
+    );
+    const totals = {
+      labourSub: totalsIn.labourSub ?? computedSub,
+      labourGST: totalsIn.labourGST ?? 0,
+      labourDisc: totalsIn.labourDisc ?? 0,
+      grand: totalsIn.grand ?? computedSub,
+    };
+    const createdAt =
+      payload.postServiceAt ||
+      payload.createdAt ||
+      payload.savedAt ||
+      row?.postAt ||
+      row?.ts ||
+      new Date();
+    return {
+      vals: {
+        jcNo: row?.jcNo || fv.jcNo || "",
+        regNo: row?.regNo || fv.regNo || "",
+        custName: row?.name || fv.custName || fv.name || "",
+        custMobile: row?.mobile || fv.custMobile || fv.mobile || "",
+        km: fv.km || "",
+        model: row?.model || fv.model || "",
+        colour: fv.colour || row?.colour || "",
+        branch: row?.branch || fv.branch || "",
+        executive: row?.executive || fv.executive || "",
+        createdAt,
+        labourRows,
+        gstLabour: totalsIn.gstLabour || totalsIn.labourGST || 0,
+      },
+      totals,
+    };
+  };
+
+  const handleServiceInvoice = async (row) => {
+    if (!row) return;
+    const status = String(row.status || "").toLowerCase();
+    if (status !== 'completed') {
+      message.warning("Complete post-service to generate the service invoice.");
+      return;
+    }
+    if (!webhookUrl) {
+      message.error("Jobcard webhook is not configured.");
+      return;
+    }
+    const key = row.jcNo || row.key || row.mobile || '';
+    setInvoiceLoadingId(key);
+    try {
+      let payload = parsePayloadFromRow(row);
+      let built = payload ? buildInvoicePayload(payload, row) : null;
+      const hasItems = Array.isArray(built?.vals?.labourRows) && built.vals.labourRows.length > 0;
+      if (!built || !hasItems) {
+        const mobile = String(row.mobile || "").replace(/\D/g, "").slice(-10);
+        if (mobile.length === 10) {
+          const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
+          const base = { action: 'search', mode: 'mobile', query: mobile };
+          const payloadReq = JOB_SECRET ? { ...base, secret: JOB_SECRET } : base;
+          const resp = await saveJobcardViaWebhook({ webhookUrl, method: 'GET', payload: payloadReq });
+          const js = resp?.data || resp;
+          const rows = Array.isArray(js?.rows) ? js.rows : (Array.isArray(js?.data) ? js.data : []);
+          if (rows.length) {
+            let target = rows[0];
+            if (row.jcNo) {
+              const match = rows.find((r) => {
+                const p = parsePayloadFromRow(r);
+                const fv = p?.formValues || p?.values || {};
+                const id =
+                  fv.jcNo ||
+                  r?.jcNo ||
+                  r?.values?.['JC No'] ||
+                  r?.values?.['JC No.'] ||
+                  r?.values?.['Job Card No'] ||
+                  '';
+                return String(id || '').trim() === String(row.jcNo || '').trim();
+              });
+              if (match) target = match;
+            }
+            const fetchedPayload = parsePayloadFromRow(target);
+            built = fetchedPayload ? buildInvoicePayload(fetchedPayload, row) : built;
+          }
+        }
+      }
+      if (!built) {
+        message.error("Could not load service invoice data.");
+        return;
+      }
+      setInvoiceData(built);
+      setInvoiceOpen(true);
+      setTimeout(() => {
+        try { handleSmartPrint(invoiceRef.current); } catch { /* ignore */ }
+        setTimeout(() => setInvoiceOpen(false), 500);
+      }, 50);
+    } catch {
+      message.error("Could not generate service invoice.");
+    } finally {
+      setInvoiceLoadingId(null);
+    }
+  };
+
   const statusTagStyle = { fontSize: isMobile ? 9 : 10, lineHeight: '1.1', marginRight: 0 };
   const actionBtnStyle = { height: isMobile ? 22 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12, fontWeight: 700 };
   const actionBtnSecondaryStyle = { height: isMobile ? 22 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12 };
+  const quotationActionBtnStyle = { height: isMobile ? 20 : 22, padding: isMobile ? '0 6px' : '0 8px', borderRadius: 999, fontSize: isMobile ? 10 : 11, fontWeight: 600 };
+  const quotationActionBtnSecondaryStyle = { height: isMobile ? 20 : 22, padding: isMobile ? '0 6px' : '0 8px', borderRadius: 999, fontSize: isMobile ? 10 : 11 };
   const iconBtnStyle = { height: isMobile ? 20 : 18, padding: '0 6px', fontSize: isMobile ? 11 : 10 };
 
   const renderJobcardStatusActions = (r) => {
-    const isPending = String(r.status || '').toLowerCase() === 'pending';
+    const status = String(r.status || '').toLowerCase();
+    const isPending = status === 'pending';
+    const isCompleted = status === 'completed';
+    const isInvoiceLoading = invoiceLoadingId === (r.jcNo || r.key || r.mobile || '');
     const miniStack = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.1 };
     return (
       <div style={miniStack}>
@@ -1508,6 +1725,17 @@ const extractRawPayloadObject = (...sources) => {
             onClick={() => openPostService(r)}
           >
             Post Service
+          </Button>
+        ) : isCompleted ? (
+          <Button
+            size="small"
+            type="default"
+            icon={<FileTextOutlined />}
+            loading={isInvoiceLoading}
+            style={actionBtnSecondaryStyle}
+            onClick={() => handleServiceInvoice(r)}
+          >
+            Service Invoice
           </Button>
         ) : (
           <span style={{ fontSize: 10, color: '#999' }}>—</span>
@@ -1529,7 +1757,7 @@ const extractRawPayloadObject = (...sources) => {
             size="small"
             type="primary"
             icon={<CheckCircleOutlined />}
-            style={actionBtnStyle}
+            style={quotationActionBtnStyle}
             onClick={() => setClosing({ open: true, serial: r.serialNo, status: 'converted', reason: '', notes: '' })}
           >
             Done
@@ -1537,7 +1765,7 @@ const extractRawPayloadObject = (...sources) => {
         </Tooltip>
         <Button
           size="small"
-          style={actionBtnSecondaryStyle}
+          style={quotationActionBtnSecondaryStyle}
           onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}
         >
           Reschedule
@@ -1667,27 +1895,27 @@ const extractRawPayloadObject = (...sources) => {
     { title: 'Status + File', key: 'statusFile', width: 170, render: (_, r) => renderBookingStatusFile(r) },
     { title: 'Balance', key: 'balance', width: 140, render: (_, r) => renderBookingBalance(r) },
   ] : [
-    { title: 'Date / Branch', key: 'dateBranch', width: 130, render: (_, r) => (
+    { title: 'Date / Branch', key: 'dateBranch', width: 100, render: (_, r) => (
       <div style={stackStyle}>
-        <div style={lineStyle}>{fmt(r.dateAt)}</div>
-        <div style={smallLineStyle}>{r.branch || '—'}</div>
+        <div style={tinyLineStyle}>{fmt(r.dateAt)}</div>
+        <div style={tinyLineStyle}>{r.branch || '—'}</div>
       </div>
     ) },
-    { title: 'Customer / Mobile', key: 'customerMobile', width: 140, render: (_, r) => (
+    { title: 'Customer / Mobile', key: 'customerMobile', width: 120, render: (_, r) => (
       <div style={stackStyle}>
-        <div style={lineStyle}>{r.name || '—'}</div>
-        <div style={smallLineStyle}>{r.mobile || '—'}</div>
+        <div style={tinyLineStyle}>{r.name || '—'}</div>
+        <div style={tinyLineStyle}>{r.mobile || '—'}</div>
       </div>
     ) },
-    { title: 'Offerings', key: 'remarks', width: 190, render: (_, r) => {
-      const remarks = String(r.remarks || '').trim();
+    { title: 'Offerings', key: 'remarks', width: 400, render: (_, r) => {
+      const offeringText = buildQuotationOfferingsText(r);
       return (
-        <Tooltip title={remarks || undefined}>
-          <div style={twoLineClamp}>{remarks || ''}</div>
+        <Tooltip title={offeringText || undefined}>
+          <div style={offeringClamp}>{offeringText || ''}</div>
         </Tooltip>
       );
     } },
-    { title: 'Status + Actions', key: 'statusActions', width: 170, render: (_, r) => renderQuotationStatusActions(r) },
+    { title: 'Status + Actions', key: 'statusActions', width: 140, render: (_, r) => renderQuotationStatusActions(r) },
     { title: 'Follow-up Notes', key: 'followUpNotes', width: 170, render: (_, r) => {
       const notes = String(r.followUpNotes || '').trim();
       return notes ? (
@@ -1742,16 +1970,16 @@ const extractRawPayloadObject = (...sources) => {
     { title: 'Details', key: 'details', render: (_, r) => {
       const dateBranch = [fmt(r.dateAt), r.branch || '—'].filter(Boolean).join(' | ');
       const custMobile = [r.name || '—', r.mobile || '—'].filter(Boolean).join(' | ');
-      const remarks = String(r.remarks || '').trim();
+      const remarks = buildQuotationOfferingsText(r);
       const notes = String(r.followUpNotes || '').trim();
       return (
         <div style={stackStyle}>
           <div style={lineStyle}>{dateBranch || '—'}</div>
           <div style={smallLineStyle}>{custMobile || '—'}</div>
           {remarks ? (
-            <div style={twoLineClamp}><span style={{ color: '#64748b' }}>Offer: </span>{remarks}</div>
+            <div style={offeringClamp}><span style={{ color: '#64748b' }}>Offer: </span>{remarks}</div>
           ) : (
-            <div style={twoLineClamp}></div>
+            <div style={offeringClamp}></div>
           )}
           {notes ? (
             <div style={twoLineClamp}><span style={{ color: '#64748b' }}>Notes: </span>{notes}</div>
@@ -2069,20 +2297,7 @@ const extractRawPayloadObject = (...sources) => {
               { value: 'purchased_elsewhere', label: 'Purchased SomeWhereElse' },
             ]}
           />
-          {closing.status === 'purchased_elsewhere' ? (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Input
-                placeholder="Bought from (dealer name)"
-                value={closing.boughtFrom}
-                onChange={(e)=>setClosing(s=>({...s, boughtFrom: e.target.value}))}
-              />
-              <Input
-                placeholder="Offer / price"
-                value={closing.offer}
-                onChange={(e)=>setClosing(s=>({...s, offer: e.target.value}))}
-              />
-            </div>
-          ) : null}
+          
           <Input.TextArea rows={2} placeholder="Notes" value={closing.details} onChange={(e)=>setClosing(s=>({...s, details:e.target.value}))} />
         </Space>
       </Modal>
@@ -2093,6 +2308,14 @@ const extractRawPayloadObject = (...sources) => {
           row={printModal.row}
           webhookUrl={webhookUrl}
           secret={BOOKING_SECRET}
+        />
+      )}
+      {isJobcard && (
+        <PostServiceSheet
+          ref={invoiceRef}
+          active={invoiceOpen}
+          vals={invoiceData?.vals || {}}
+          totals={invoiceData?.totals || {}}
         />
       )}
       {preparingBooking && (
