@@ -29,6 +29,82 @@ const HEAD = {
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj[k] ?? "").find((v) => v !== "") || "").trim();
 
+const rupeeFormatter =
+  typeof Intl !== 'undefined'
+    ? new Intl.NumberFormat('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+    : null;
+
+const formatCurrency = (value) => {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  const num = Number(value);
+  const formatted = rupeeFormatter ? rupeeFormatter.format(Math.abs(num)) : String(Math.abs(num));
+  return `${num < 0 ? '-' : ''}₹${formatted}`;
+};
+
+const QUOT_RATE_LOW = 9;
+const QUOT_RATE_HIGH = 11;
+const QUOT_PROCESSING_FEE = 8000;
+
+const rateForQuotation = (price, dp) => {
+  const p = Number(price || 0);
+  const d = Number(dp || 0);
+  const dpPct = p > 0 ? d / p : 0;
+  return dpPct >= 0.3 ? QUOT_RATE_LOW : QUOT_RATE_HIGH;
+};
+
+const monthlyForQuotation = (price, dp, months) => {
+  const principalBase = Math.max(Number(price || 0) - Number(dp || 0), 0);
+  const principal = principalBase + QUOT_PROCESSING_FEE;
+  const years = months / 12;
+  const rate = rateForQuotation(price, dp);
+  const totalInterest = principal * (rate / 100) * years;
+  const total = principal + totalInterest;
+  return months > 0 ? total / months : 0;
+};
+
+const tenuresForSet = (s) => (String(s || "") === "12" ? [12, 18, 24, 36] : [24, 30, 36, 48]);
+
+const buildEmiText = (price, dp, emiSet) => {
+  const tenures = tenuresForSet(emiSet);
+  if (!Number(price || 0)) return "";
+  const parts = tenures.map((mo) => `${mo}:${formatCurrency(monthlyForQuotation(price, dp, mo))}`);
+  return parts.length ? `EMI(${emiSet || "12"}): ${parts.join(" | ")}` : "";
+};
+
+const buildQuotationOfferingsText = ({ payload, baseOfferings }) => {
+  const remarks = String(baseOfferings || '').trim();
+  if (!payload || typeof payload !== 'object') return remarks;
+  const fv = payload.formValues || {};
+  const extra = Array.isArray(payload.extraVehicles) ? payload.extraVehicles : [];
+  const offerings = [];
+  const addVehicleOffer = (label, priceRaw, dpRaw, emiSetRaw) => {
+    const price = Number(priceRaw || 0);
+    const dp = Number(dpRaw || 0);
+    if (!(price || dp)) return;
+    const parts = [];
+    if (price) parts.push(`Price ${formatCurrency(price)}`);
+    if (dp) parts.push(`DP ${formatCurrency(dp)}`);
+    const emiText = buildEmiText(price, dp, emiSetRaw || payload.emiSet || "12");
+    if (emiText) parts.push(emiText);
+    offerings.push(`${label}: ${parts.join(" | ")}`);
+  };
+  addVehicleOffer(
+    "V1",
+    fv.onRoadPrice ?? payload.onRoadPrice,
+    fv.downPayment ?? payload.downPayment,
+    payload.emiSet
+  );
+  extra.forEach((ev, idx) => {
+    addVehicleOffer(
+      `V${idx + 2}`,
+      ev.onRoadPrice,
+      ev.downPayment,
+      ev.emiSet || payload.emiSet
+    );
+  });
+  return [remarks, ...offerings].filter(Boolean).join(" • ");
+};
+
 export default function Quotations() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -109,12 +185,13 @@ export default function Quotations() {
     const model = fv.bikeModel || fv.model || pick(obj, HEAD.model);
     const variant = fv.variant || pick(obj, HEAD.variant);
     const price = String(fv.onRoadPrice || pick(obj, HEAD.price) || '').trim();
-    const offerings = String(
+    const offeringsBase = String(
       fv.remarks ||
       (payload && payload.remarks) ||
       pick(obj, HEAD.offerings) ||
       ''
     ).trim();
+    const offerings = buildQuotationOfferingsText({ payload, baseOfferings: offeringsBase });
     const followUpNotes = String(
       (payload && payload.followUp && payload.followUp.notes) ||
       (payload && payload.closeNotes) ||
@@ -401,49 +478,55 @@ export default function Quotations() {
     return text ? `${ts} - ${text}` : ts;
   };
 
-  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
+  const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1 };
   const lineStyle = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
-  const smallLineStyle = { ...lineStyle, fontSize: 8 };
-  const metaLineStyle = { ...lineStyle, fontSize: 10, lineHeight: 1.15 };
-  const twoLineClamp = {
+  const smallLineStyle = { ...lineStyle, fontSize: 8
+   };
+  const tinyLineStyle = { ...lineStyle, fontSize: 10 };
+  const metaLineStyle = { ...lineStyle, fontSize: 9, lineHeight: 1.1 };
+  const offeringClamp = {
     display: '-webkit-box',
     WebkitBoxOrient: 'vertical',
-    WebkitLineClamp: 3,
+    WebkitLineClamp: isMobile ? 3 : 4,
     overflow: 'hidden',
     whiteSpace: 'normal',
-    fontSize: 8,
-    lineHeight: 1.2,
+    fontSize: 6,
+    lineHeight: 1,
   };
 
   const columns = [
     { title: "Time / Branch", key: "timeBranch", width: 120, render: (_, r) => (
       <div style={stackStyle}>
-        <div style={lineStyle}>{formatTs(r.ts)}</div>
-        <div style={lineStyle}><Text type="secondary">{r.branch || '—'}</Text></div>
+        <div style={tinyLineStyle}>{formatTs(r.ts)}</div>
+        <div style={tinyLineStyle}>
+          <Text type="secondary" style={{ fontSize: 'inherit' }}>{r.branch || '—'}</Text>
+        </div>
       </div>
     ) },
     { title: "Customer / Mobile", key: "customerMobile", width: 100, render: (_, r) => (
       <div style={stackStyle}>
-        <div style={lineStyle}>{r.name || '—'}</div>
-        <div style={lineStyle}><Text type="secondary">{r.mobile || '—'}</Text></div>
+        <div style={tinyLineStyle}>{r.name || '—'}</div>
+        <div style={tinyLineStyle}>
+          <Text type="secondary" style={{ fontSize: 'inherit' }}>{r.mobile || '—'}</Text>
+        </div>
       </div>
     ) },
     
-    { title: "Offerings", key: "offerings", width: 220, render: (_, r) => {
+    { title: "Offerings", key: "offerings", width: 280, render: (_, r) => {
       const offerings = String(r.offerings || '').trim();
       return (
         <div style={stackStyle}>
           {offerings ? (
             <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{offerings}</span>} placement="topLeft">
-              <div style={twoLineClamp}>{offerings}</div>
+              <div style={offeringClamp}>{offerings}</div>
             </Tooltip>
           ) : (
-            <div style={twoLineClamp}></div>
+            <div style={offeringClamp}></div>
           )}
         </div>
       );
     } },
-    { title: "Status / Follow-up Notes", key: "statusNotes", width: 250, render: (_, r) => {
+    { title: "Status / Follow-up Notes", key: "statusNotes", width: 150, render: (_, r) => {
       const notes = String(r.followUpNotes || '').trim();
       return (
         <div style={stackStyle}>

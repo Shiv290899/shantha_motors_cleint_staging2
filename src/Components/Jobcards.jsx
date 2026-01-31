@@ -70,6 +70,24 @@ export default function Jobcards() {
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [invoiceData, setInvoiceData] = useState(null);
   const [invoiceLoadingId, setInvoiceLoadingId] = useState(null);
+  
+  const openPostService = (row) => {
+    if (!row) return;
+    const mobile = String(row?.mobile || '').replace(/\D/g, '').slice(-10);
+    const jcNo = String(row?.jcNo || row?.serialNo || '').trim();
+    const params = new URLSearchParams();
+    params.set('autoFetch', '1');
+    if (mobile) {
+      params.set('mode', 'mobile');
+      params.set('query', mobile);
+    } else if (jcNo) {
+      params.set('mode', 'jc');
+      params.set('query', jcNo);
+    }
+    if (jcNo) params.set('jcNo', jcNo);
+    const qs = params.toString();
+    navigate(qs ? `/jobcard?${qs}` : '/jobcard');
+  };
 
   useEffect(() => {
     try {
@@ -575,7 +593,9 @@ export default function Jobcards() {
         const level = String(rem?.level || '').toLowerCase();
         const color = level === 'alert' ? 'red' : level === 'warning' ? 'gold' : level === 'ok' ? 'green' : 'default';
         const title = remarkText ? remarkText : 'No remark yet';
-        const isCompleted = String(r.status || '').toLowerCase() === 'completed';
+        const status = String(r.status || '').toLowerCase();
+        const isCompleted = status === 'completed';
+        const isPending = status === 'pending';
         const isInvoiceLoading = invoiceLoadingId === (r.jcNo || r.key || r.mobile || '');
         return (
           <div style={stackStyle}>
@@ -585,18 +605,29 @@ export default function Jobcards() {
                   <Tag color={color}>{level ? level.toUpperCase() : '—'}</Tag>
                 </Tooltip>
                 <Button size="small" onClick={()=> setRemarkModal({ open: true, refId: r.jcNo, level: rem?.level || 'ok', text: rem?.text || '' })}>Remark</Button>
-                <Tooltip title={isCompleted ? "Print service invoice" : "Complete post-service to enable invoice"}>
-                  <Button
-                    size="small"
-                    type="primary"
-                    ghost
-                    loading={isInvoiceLoading}
-                    disabled={!isCompleted}
-                    onClick={() => handleServiceInvoice(r)}
-                  >
-                    Service Invoice
-                  </Button>
-                </Tooltip>
+                {isCompleted ? (
+                  <Tooltip title="Print service invoice">
+                    <Button
+                      size="small"
+                      type="primary"
+                      ghost
+                      loading={isInvoiceLoading}
+                      onClick={() => handleServiceInvoice(r)}
+                    >
+                      Service Invoice
+                    </Button>
+                  </Tooltip>
+                ) : (
+                  <Tooltip title={isPending ? "Post service" : "Service not completed"}>
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={() => openPostService(r)}
+                    >
+                      Post Service
+                    </Button>
+                  </Tooltip>
+                )}
               </Space>
             </div>
             <Tooltip title={remarkText ? <span style={{ whiteSpace: 'pre-wrap' }}>{remarkText}</span> : null}>

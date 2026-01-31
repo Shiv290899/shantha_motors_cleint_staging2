@@ -295,7 +295,7 @@ export default function Bookings() {
     const handler = () => load();
     window.addEventListener('reload-bookings', handler);
     return () => { cancelled = true; };
-  }, [debouncedQ, branchFilter, statusFilter, page, pageSize, GAS_URL_STATIC, USE_SERVER_PAG]);
+  }, [debouncedQ, branchFilter, statusFilter, page, pageSize, dateRange, GAS_URL_STATIC, USE_SERVER_PAG]);
 
   const optionRows = filterSourceRows.length ? filterSourceRows : rows;
 
