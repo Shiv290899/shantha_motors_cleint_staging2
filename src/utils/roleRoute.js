@@ -5,7 +5,7 @@ export function routeForRole(role) {
   if (r === 'mechanic') return '/mechanic';
   if (r === 'backend') return '/backend';
   if (r === 'employees') return '/employees';
-  if (r === 'executive') return '/executive';
+  if (r === 'executive') return '/staff';
   if (r === 'staff') return '/staff';
   return '/staff';
 }

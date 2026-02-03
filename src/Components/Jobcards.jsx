@@ -565,11 +565,12 @@ export default function Jobcards() {
       </div>
     ) },
     { title: "Service / Status", key: "serviceStatus", width: 200, render: (_, r) => {
+        const company = String(r.company || '').trim() || '—';
         const model = String(r.model || '').trim() || '—';
         const serviceType = String(r.serviceType || '').trim() || '—';
         const amount = String(r.amount || '').trim() || '—';
         const paymentMode = String(r.paymentMode || '').trim();
-        const line1 = `${model} || ${serviceType} || ${amount} || ${paymentMode ? paymentMode.toUpperCase() : '—'}`;
+        const line1 = `${company} || ${model} || ${serviceType} || ${amount} || ${paymentMode ? paymentMode.toUpperCase() : '—'}`;
         const exec = String(r.executive || '').trim() || '—';
         const reg = String(r.regNo || '').trim() || '—';
         return (

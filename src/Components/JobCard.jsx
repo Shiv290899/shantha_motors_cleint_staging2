@@ -324,7 +324,10 @@ function buildWelcomeMsg(vals, totals) {
     ? `👷 Assigned Mechanic: ${mechanicName}${mechanicPhone ? ` (☎️ ${mechanicPhone})` : ""}\n`
     : "";
 
-  const isNH = String(branch).trim() === "Byadarahalli";
+  const branchKey = String(branch || "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  const isNH = branchKey.includes("byadarahalli") || branchKey.includes("badrally");
   const showroomEn = isNH ? "NH Motors" : "Shantha Motors";
   const showroomKn = isNH ? "ಎನ್ ಎಚ್ ಮೋಟರ್ಸ್" : "ಶಾಂತ ಮೋಟರ್ಸ್";
 
@@ -421,8 +424,10 @@ function buildPostServiceMsg(vals, totals, labourRows, paymentsSummary = {}) {
   const branch = vals?.branch || "—";
   const exec = vals?.executive || "Team";
   const execPhone = getLoggedInPhone();
-  const branchKey = String(branch).trim().toLowerCase();
-  const isNH = branchKey.includes("byadarahalli");
+  const branchKey = String(branch || "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  const isNH = branchKey.includes("byadarahalli") || branchKey.includes("badrally");
   const brandEn = isNH ? "NH Motors" : "Shantha Motors";
   const brandKn = isNH ? "ಎನ್ ಎಚ್ ಮೋಟರ್ಸ್" : "ಶಾಂತ ಮೋಟರ್ಸ್";
 
