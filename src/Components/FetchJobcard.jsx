@@ -67,6 +67,7 @@ export default function FetchJobcard({
         "Reg No",
         "RegNo",
       ],
+      ChassisNo: ["Chassis No", "Chassis_No", "Chassis Number", "Chassis"],
       Model: ["Model"],
       Colour: ["Colour", "Color"],
       KM: ["Odometer Reading", "Odomete Reading", "KM", "Odometer"],
@@ -349,6 +350,7 @@ export default function FetchJobcard({
     const executiveRaw = pick(row, COL.Executive);
     const expectedDelivery = parseDDMMYYYY(pick(row, COL.ExpectedDelivery));
     const regNo = formatReg(pick(row, COL.RegNo), "");
+    const chassisNo = String(pick(row, COL.ChassisNo) || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
     const model = String(pick(row, COL.Model) || "").toUpperCase();
     const colour = pick(row, COL.Colour);
     const kmDigits = pick(row, COL.KM).replace(/\D/g, "");
@@ -387,6 +389,7 @@ export default function FetchJobcard({
       executive, // may be undefined if no close match
       expectedDelivery: expectedDelivery || null,
       regNo,
+      chassisNo,
       model,
       colour,
       km: kmDigits ? `${kmDigits} KM` : "",
@@ -410,8 +413,10 @@ export default function FetchJobcard({
     if (regNo) next.regNo = regNo;
     if (mobile) next.custMobile = mobile;
     if (String(fields.custName || "").trim()) next.custName = fields.custName;
+    if (String(fields.company || "").trim()) next.company = String(fields.company).toUpperCase();
     if (String(fields.model || "").trim()) next.model = String(fields.model).toUpperCase();
     if (String(fields.colour || "").trim()) next.colour = fields.colour;
+    if (String(fields.chassisNo || "").trim()) next.chassisNo = String(fields.chassisNo).toUpperCase();
     if (Object.keys(next).length) form.setFieldsValue(next);
     if (regNo) setRegDisplay?.(regNo);
     if (setPostServiceLock) {
@@ -465,6 +470,8 @@ export default function FetchJobcard({
           regNo: fv.regNo || "",
           custMobile: String(fv.custMobile || "").replace(/\D/g, "").slice(-10),
           custName: fv.custName || "",
+          company: fv.company || "",
+          chassisNo: fv.chassisNo || fv.chassis || "",
           model: String(fv.model || "").toUpperCase(),
           colour: fv.colour || "",
         });
@@ -491,8 +498,10 @@ export default function FetchJobcard({
         executive: fv.executive || undefined,
         expectedDelivery: fv.expectedDelivery ? dayjs(fv.expectedDelivery, ["DD-MM-YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true) : null,
         regNo: fv.regNo || '',
+        company: String(fv.company || "").toUpperCase(),
         model: String(fv.model || "").toUpperCase(),
         colour: fv.colour || '',
+        chassisNo: String(fv.chassisNo || fv.chassis || '').toUpperCase(),
         km: fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '',
         fuelLevel: fv.fuelLevel || undefined,
         callStatus: fv.callStatus || '',

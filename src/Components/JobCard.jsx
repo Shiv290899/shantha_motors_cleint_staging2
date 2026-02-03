@@ -19,6 +19,7 @@ import {
   Checkbox,
   Tooltip,
   Modal,
+  AutoComplete,
 } from "antd";
 import dayjs from "dayjs";
 import { useLocation } from "react-router-dom";
@@ -31,6 +32,7 @@ import { saveJobcardViaWebhook, reserveJobcardSerial } from "../apiCalls/forms";
 import { GetCurrentUser } from "../apiCalls/users";
 import { getBranch, listBranchesPublic } from "../apiCalls/branches";
 import { listUsersPublic } from "../apiCalls/adminUsers";
+import { normalizeKey, uniqCaseInsensitive } from "../utils/caseInsensitive";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -42,7 +44,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwFqLWDHtZqh_s8LzYoKyD3k0J6ycVcnrtcQYMdK08UcCWzQqMl-mucIA4jnEKxTttDlg/exec";
+  "https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 const JOBCARD_GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 
@@ -122,6 +124,82 @@ const PRICE_BOOK = {
   ],
 };
 
+// Vehicle catalog CSV (for auto Company/Model suggestions)
+const SHEET_CSV_URL =
+  import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vQYGuNPY_2ivfS7MTX4bWiu1DWdF2mrHSCnmTznZVEHxNmsrgcGWjVZN4UDUTOzQQdXTnbeM-ylCJbB/pub?gid=408799621&single=true&output=csv";
+
+// Minimal CSV parser
+const parseCsv = (text) => {
+  const rows = [];
+  let row = [];
+  let col = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const n = text[i + 1];
+    if (c === '"' && !inQuotes) {
+      inQuotes = true;
+      continue;
+    }
+    if (c === '"' && inQuotes) {
+      if (n === '"') {
+        col += '"';
+        i++;
+        continue;
+      }
+      inQuotes = false;
+      continue;
+    }
+    if (c === "," && !inQuotes) {
+      row.push(col);
+      col = "";
+      continue;
+    }
+    if ((c === "\n" || c === "\r") && !inQuotes) {
+      if (col !== "" || row.length) {
+        row.push(col);
+        rows.push(row);
+        row = [];
+        col = "";
+      }
+      if (c === "\r" && n === "\n") i++;
+      continue;
+    }
+    col += c;
+  }
+  if (col !== "" || row.length) {
+    row.push(col);
+    rows.push(row);
+  }
+  return rows;
+};
+
+const VEH_HEADERS = {
+  company: ["Company", "Company Name"],
+  model: ["Model", "Model Name"],
+  variant: ["Variant"],
+};
+
+const vehPick = (row, keys) =>
+  String(
+    keys
+      .map((k) => row[k] ?? "")
+      .find((v) => v !== "") || ""
+  ).trim();
+
+const normalizeVehRow = (row = {}) => ({
+  company: vehPick(row, VEH_HEADERS.company),
+  model: vehPick(row, VEH_HEADERS.model),
+  variant: vehPick(row, VEH_HEADERS.variant),
+});
+
+const normalizeFallbackRow = (row = {}) => ({
+  company: String(row["Company Name"] || row.company || "").trim(),
+  model: String(row["Model Name"] || row.model || "").trim(),
+  variant: String(row["Variant"] || row.variant || "").trim(),
+});
+
 /* =========================
    UTILS
    ========================= */
@@ -162,6 +240,8 @@ const toUpperSafe = (val) => (typeof val === "string" ? val.toUpperCase() : val)
 const upperFromEvent = (e) => toUpperSafe(e?.target?.value ?? e);
 const normalizeRowDesc = (rows) =>
   Array.isArray(rows) ? rows.map((r) => ({ ...r, desc: toUpperSafe(r?.desc || "") })) : [];
+const normalizeChassis = (val) =>
+  String(val || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
 
 // Build labour rows from selections
 function buildRows(serviceType, vehicleType) {
@@ -503,6 +583,10 @@ export default function JobCard({ initialValues = null } = {}) {
   const [inlineAutoSearch, setInlineAutoSearch] = useState(null);
   const [inlineFetchLoading, setInlineFetchLoading] = useState(false);
   const [inlineFetchTarget, setInlineFetchTarget] = useState(null);
+  const lastAutoRegRef = useRef("");
+  const lastAutoMobileRef = useRef("");
+  const [bikeData, setBikeData] = useState([]);
+  const [selectedCompany, setSelectedCompany] = useState("");
   const startActionCooldown = (ms = 6000) => {
     const until = Date.now() + ms;
     setActionCooldownUntil(until);
@@ -521,6 +605,7 @@ export default function JobCard({ initialValues = null } = {}) {
     "executive",
     "expectedDelivery",
     "regNo",
+    "company",
     "model",
     "km",
     "custName",
@@ -531,6 +616,7 @@ export default function JobCard({ initialValues = null } = {}) {
   const requiredWithDynamic = (vals) => {
     const list = [...BASE_REQUIRED];
     if (vals?.vehicleType === "Scooter") list.push("floorMat"); // dynamic requirement
+    if (String(vals?.serviceType || "").toLowerCase() === "free") list.push("chassisNo");
     return list;
   };
 
@@ -606,8 +692,10 @@ export default function JobCard({ initialValues = null } = {}) {
       floorMat:"No",
       fuelLevel: undefined,
       regNo: "",
+      company: "",
       model: "",
       colour: "",
+      chassisNo: "",
       km: undefined,
       custName: "",
       custMobile: "",
@@ -626,17 +714,21 @@ export default function JobCard({ initialValues = null } = {}) {
       if (!search) return null;
       const params = new URLSearchParams(search);
       const regNo = formatReg(params.get("regNo") || "", "");
+      const company = toUpperSafe(params.get("company") || "");
       const model = toUpperSafe(params.get("model") || "");
       const colour = toUpperSafe(params.get("colour") || params.get("color") || "");
       const custName = toUpperSafe(params.get("custName") || params.get("customerName") || "");
       const custMobile = params.get("custMobile") || params.get("mobile") || "";
-      const hasAny = [regNo, model, colour, custName, custMobile].some((v) => String(v || "").trim());
+      const chassisNo = normalizeChassis(params.get("chassisNo") || params.get("chassis") || "");
+      const hasAny = [regNo, company, model, colour, chassisNo, custName, custMobile].some((v) => String(v || "").trim());
       if (!hasAny) return null;
       return {
         formValues: {
           regNo,
+          company,
           model,
           colour,
+          chassisNo,
           custName,
           custMobile: String(custMobile || "").replace(/\D/g, "").slice(-10),
         },
@@ -673,6 +765,47 @@ export default function JobCard({ initialValues = null } = {}) {
     }
   }, [location?.search]);
 
+  // Load vehicle catalog for Company/Model suggestions
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch(SHEET_CSV_URL, { cache: "no-store" });
+        if (!res.ok) throw new Error("sheet fetch failed");
+        const csv = await res.text();
+        if (csv.trim().startsWith("<")) throw new Error("expected CSV, got HTML");
+        const rows = parseCsv(csv);
+        if (!rows.length) throw new Error("empty sheet");
+        const headers = rows[0].map((h) => (h || "").trim());
+        const data = rows.slice(1).map((r) => {
+          const obj = {};
+          headers.forEach((h, i) => (obj[h] = r[i] ?? ""));
+          return obj;
+        });
+        const cleaned = data
+          .map(normalizeVehRow)
+          .filter((r) => r.company && r.model);
+        if (!cancelled) setBikeData(cleaned);
+      } catch {
+        try {
+          const res2 = await fetch("/bikeData.json", { cache: "no-store" });
+          if (!res2.ok) throw new Error("fallback missing");
+          const data = await res2.json();
+          const cleaned = (Array.isArray(data) ? data : [])
+            .map(normalizeFallbackRow)
+            .filter((r) => r.company && r.model);
+          if (!cancelled) setBikeData(cleaned);
+        } catch {
+          // silent; company/model can be typed manually
+        }
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Apply external initial values (when rendered in a modal)
   useEffect(() => {
     const sourceInit = initialValues || initialFromQuery;
@@ -686,8 +819,10 @@ export default function JobCard({ initialValues = null } = {}) {
       };
       const kmVal = fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '';
       const regNo = formatReg(fv.regNo || '', '');
+      const company = toUpperSafe(fv.company || '');
       const model = toUpperSafe(fv.model || '');
       const colour = toUpperSafe(fv.colour || '');
+      const chassisNo = normalizeChassis(fv.chassisNo || fv.chassis || '');
       const custName = toUpperSafe(fv.custName || '');
       const obsVal = toUpperSafe((fv.obs || '').replace(/\s*#\s*/g, "\n"));
       const fields = {
@@ -697,8 +832,10 @@ export default function JobCard({ initialValues = null } = {}) {
         executive: fv.executive || undefined,
         expectedDelivery: parseDay(fv.expectedDelivery),
         regNo,
+        company,
         model,
         colour,
+        chassisNo,
         km: kmVal,
         fuelLevel: fv.fuelLevel || undefined,
         
@@ -718,6 +855,7 @@ export default function JobCard({ initialValues = null } = {}) {
       };
       form.setFieldsValue(fields);
       setRegDisplay(fields.regNo || '');
+      if (company) setSelectedCompany(company);
       setServiceTypeLocal(fv.serviceType || null);
       setVehicleTypeLocal(fv.vehicleType || null);
     } catch { /* ignore */ }
@@ -1001,14 +1139,42 @@ export default function JobCard({ initialValues = null } = {}) {
     const next = formatReg(e.target.value, regDisplay);
     setRegDisplay(next);
     form.setFieldsValue({ regNo: next });
+    if (String(next || "").length < 10) {
+      lastAutoRegRef.current = "";
+    }
   };
+
+  const isRegValid = REGEX_FULL.test(
+    formatReg(regDisplay || form.getFieldValue("regNo") || "", regDisplay || "")
+  );
 
   const labourRowsRaw = Form.useWatch("labourRows", form);
   const labourRows = useMemo(() => normalizeRowDesc(labourRowsRaw || []), [labourRowsRaw]);
   const gstLabour = Form.useWatch("gstLabour", form) ?? DEFAULT_GST_LABOUR;
   const discountsRaw = Form.useWatch("discounts", form);
   const discounts = useMemo(() => discountsRaw || { labour: 0 }, [discountsRaw]);
+  const kmWatch = Form.useWatch("km", form);
+  const companyWatch = Form.useWatch("company", form);
+  const mobileWatch = Form.useWatch("custMobile", form);
 
+  useEffect(() => {
+    const next = formatReg(regDisplay || form.getFieldValue("regNo") || "", regDisplay || "");
+    if (String(next || "").length < 10) return;
+    if (!REGEX_FULL.test(next)) return;
+    if (inlineFetchLoading) return;
+    if (lastAutoRegRef.current === next) return;
+    lastAutoRegRef.current = next;
+    triggerInlineFetch("vehicle");
+  }, [regDisplay, inlineFetchLoading, form]);
+
+  useEffect(() => {
+    const mobile = String(mobileWatch || "").replace(/\D/g, "").slice(-10);
+    if (mobile.length !== 10) return;
+    if (inlineFetchLoading) return;
+    if (lastAutoMobileRef.current === mobile) return;
+    lastAutoMobileRef.current = mobile;
+    triggerInlineFetch("mobile");
+  }, [mobileWatch, inlineFetchLoading]);
   const totals = useMemo(() => {
     const labourSub = labourRows.reduce(
       (sum, r) => sum + Number(r?.qty || 0) * Number(r?.rate || 0),
@@ -1019,6 +1185,24 @@ export default function JobCard({ initialValues = null } = {}) {
     const grand = Math.max(0, labourSub + labourGST - labourDisc);
     return { labourSub, labourGST, labourDisc, grand };
   }, [labourRows, gstLabour, discounts]);
+
+  const companies = useMemo(
+    () => uniqCaseInsensitive(bikeData.map((r) => r.company)),
+    [bikeData]
+  );
+  const models = useMemo(() => {
+    const compKey = normalizeKey(companyWatch || selectedCompany);
+    const base = compKey
+      ? bikeData.filter((r) => normalizeKey(r.company) === compKey)
+      : bikeData;
+    return uniqCaseInsensitive(base.map((r) => r.model));
+  }, [bikeData, companyWatch, selectedCompany]);
+
+  useEffect(() => {
+    if (companyWatch && companyWatch !== selectedCompany) {
+      setSelectedCompany(companyWatch);
+    }
+  }, [companyWatch, selectedCompany]);
 
   const postLockTimeLabel = useMemo(() => {
     const raw = postServiceLock.at;
@@ -1048,7 +1232,13 @@ export default function JobCard({ initialValues = null } = {}) {
       setPostServiceLock(POST_LOCK_EMPTY);
     }
     form.setFieldsValue({ custMobile: val });
+    if (String(val || "").length < 10) {
+      lastAutoMobileRef.current = "";
+    }
   };
+
+  const kmDigits = Number(String(kmWatch || "").replace(/\D/g, "")) || 0;
+  const freeDisabled = kmDigits > 10000;
 
   const triggerInlineFetch = (mode) => {
     if (mode === "vehicle") {
@@ -1089,13 +1279,19 @@ export default function JobCard({ initialValues = null } = {}) {
     });
   };
 
-  const serviceOptions = SERVICE_TYPES.map((t) => ({ label: t, value: t }));
+  const serviceOptions = SERVICE_TYPES.map((t) => ({
+    label: t,
+    value: t,
+    disabled: t === "Free" && freeDisabled,
+  }));
 
   const normalizeFormValues = (rawVals = {}) => {
     const next = { ...rawVals };
     next.regNo = formatReg(next.regNo || "");
+    next.company = toUpperSafe(next.company || "");
     next.model = toUpperSafe(next.model || "");
     next.colour = toUpperSafe(next.colour || "");
+    next.chassisNo = normalizeChassis(next.chassisNo || next.chassis || "");
     next.custName = toUpperSafe(next.custName || "");
     next.obs = toUpperSafe(next.obs || "");
     next.labourRows = normalizeRowDesc(next.labourRows || []);
@@ -1107,6 +1303,11 @@ export default function JobCard({ initialValues = null } = {}) {
     if (checkedValues.length === 0) next = null;
     else if (checkedValues.length === 1) next = checkedValues[0];
     else next = checkedValues.find((v) => v !== serviceTypeLocal) || checkedValues[0];
+
+    if (freeDisabled && next === "Free") {
+      message.warning("Free service is not allowed above 10,000 KM.");
+      return;
+    }
 
     setServiceTypeLocal(next || null);
     form.setFieldsValue({ serviceType: next || undefined });
@@ -1127,6 +1328,15 @@ export default function JobCard({ initialValues = null } = {}) {
     }
     recomputeReady(); // ★ keep button state fresh
   };
+
+  useEffect(() => {
+    if (freeDisabled && serviceTypeLocal === "Free") {
+      setServiceTypeLocal(null);
+      form.setFieldsValue({ serviceType: undefined });
+      recomputeReady();
+      message.warning("Free service disabled for odometer above 10,000 KM.");
+    }
+  }, [freeDisabled, serviceTypeLocal, form]);
 
   useEffect(() => {
     recomputeReady(); // ★ on mount
@@ -1208,8 +1418,10 @@ export default function JobCard({ initialValues = null } = {}) {
           executive: vals.executive || "",
           expectedDelivery: fmtDDMMYYYY(vals.expectedDelivery),
           regNo: vals.regNo || "",
+          company: vals.company || "",
           model: vals.model || "",
           colour: vals.colour || "",
+          chassisNo: vals.chassisNo || "",
           km: kmOnlyDigits || "",
           fuelLevel: vals.fuelLevel || "",
           
@@ -1335,8 +1547,10 @@ export default function JobCard({ initialValues = null } = {}) {
         formValues: {
           mechanic: valsNow.mechanic || '',
           executive: valsNow.executive || '',
+          company: valsNow.company || '',
           model: valsNow.model || '',
           colour: valsNow.colour || '',
+          chassisNo: valsNow.chassisNo || '',
           km: kmOnlyDigits || '',
           fuelLevel: valsNow.fuelLevel || '',
           vehicleType: valsNow.vehicleType || '',
@@ -1376,12 +1590,14 @@ export default function JobCard({ initialValues = null } = {}) {
           branch: String(valsNow.branch || ''),
           executive: String(valsNow.executive || ''),
           regNo: String(valsNow.regNo || ''),
+          company: String(valsNow.company || ''),
           serviceType: String(valsNow.serviceType || ''),
           vehicleType: String(valsNow.vehicleType || ''),
           // Added for full mapping when posting without pre-service
           mechanic: String(valsNow.mechanic || ''),
           model: String(valsNow.model || ''),
           colour: String(valsNow.colour || ''),
+          chassisNo: String(valsNow.chassisNo || ''),
           km: kmOnlyDigits || '',
           fuelLevel: String(valsNow.fuelLevel || ''),
           expectedDelivery: expectedDeliveryStr,
@@ -1817,7 +2033,7 @@ export default function JobCard({ initialValues = null } = {}) {
                         type="primary"
                         size="small"
                         loading={inlineFetchLoading && inlineFetchTarget === "vehicle"}
-                        disabled={inlineFetchLoading}
+                        disabled={inlineFetchLoading || !isRegValid}
                         onClick={() => triggerInlineFetch("vehicle")}
                         style={{
                           height: 22,
@@ -1894,8 +2110,43 @@ export default function JobCard({ initialValues = null } = {}) {
 
             <Row gutter={[12, 8]}>
               <Col xs={24} sm={12} md={8}>
+                <Form.Item
+                  label="Company"
+                  name="company"
+                  rules={[{ required: true, message: "Please select company" }]}
+                  getValueFromEvent={upperFromEvent}
+                >
+                  <AutoComplete
+                    placeholder="Type company (e.g., H → HONDA / HERO)"
+                    options={companies.map((c) => ({ value: c }))}
+                    filterOption={(inputValue, option) =>
+                      String(option?.value || "")
+                        .toLowerCase()
+                        .includes(String(inputValue || "").toLowerCase())
+                    }
+                    onChange={(val) => {
+                      const v = toUpperSafe(val);
+                      setSelectedCompany(v);
+                      form.setFieldsValue({ company: v, model: undefined });
+                    }}
+                    style={{ textTransform: "uppercase" }}
+                  />
+                </Form.Item>
+              </Col>
+
+              <Col xs={24} sm={12} md={8}>
                 <Form.Item label="Model" name="model" rules={[{ required: true }]} getValueFromEvent={upperFromEvent}>
-                  <Input placeholder="e.g., Honda Activa 6G" style={{ textTransform: "uppercase" }} />
+                  <AutoComplete
+                    placeholder="Type model (e.g., ACT → ACTIVA 125)"
+                    options={models.map((m) => ({ value: m }))}
+                    filterOption={(inputValue, option) =>
+                      String(option?.value || "")
+                        .toLowerCase()
+                        .includes(String(inputValue || "").toLowerCase())
+                    }
+                    onChange={(val) => form.setFieldsValue({ model: toUpperSafe(val) })}
+                    style={{ textTransform: "uppercase" }}
+                  />
                 </Form.Item>
               </Col>
 
@@ -1904,7 +2155,9 @@ export default function JobCard({ initialValues = null } = {}) {
                   <Input style={{ textTransform: "uppercase" }} />
                 </Form.Item>
               </Col>
+            </Row>
 
+            <Row gutter={[12, 8]}>
               <Col xs={24} sm={12} md={8}>
                 <Form.Item
                   label="Odometer Reading"
@@ -1964,6 +2217,29 @@ export default function JobCard({ initialValues = null } = {}) {
                     onChange={handleServiceCheckbox}
                     disabled={isPostLocked}
                   />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item
+                  label="Chassis No"
+                  name="chassisNo"
+                  rules={[
+                    {
+                      validator: (_, val) => {
+                        const isFree = String(serviceTypeLocal || "").toLowerCase() === "free";
+                        const v = normalizeChassis(val || "");
+                        if (!isFree) return Promise.resolve();
+                        if (v) return Promise.resolve();
+                        return Promise.reject(new Error("Chassis number is required for Free service"));
+                      },
+                    },
+                  ]}
+                  getValueFromEvent={(e) => {
+                    const v = e?.target?.value ?? e;
+                    return normalizeChassis(v);
+                  }}
+                >
+                  <Input placeholder="Chassis No (required for Free service)" />
                 </Form.Item>
               </Col>
 

@@ -15,6 +15,7 @@ import {
   Tag,
   Typography,
   message,
+  Grid,
 } from "antd";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
@@ -25,9 +26,9 @@ import { exportToCsv } from "../utils/csvExport";
 const { Text } = Typography;
 
 const DEFAULT_BOOKING_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
+  "https://script.google.com/macros/s/AKfycbwSn5hp1cSWlJMGhe2cYUtid2Ruqh9H13mZbq0PwBpYB0lMLufZbIjZ5zioqtKgE_0sNA/exec";
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbwFqLWDHtZqh_s8LzYoKyD3k0J6ycVcnrtcQYMdK08UcCWzQqMl-mucIA4jnEKxTttDlg/exec";
+  "https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec";
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 const BOOKING_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 
@@ -289,6 +290,8 @@ const parseJobRow = (row) => {
 };
 
 export default function VehicleSearch() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const navigate = useNavigate();
   const [mode, setMode] = useState("vehicle"); // mobile | vehicle
   const [query, setQuery] = useState("");
@@ -644,10 +647,10 @@ export default function VehicleSearch() {
     <>
     <div
       style={{
-        padding: 24,
+        padding: isMobile ? 12 : 24,
         maxWidth: 1200,
-        margin: "24px auto",
-        borderRadius: 24,
+        margin: isMobile ? "12px auto" : "24px auto",
+        borderRadius: isMobile ? 16 : 24,
         background: "radial-gradient(circle at top, #0f172a 0%, #020617 40%, #020617 100%)",
         boxShadow: "0 24px 60px rgba(15, 23, 42, 0.8)",
         border: "1px solid rgba(148, 163, 184, 0.2)",
@@ -690,9 +693,9 @@ export default function VehicleSearch() {
             </Radio.Group>
           </Space>
         }
-        bodyStyle={{ padding: 16, paddingBottom: 12 }}
+        bodyStyle={{ padding: isMobile ? 12 : 16, paddingBottom: isMobile ? 10 : 12 }}
         style={{
-          borderRadius: 20,
+          borderRadius: isMobile ? 16 : 20,
           boxShadow: "0 18px 45px rgba(15, 23, 42, 0.25)",
           border: "1px solid rgba(148, 163, 184, 0.3)",
           overflow: "hidden",
@@ -701,14 +704,14 @@ export default function VehicleSearch() {
           background: "linear-gradient(135deg, #0f172a 0%, #1d4ed8 60%, #22c55e 100%)",
           color: "#ffffff",
           borderBottom: "none",
-          fontSize: 18,
+          fontSize: isMobile ? 16 : 18,
           fontWeight: 700,
           letterSpacing: 0.4,
         }}
       >
         <Space.Compact style={{ width: "100%" }}>
           <Input
-            size="large"
+            size={isMobile ? "middle" : "large"}
             placeholder={
               mode === "mobile"
                 ? "Enter mobile number"
@@ -736,12 +739,12 @@ export default function VehicleSearch() {
           />
           <Button
             type="primary"
-            size="large"
+            size={isMobile ? "middle" : "large"}
             loading={loading}
             onClick={runSearch}
             style={{
               borderRadius: 999,
-              paddingInline: 28,
+              paddingInline: isMobile ? 18 : 28,
               boxShadow: "0 12px 30px rgba(37, 99, 235, 0.45)",
               fontWeight: 600,
             }}

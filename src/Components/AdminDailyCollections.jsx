@@ -10,7 +10,7 @@ const { Text } = Typography;
 export default function AdminDailyCollections() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbwFqLWDHtZqh_s8LzYoKyD3k0J6ycVcnrtcQYMdK08UcCWzQqMl-mucIA4jnEKxTttDlg/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
   const readUser = () => { try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch { return null; } };
@@ -572,12 +572,13 @@ export default function AdminDailyCollections() {
           loading={ledgerLoading && !hasCache}
           size="small"
           className="compact-table"
-          tableLayout="fixed"
+          tableLayout={isMobile ? "auto" : "fixed"}
           rowSelection={{
             selectedRowKeys: selectedKeys,
             onChange: setSelectedKeys
           }}
           pagination={{ pageSize: isMobile ? 10 : 20, size: isMobile ? 'small' : 'default' }}
+          scroll={isMobile ? { x: 'max-content' } : undefined}
         />
       </>
       )}

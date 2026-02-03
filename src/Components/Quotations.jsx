@@ -638,8 +638,8 @@ export default function Quotations() {
         loading={loading && !hasCache}
         size="small"
         className="compact-table"
-        scroll={{ y: tableHeight }}
-        tableLayout="fixed"
+        scroll={isMobile ? { x: 'max-content', y: tableHeight } : { y: tableHeight }}
+        tableLayout={isMobile ? "auto" : "fixed"}
         pagination={USE_SERVER_PAG ? {
           current: page,
           pageSize,

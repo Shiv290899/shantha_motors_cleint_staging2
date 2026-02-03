@@ -1,6 +1,6 @@
 import React from "react";
 import dayjs from "dayjs";
-import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Checkbox, Row, Col } from "antd";
+import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Checkbox, Row, Col, Grid } from "antd";
 import { listUsers, listUsersPublic, updateUser, deleteUser } from "../../apiCalls/adminUsers";
 import { listBranchesPublic } from "../../apiCalls/branches";
 import { exportToCsv } from "../../utils/csvExport";
@@ -22,6 +22,8 @@ const STATUS_OPTIONS = [
 ];
 
 export default function Users({ readOnly = false }) {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [items, setItems] = React.useState([]);
@@ -320,7 +322,7 @@ export default function Users({ readOnly = false }) {
         dataSource={items}
         columns={columns}
         loading={loading}
-        tableLayout="fixed"
+        tableLayout={isMobile ? "auto" : "fixed"}
         pagination={{
           current: page,
           pageSize,
@@ -329,7 +331,8 @@ export default function Users({ readOnly = false }) {
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
-        size="middle"
+        size={isMobile ? "small" : "middle"}
+        scroll={isMobile ? { x: 'max-content' } : undefined}
       />
 
       <Modal

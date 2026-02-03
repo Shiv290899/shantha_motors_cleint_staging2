@@ -94,7 +94,7 @@ export default function Announcements() {
 
   return (
     <div>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 12 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom: 12, flexWrap:'wrap', gap: 8 }}>
         <Title level={4} style={{ margin: 0 }}>Announcements</Title>
         {canManage && (
           <Button type="primary" onClick={()=> setComposeOpen(true)}>New Announcement</Button>

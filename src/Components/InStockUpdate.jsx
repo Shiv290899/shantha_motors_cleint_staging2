@@ -599,6 +599,7 @@ export default function InStockUpdate() {
         size="small"
         className="compact-table stock-finder-table"
         tableLayout={isMobile ? "auto" : "fixed"}
+        scroll={isMobile ? { x: 'max-content' } : undefined}
         pagination={{
           current: page,
           pageSize,

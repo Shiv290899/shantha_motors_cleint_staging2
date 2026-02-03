@@ -267,7 +267,6 @@ function updateExistingBooking_(existing, data) {
   } : null);
 
   // Update columns (only if provided)
-  cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
   if (branch) cells[idx(headers, 'Branch')] = branch;
   if (executive) cells[idx(headers, 'Executive')] = executive;
   if (customerName) cells[idx(headers, 'Customer Name')] = customerName;
@@ -310,9 +309,10 @@ function updateExistingBooking_(existing, data) {
     }
   } catch (e) {}
 
+  payload.updatedAt = new Date().toISOString();
   const rawStr = JSON.stringify(payload || {});
   cells[idx(headers, 'Raw Payload')] = rawStr.length > 45000
-    ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, payments: (payload.payments || []).slice(0, 5), note: 'payload truncated' })
+    ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, payments: (payload.payments || []).slice(0, 5), updatedAt: payload.updatedAt || '', note: 'payload truncated' })
     : rawStr;
 
   sh.getRange(existing.rowIndex, 1, 1, HEADERS.length).setValues([cells]);
@@ -573,21 +573,28 @@ function updateBooking_(bookingId, patch, mobileOpt) {
 
   if (patch.rtoStatus != null) cells[idx(headers, 'RTO Status')] = String(patch.rtoStatus);
 
+  const rawIdx = idx(headers, 'Raw Payload');
+  var payload = null;
+  if (rawIdx >= 0) {
+    try { payload = JSON.parse(String(cells[rawIdx] || '{}')); } catch (e) { payload = {}; }
+  }
+
   const chassis = (patch.chassis != null ? patch.chassis : patch.chassisNo);
   if (patch.chassis != null || patch.chassisNo != null) {
     cells[idx(headers, 'Chassis Number')] = String(chassis || '');
-    const rawIdx = idx(headers, 'Raw Payload');
-    var payload = {};
-    try { payload = JSON.parse(String(cells[rawIdx] || '{}')); } catch (e) { payload = {}; }
-    payload.vehicle = payload.vehicle || {};
-    payload.vehicle.chassisNo = String(chassis || '');
-    cells[rawIdx] = JSON.stringify(payload);
+    if (payload) {
+      payload.vehicle = payload.vehicle || {};
+      payload.vehicle.chassisNo = String(chassis || '');
+    }
   }
 
   const vehNo = patch.vehicleNo || patch.regNo;
   if (vehNo != null) cells[idx(headers, 'Vehicle No')] = String(vehNo);
 
-  cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
+  if (payload && rawIdx >= 0) {
+    payload.updatedAt = new Date().toISOString();
+    cells[rawIdx] = JSON.stringify(payload);
+  }
   sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([cells]);
 
   return { success: true, updated: true, bookingId: String(cells[idx(headers, 'Booking ID')] || '') };
@@ -649,13 +656,12 @@ function attachDocument_(bookingId, mobileOpt, file, docType, append, tsIso) {
     fileId: file.fileId || '',
     ts: nowIso
   }];
+  payload.updatedAt = nowIso;
   cells[fileNameIdx] = newName;
   cells[fileUrlIdx] = newUrl;
   cells[idx(headers, 'File Type')] = cells[idx(headers, 'File Type')] || '';
   cells[idx(headers, 'File Size')] = cells[idx(headers, 'File Size')] || '';
   cells[rawIdx] = JSON.stringify(payload);
-
-  cells[idx(headers, 'Submitted At')] = formatTs_(new Date());
   range.setValues([cells]);
 
   const id = String(cells[idx(headers, 'Booking ID')] || '');

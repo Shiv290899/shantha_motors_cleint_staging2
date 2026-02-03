@@ -124,7 +124,7 @@ const SHEET_CSV_URL =
 // Google Apps Script Web App endpoint to save bookings to Google Sheet
 const BOOKING_GAS_URL =
   import.meta.env.VITE_BOOKING_GAS_URL ||
-  "https://script.google.com/macros/s/AKfycbzAn8Ahu2Mp59Uh0i7jLi1XEzRU44A6xzrMl3X-n1u_EECxSAWCjpNo0Ovk4LeCjvPzeA/exec";
+  "https://script.google.com/macros/s/AKfycbwSn5hp1cSWlJMGhe2cYUtid2Ruqh9H13mZbq0PwBpYB0lMLufZbIjZ5zioqtKgE_0sNA/exec";
 
 const BOOKING_GAS_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
 
@@ -393,6 +393,7 @@ export default function BookingForm({
 
   const downPaymentWatch = Form.useWatch("downPayment", form);
   const extraFittingAmountWatch = Form.useWatch("extraFittingAmount", form);
+  const discountAmountWatch = Form.useWatch("discountAmount", form);
   const affidavitChargesWatch = Form.useWatch("affidavitCharges", form);
 
   // On-road price for selected vehicle (from sheet)
@@ -407,17 +408,31 @@ export default function BookingForm({
     return Number(found?.onRoadPrice || 0) || 0;
   }, [bikeData, selectedCompany, selectedModel, selectedVariant]);
 
+  const [onRoadPriceEditing, setOnRoadPriceEditing] = useState(false);
+  const [onRoadPriceOverride, setOnRoadPriceOverride] = useState(null);
+
+  useEffect(() => {
+    setOnRoadPriceEditing(false);
+    setOnRoadPriceOverride(null);
+  }, [selectedOnRoadPrice]);
+
+  const effectiveOnRoadPrice = Number(
+    onRoadPriceOverride ?? selectedOnRoadPrice ?? 0
+  ) || 0;
+
   const totalDp = useMemo(() => {
     const dp = Number(downPaymentWatch || 0) || 0;
     const extra = Number(extraFittingAmountWatch || 0) || 0;
+    const discount = Number(discountAmountWatch || 0) || 0;
     const aff =
       addressProofMode === "additional"
         ? Number(affidavitChargesWatch || 0) || 0
         : 0;
-    return dp + extra + aff;
+    return dp + extra + aff - discount;
   }, [
     downPaymentWatch,
     extraFittingAmountWatch,
+    discountAmountWatch,
     affidavitChargesWatch,
     addressProofMode,
   ]);
@@ -430,14 +445,16 @@ export default function BookingForm({
   // Cash flow totals
   const totalVehicleCost = useMemo(() => {
     const extra = Number(extraFittingAmountWatch || 0) || 0;
+    const discount = Number(discountAmountWatch || 0) || 0;
     const aff =
       addressProofMode === "additional"
         ? Number(affidavitChargesWatch || 0) || 0
         : 0;
-    return (Number(selectedOnRoadPrice) || 0) + extra + aff;
+    return (Number(effectiveOnRoadPrice) || 0) + extra + aff - discount;
   }, [
-    selectedOnRoadPrice,
+    effectiveOnRoadPrice,
     extraFittingAmountWatch,
+    discountAmountWatch,
     affidavitChargesWatch,
     addressProofMode,
   ]);
@@ -1139,7 +1156,8 @@ export default function BookingForm({
       const totalDpCalc =
         (Number(values.downPayment) || 0) +
         (Number(values.extraFittingAmount) || 0) +
-        effAff;
+        effAff -
+        (Number(values.discountAmount) || 0);
 
       const parts = derivePaymentParts((key) => values[key]);
       const bookingSum = parts.reduce((s, p) => s + p.total, 0);
@@ -1228,6 +1246,7 @@ export default function BookingForm({
         dp: {
           downPayment: values.downPayment ?? undefined,
           extraFittingAmount: values.extraFittingAmount ?? 0,
+          discountAmount: values.discountAmount ?? 0,
           affidavitCharges:
             values.addressProofMode === "additional"
               ? values.affidavitCharges ?? 0
@@ -1237,19 +1256,21 @@ export default function BookingForm({
         },
         // Cash totals
         cash: {
-          onRoadPrice: selectedOnRoadPrice,
+          onRoadPrice: effectiveOnRoadPrice,
           totalVehicleCost:
             purchaseType === "cash"
-              ? (Number(selectedOnRoadPrice) || 0) +
+              ? (Number(effectiveOnRoadPrice) || 0) +
                 (Number(values.extraFittingAmount) || 0) +
+                - (Number(values.discountAmount) || 0) +
                 (values.addressProofMode === "additional"
                   ? Number(values.affidavitCharges) || 0
                   : 0)
               : undefined,
           balancedAmount:
             purchaseType === "cash"
-              ? (Number(selectedOnRoadPrice) || 0) +
+              ? (Number(effectiveOnRoadPrice) || 0) +
                 (Number(values.extraFittingAmount) || 0) +
+                - (Number(values.discountAmount) || 0) +
                 (values.addressProofMode === "additional"
                   ? Number(values.affidavitCharges) || 0
                   : 0) -
@@ -1287,7 +1308,7 @@ export default function BookingForm({
           availability: values.chassisNo === "__ALLOT__" ? "allot" : chassisStatus,
           availabilityInfo: chassisInfo || undefined,
         },
-        onRoadPrice: selectedOnRoadPrice,
+        onRoadPrice: effectiveOnRoadPrice,
         rtoOffice: values.rtoOffice,
         purchaseMode: values.purchaseType,
         disbursementAmount:
@@ -1301,6 +1322,7 @@ export default function BookingForm({
         address: values.address || undefined,
         payments: paymentsExpanded,
         paymentSplit: parts,
+        discountAmount: values.discountAmount ?? 0,
         // Convenience fields for GAS (no code changes on backend needed)
         source: 'booking',
         cashCollected,
@@ -1694,12 +1716,34 @@ export default function BookingForm({
         </Col>
         <Col xs={24} md={12}>
           <Form.Item label="On-Road Price (₹)">
-            <InputNumber
-              size={ctlSize}
-              style={{ width: "100%" }}
-              value={selectedOnRoadPrice}
-              disabled
-            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <InputNumber
+                size={ctlSize}
+                style={{ width: "100%" }}
+                value={effectiveOnRoadPrice}
+                disabled={!onRoadPriceEditing}
+                min={0}
+                onChange={(val) => {
+                  const next = Number(val || 0) || 0;
+                  setOnRoadPriceOverride(next);
+                }}
+              />
+              <Button
+                size={ctlSize}
+                onClick={() => {
+                  if (!onRoadPriceEditing) {
+                    setOnRoadPriceOverride((cur) =>
+                      cur == null ? Number(selectedOnRoadPrice || 0) || 0 : cur
+                    );
+                    setOnRoadPriceEditing(true);
+                    return;
+                  }
+                  setOnRoadPriceEditing(false);
+                }}
+              >
+                {onRoadPriceEditing ? "Lock" : "Edit"}
+              </Button>
+            </div>
           </Form.Item>
         </Col>
       </Row>
@@ -2043,6 +2087,23 @@ export default function BookingForm({
               />
             </Form.Item>
           </Col>
+          <Col xs={24} md={8}>
+            <Form.Item
+              label="Discount (₹)"
+              name="discountAmount"
+              initialValue={0}
+            >
+              <InputNumber
+                size={ctlSize}
+                style={{ width: "100%" }}
+                min={0}
+                step={100}
+                prefix={<CreditCardOutlined />}
+                placeholder="Enter amount"
+                disabled={paymentsOnlyMode}
+              />
+            </Form.Item>
+          </Col>
           {addressProofMode === "additional" && (
             <Col xs={24} md={8}>
               <Form.Item
@@ -2073,6 +2134,23 @@ export default function BookingForm({
             <Form.Item
               label="Extra Fitting Amount (₹)"
               name="extraFittingAmount"
+              initialValue={0}
+            >
+              <InputNumber
+                size={ctlSize}
+                style={{ width: "100%" }}
+                min={0}
+                step={100}
+                prefix={<CreditCardOutlined />}
+                placeholder="Enter amount"
+                disabled={paymentsOnlyMode}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={8}>
+            <Form.Item
+              label="Discount (₹)"
+              name="discountAmount"
               initialValue={0}
             >
               <InputNumber

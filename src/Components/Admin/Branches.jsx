@@ -1,5 +1,5 @@
 import React from "react";
-import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Row, Col, Typography, Tooltip } from "antd";
+import { Table, Button, Space, Modal, Form, Input, Select, message, Tag, Row, Col, Typography, Tooltip, Grid } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
 import { listBranches, listBranchesPublic, createBranch, updateBranch, deleteBranch } from "../../apiCalls/branches";
 
@@ -16,6 +16,8 @@ const STATUS_OPTIONS = [
 ];
 
 export default function Branches({ readOnly = false }) {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [items, setItems] = React.useState([]);
@@ -301,7 +303,7 @@ export default function Branches({ readOnly = false }) {
         dataSource={filtered}
         columns={columns}
         loading={loading}
-        tableLayout="fixed"
+        tableLayout={isMobile ? "auto" : "fixed"}
         pagination={{
           current: page,
           pageSize,
@@ -310,7 +312,8 @@ export default function Branches({ readOnly = false }) {
           onChange: (p, ps) => { setPage(p); if (ps !== pageSize) setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
-        size="middle"
+        size={isMobile ? "small" : "middle"}
+        scroll={isMobile ? { x: 'max-content' } : undefined}
       />
 
       <Modal

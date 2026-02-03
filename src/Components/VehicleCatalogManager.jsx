@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { Table, Button, Space, Modal, Form, Input, InputNumber, message, Popconfirm, Alert, Typography, Tag, Select } from 'antd'
+import { Table, Button, Space, Modal, Form, Input, InputNumber, message, Popconfirm, Alert, Typography, Tag, Select, Grid } from 'antd'
 import { ReloadOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons'
 import { exportToCsv } from '../utils/csvExport'
 
@@ -112,6 +112,8 @@ const normalizeRow = (row = {}) => {
 }
 
 export default function VehicleCatalogManager({ csvFallbackUrl }) {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const GAS_URL = import.meta.env.VITE_VEHICLE_CATALOG_GAS_URL || 'https://script.google.com/macros/s/AKfycbw0zvptYU-X0yBRFytBJZeli0Dr-uOBFDSfpYgQeWv7nKMWXD73piVndyyTiARU0FL-Lg/exec'
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
@@ -420,6 +422,8 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
         dataSource={filteredRows}
         loading={loading}
         rowKey={(r) => r.id || r.key || catalogKey(r)}
+        tableLayout={isMobile ? "auto" : "fixed"}
+        scroll={isMobile ? { x: 'max-content' } : undefined}
         pagination={{
           current: page,
           pageSize,
@@ -430,7 +434,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
           onChange: (p, ps) => { setPage(p); setPageSize(ps); },
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         }}
-        size="middle"
+        size={isMobile ? "small" : "middle"}
       />
 
       <Modal

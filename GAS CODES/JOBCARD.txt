@@ -13,7 +13,9 @@ const DEFAULT_HEADERS = [
   'Mobile',
   'Collected_Amount',
   'Vehicle_No',
+  'Company',
   'Service_Type',
+  'Chassis No',
   'Branch',
   'Customer_Observation',
   'Expected_Delivery_Date',
@@ -35,7 +37,9 @@ const SERVICE_HISTORY_HEADERS = [
   'Customer Name',
   'Branch',
   'Service Type',
+  'Chassis No',
   'Vehicle Type',
+  'Company',
   'Model',
   'Colour',
   'Mechanic',
@@ -294,6 +298,8 @@ function headerIx_(s){
     idxRemarkText: pos(/remark.*text/i),
     idxExecutive2: pos(/^executive$/i),
     idxMechanic: pos(/(allotted[\s_]mechanic|mechanic)$/i),
+    idxCompany: pos(/^company$/i),
+    idxChassis: pos(/^(chassis|chassis[\s_]*no|chassis[\s_]*number)$/i),
     idxModel: pos(/^model$/i),
     idxColour: pos(/^(colour|color)$/i),
     idxKM: pos(/^(odometer.|km)$/i),
@@ -324,10 +330,24 @@ function ensureCol_(s, name){
   return headerIx_(s);
 }
 
+function ensureColAfter_(s, name, afterName){
+  const info = headerIx_(s);
+  if (info.headers.indexOf(name) >= 0) return info;
+  const idxAfter = info.headers.indexOf(afterName);
+  if (idxAfter >= 0) {
+    s.insertColumnAfter(idxAfter + 1);
+    s.getRange(1, idxAfter + 2).setValue(name);
+    return headerIx_(s);
+  }
+  s.getRange(1, info.headers.length + 1).setValue(name);
+  return headerIx_(s);
+}
+
 function ensureCoreOptionalCols_(s){
   let ix = headerIx_(s);
-  ['Executive','Allotted Mechanic','Model','Colour','Odometer Reading','Fuel Level','Vehicle Type','Post Service At','UTR No']
+  ['Executive','Allotted Mechanic','Company','Model','Colour','Odometer Reading','Fuel Level','Vehicle Type','Post Service At','UTR No']
     .forEach((col) => { ix = ensureCol_(s, col); });
+  ix = ensureColAfter_(s, 'Chassis No', 'Service_Type');
   return ix;
 }
 
@@ -426,6 +446,8 @@ function serviceHistoryIx_(headers){
     Branch: find('branch'),
     ServiceType: find('service type'),
     VehicleType: find('vehicle type'),
+    Company: find('company'),
+    ChassisNo: find('chassis no'),
     Model: find('model'),
     Colour: find('colour'),
     Mechanic: find('mechanic'),
@@ -458,6 +480,7 @@ function upsertServiceHistory_(d){
     if (!jcNo) return { success:false, message:'jcNo missing' };
     const sh = serviceHistorySheet_();
     ensureServiceHistoryCol_(sh, 'Customer Observation');
+    ensureServiceHistoryCol_(sh, 'Company');
     const width = Math.max(sh.getLastColumn(), SERVICE_HISTORY_HEADERS.length);
     const headers = sh.getRange(1,1,1,width).getValues()[0];
     const I = serviceHistoryIx_(headers);
@@ -465,11 +488,13 @@ function upsertServiceHistory_(d){
     const rows = (last > 1) ? sh.getRange(2,1,last-1,I.width).getValues() : [];
 
     const regNo = normReg_(d?.regNo || d?.formValues?.regNo || d?.payload?.formValues?.regNo || d?.payload?.regNo || '');
+    const chassisNo = String(d?.chassisNo || d?.formValues?.chassisNo || d?.payload?.formValues?.chassisNo || d?.payload?.chassisNo || '').toUpperCase();
     const mobile = ten_(d?.mobile || d?.formValues?.custMobile || d?.payload?.formValues?.custMobile || d?.payload?.mobile || '');
     const custName = d?.custName || d?.formValues?.custName || d?.payload?.formValues?.custName || '';
     const branch = d?.branch || d?.formValues?.branch || d?.payload?.formValues?.branch || '';
     const serviceType = d?.serviceType || d?.formValues?.serviceType || d?.payload?.formValues?.serviceType || '';
     const vehicleType = d?.vehicleType || d?.formValues?.vehicleType || d?.payload?.formValues?.vehicleType || '';
+    const company = d?.company || d?.formValues?.company || d?.payload?.formValues?.company || '';
     const model = d?.model || d?.formValues?.model || d?.payload?.formValues?.model || '';
     const colour = d?.colour || d?.color || d?.formValues?.colour || d?.formValues?.color || d?.payload?.formValues?.colour || d?.payload?.formValues?.color || '';
     const mechanic = d?.mechanic || d?.formValues?.mechanic || d?.payload?.formValues?.mechanic || '';
@@ -529,6 +554,8 @@ function upsertServiceHistory_(d){
     put(I.Branch, branch);
     put(I.ServiceType, serviceType);
     put(I.VehicleType, vehicleType);
+    put(I.Company, company);
+    put(I.ChassisNo, chassisNo);
     put(I.Model, model);
     put(I.Colour, colour);
     put(I.Mechanic, mechanic);
@@ -563,6 +590,8 @@ function serviceHistoryRowToObj_(r, I){
   const jcNo = r[I.JCNo] || '';
   const mobile = r[I.Mobile] || '';
   const serviceType = r[I.ServiceType] || '';
+  const company = (I.Company >= 0 ? r[I.Company] : '') || '';
+  const chassisNo = (I.ChassisNo >= 0 ? r[I.ChassisNo] : '') || '';
   const model = r[I.Model] || '';
   const colour = r[I.Colour] || '';
   const branch = r[I.Branch] || '';
@@ -583,6 +612,8 @@ function serviceHistoryRowToObj_(r, I){
     regNo,
     jcNo,
     serviceType,
+    company,
+    chassisNo,
     model,
     colour,
     branch,
@@ -617,7 +648,9 @@ function serviceHistoryRowToObj_(r, I){
       'JC No': jcNo,
       'Vehicle No': regNo,
       'Registration Number': regNo,
+      'Chassis No': chassisNo,
       'Service Type': serviceType,
+      'Company': company,
       'Model': model,
       'Colour': colour,
       'Branch': branch,
@@ -736,6 +769,8 @@ function upsertByMobile_(d){
 
   put(row, ix.idxExecutive2, fv.executive);
   put(row, ix.idxMechanic, fv.mechanic);
+  put(row, ix.idxCompany, fv.company);
+  put(row, ix.idxChassis, fv.chassisNo || fv.chassis);
   put(row, ix.idxModel, fv.model);
   put(row, ix.idxColour, fv.colour);
   put(row, ix.idxKM, digits(fv.km));
@@ -785,6 +820,8 @@ function insertNew_(d, mobileCanonical){
 
   put(row, ix.idxExecutive2, fv.executive || '');
   put(row, ix.idxMechanic, fv.mechanic || '');
+  put(row, ix.idxCompany, fv.company || '');
+  put(row, ix.idxChassis, fv.chassisNo || fv.chassis || '');
   put(row, ix.idxModel, fv.model || '');
   put(row, ix.idxColour, fv.colour || '');
   put(row, ix.idxKM, digits(fv.km || ''));
@@ -1026,6 +1063,8 @@ function toRowObject_(row, ix){
       RemarkText: remarkText || '',
       Executive: ix.idxExecutive2 >= 0 ? row[ix.idxExecutive2] : '',
       Allotted_Mechanic: ix.idxMechanic >= 0 ? row[ix.idxMechanic] : '',
+      Company: ix.idxCompany >= 0 ? row[ix.idxCompany] : '',
+      Chassis_No: ix.idxChassis >= 0 ? row[ix.idxChassis] : '',
       Model: ix.idxModel >= 0 ? row[ix.idxModel] : '',
       Colour: ix.idxColour >= 0 ? row[ix.idxColour] : '',
       KM: ix.idxKM >= 0 ? row[ix.idxKM] : '',
@@ -1258,6 +1297,7 @@ function list_(opts) {
     const hasAmount = String(amt || '').trim().length > 0;
     const status = (hasPost || hasPayments || (hasPaymentMode && hasAmount)) ? 'completed' : 'pending';
     const model = payload && payload.formValues ? (payload.formValues.model || '') : '';
+    const company = payload && payload.formValues ? (payload.formValues.company || '') : '';
 
     return {
       raw: r,
@@ -1297,7 +1337,7 @@ function list_(opts) {
     }
 
     if (q) {
-      const hay = [x.name, x.mobile, x.jcNo, x.regNo, x.model, x.branchSheet, x.branchPayload, x.executive, x.paymentMode];
+      const hay = [x.name, x.mobile, x.jcNo, x.regNo, x.model, company, x.branchSheet, x.branchPayload, x.executive, x.paymentMode];
       let hit = false;
       for (var i=0;i<hay.length;i++){ if (norm_(hay[i]).indexOf(norm_(q)) !== -1) { hit = true; break; } }
       if (!hit) return false;

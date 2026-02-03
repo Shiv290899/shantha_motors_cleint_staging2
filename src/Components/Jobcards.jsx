@@ -11,7 +11,7 @@ import { handleSmartPrint } from "../utils/printUtils";
 import PostServiceSheet from "./PostServiceSheet";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbwFqLWDHtZqh_s8LzYoKyD3k0J6ycVcnrtcQYMdK08UcCWzQqMl-mucIA4jnEKxTttDlg/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -692,7 +692,7 @@ export default function Jobcards() {
         loading={loading && !hasCache}
         size="small"
         className="compact-table"
-        tableLayout="fixed"
+        tableLayout={isMobile ? "auto" : "fixed"}
         pagination={USE_SERVER_PAG ? {
           current: page,
           pageSize,
@@ -710,7 +710,7 @@ export default function Jobcards() {
           showTotal: (total, range) => `${range[0]}-${range[1]} of ${total}`,
         } : false)}
         rowKey={(r) => `${r.jcNo}-${r.mobile}-${r.ts}-${r.key}`}
-        scroll={{ y: tableHeight }}
+        scroll={isMobile ? { x: 'max-content', y: tableHeight } : { y: tableHeight }}
       />
 
       {!USE_SERVER_PAG && renderMode==='loadMore' && visibleRows.length < filtered.length ? (
