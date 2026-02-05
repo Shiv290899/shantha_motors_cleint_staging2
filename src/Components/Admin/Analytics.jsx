@@ -14,7 +14,7 @@ import {
   Bar,
   Legend,
 } from "recharts";
-import { FiTrendingUp, FiUsers, FiCheckCircle, FiFileText, FiDollarSign, FiActivity } from "react-icons/fi";
+import { FiTrendingUp, FiUsers, FiCheckCircle, FiFileText, FiActivity } from "react-icons/fi";
 
 const { Title, Text } = Typography;
 
@@ -23,7 +23,7 @@ const DEFAULT_BOOKING_GAS_URL =
 const DEFAULT_QUOT_GAS_URL =
   "https://script.google.com/macros/s/AKfycbxXtfRVEFeaKu10ijzfQdOVlgkZWyH1q1t4zS3PHTX9rQQ7ztRJdpFV5svk98eUs3UXuw/exec";
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec";
+  "https://script.google.com/macros/s/AKfycbxwuwETUUiAoFyksSoEOHVimCtlIZYb6JTQ7yJ8-vkwth9xYwEOlMA8ktiE45UQ6VA3Lg/exec";
 
 const HEAD_BOOKING = { ts: ["Submitted At", "Timestamp", "Time", "Date"], branch: ["Branch"] };
 const HEAD_QUOT = { ts: ["Timestamp", "Time", "Date"], branch: ["Branch"], executive: ["Executive"], payload: ["Payload"] };
@@ -31,18 +31,11 @@ const HEAD_JC = {
   ts: ["Timestamp", "Time", "Date"],
   branch: ["Branch"],
   executive: ["Executive"],
-  amount: ["Service Amount", "Collected Amount", "Collected_Amount", "Amount"],
   payload: ["Payload"],
 };
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj?.[k] ?? "").find((v) => v !== "") || "").trim();
 const normalizeKey = (v) => String(v || "").trim().toLowerCase();
-const parseAmount = (v) => {
-  if (v === null || v === undefined) return 0;
-  const num = Number(String(v).replace(/[^\d.-]/g, ""));
-  return Number.isFinite(num) ? num : 0;
-};
-
 function parseTsMs(v) {
   if (!v) return null;
   if (v instanceof Date) return v.getTime();
@@ -205,17 +198,11 @@ export default function Analytics() {
       }
       const fv = payloadObj?.formValues || {};
       const ts = pick(obj, HEAD_JC.ts);
-      const amount = (() => {
-        const fromTotals = payloadObj?.totals?.grand;
-        if (fromTotals !== undefined && fromTotals !== null && fromTotals !== "") return parseAmount(fromTotals);
-        return parseAmount(pick(obj, HEAD_JC.amount));
-      })();
       return {
         ts,
         tsMs: parseTsMs(ts),
         branch: fv.branch || pick(obj, HEAD_JC.branch),
         executive: fv.executive || pick(obj, HEAD_JC.executive),
-        amount,
         _raw: o,
       };
     });
@@ -340,19 +327,25 @@ export default function Analytics() {
           bookings: 0,
           quotations: 0,
           jobcards: 0,
-          amount: 0,
+          total: 0,
         });
       }
       const row = map.get(key);
       row[field] += delta;
     };
-    filteredBookings.forEach((r) => upsert(r.branch, "bookings", 1));
-    filteredQuotations.forEach((r) => upsert(r.branch, "quotations", 1));
+    filteredBookings.forEach((r) => {
+      upsert(r.branch, "bookings", 1);
+      upsert(r.branch, "total", 1);
+    });
+    filteredQuotations.forEach((r) => {
+      upsert(r.branch, "quotations", 1);
+      upsert(r.branch, "total", 1);
+    });
     filteredJobcards.forEach((r) => {
       upsert(r.branch, "jobcards", 1);
-      upsert(r.branch, "amount", Number(r.amount || 0));
+      upsert(r.branch, "total", 1);
     });
-    return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
   }, [filteredBookings, filteredQuotations, filteredJobcards, branchLabelByKey]);
 
   const executiveSummary = useMemo(() => {
@@ -365,8 +358,8 @@ export default function Analytics() {
           key,
           executive: executiveLabelByKey.get(key) || exec,
           jobcards: 0,
-          amount: 0,
           quotations: 0,
+          total: 0,
         });
       }
       const row = map.get(key);
@@ -374,19 +367,21 @@ export default function Analytics() {
     };
     filteredJobcards.forEach((r) => {
       add(r.executive, "jobcards", 1);
-      add(r.executive, "amount", Number(r.amount || 0));
+      add(r.executive, "total", 1);
     });
-    filteredQuotations.forEach((r) => add(r.executive, "quotations", 1));
-    return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+    filteredQuotations.forEach((r) => {
+      add(r.executive, "quotations", 1);
+      add(r.executive, "total", 1);
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
   }, [filteredJobcards, filteredQuotations, executiveLabelByKey]);
 
   const totals = useMemo(() => {
-    const totalAmount = filteredJobcards.reduce((sum, r) => sum + Number(r.amount || 0), 0);
     return {
       bookings: filteredBookings.length,
       quotations: filteredQuotations.length,
       jobcards: filteredJobcards.length,
-      amount: totalAmount,
+      total: filteredBookings.length + filteredQuotations.length + filteredJobcards.length,
     };
   }, [filteredBookings, filteredQuotations, filteredJobcards]);
 
@@ -396,13 +391,9 @@ export default function Analytics() {
     const jobcards = totals.jobcards || 0;
     const quotRate = bookings ? (quotations / bookings) * 100 : 0;
     const jcRate = bookings ? (jobcards / bookings) * 100 : 0;
-    const jcFromQuot = quotations ? (jobcards / quotations) * 100 : 0;
-    const avgCollection = jobcards ? totals.amount / jobcards : 0;
     return {
       quotRate,
       jcRate,
-      jcFromQuot,
-      avgCollection,
     };
   }, [totals]);
 
@@ -418,16 +409,22 @@ export default function Analytics() {
           ? base.startOf("week").format("YYYY-MM-DD")
           : base.format("YYYY-MM-DD");
       if (!map.has(key)) {
-        map.set(key, { date: key, bookings: 0, quotations: 0, jobcards: 0, amount: 0 });
+        map.set(key, { date: key, bookings: 0, quotations: 0, jobcards: 0, total: 0 });
       }
       const row = map.get(key);
       row[field] += delta;
     };
-    filteredBookings.forEach((r) => add(r.tsMs, "bookings", 1));
-    filteredQuotations.forEach((r) => add(r.tsMs, "quotations", 1));
+    filteredBookings.forEach((r) => {
+      add(r.tsMs, "bookings", 1);
+      add(r.tsMs, "total", 1);
+    });
+    filteredQuotations.forEach((r) => {
+      add(r.tsMs, "quotations", 1);
+      add(r.tsMs, "total", 1);
+    });
     filteredJobcards.forEach((r) => {
       add(r.tsMs, "jobcards", 1);
-      add(r.tsMs, "amount", Number(r.amount || 0));
+      add(r.tsMs, "total", 1);
     });
     return Array.from(map.values()).sort((a, b) => (a.date < b.date ? -1 : 1));
   }, [filteredBookings, filteredQuotations, filteredJobcards, groupBy]);
@@ -446,7 +443,7 @@ export default function Analytics() {
           executive: executiveLabelByKey.get(eKey) || exec,
           jobcards: 0,
           quotations: 0,
-          amount: 0,
+          total: 0,
         });
       }
       const row = map.get(key);
@@ -454,16 +451,14 @@ export default function Analytics() {
     };
     filteredJobcards.forEach((r) => {
       add(r.branch, r.executive, "jobcards", 1);
-      add(r.branch, r.executive, "amount", Number(r.amount || 0));
+      add(r.branch, r.executive, "total", 1);
     });
-    filteredQuotations.forEach((r) => add(r.branch, r.executive, "quotations", 1));
-    return Array.from(map.values()).sort((a, b) => b.amount - a.amount);
+    filteredQuotations.forEach((r) => {
+      add(r.branch, r.executive, "quotations", 1);
+      add(r.branch, r.executive, "total", 1);
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
   }, [filteredJobcards, filteredQuotations, branchLabelByKey, executiveLabelByKey]);
-
-  const currencyText = (n) =>
-    typeof Intl !== "undefined"
-      ? new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n || 0)
-      : String(Math.round(n || 0));
 
   const kpiCards = [
     {
@@ -491,14 +486,6 @@ export default function Analytics() {
       bg: "linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)",
     },
     {
-      key: "amount",
-      label: "Collected",
-      value: `₹${currencyText(totals.amount)}`,
-      icon: <FiDollarSign />,
-      color: "#8b5cf6",
-      bg: "linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%)",
-    },
-    {
       key: "quotRate",
       label: "Quotations / Bookings",
       value: `${ratios.quotRate.toFixed(1)}%`,
@@ -507,9 +494,17 @@ export default function Analytics() {
       bg: "linear-gradient(135deg, #fee2e2 0%, #fecaca 100%)",
     },
     {
-      key: "avgCollection",
-      label: "Avg Collection / Job",
-      value: `₹${currencyText(ratios.avgCollection)}`,
+      key: "jcRate",
+      label: "Job Cards / Bookings",
+      value: `${ratios.jcRate.toFixed(1)}%`,
+      icon: <FiTrendingUp />,
+      color: "#0ea5e9",
+      bg: "linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%)",
+    },
+    {
+      key: "total",
+      label: "Total Activity",
+      value: totals.total,
       icon: <FiActivity />,
       color: "#0f172a",
       bg: "linear-gradient(135deg, #e2e8f0 0%, #cbd5f5 100%)",
@@ -522,10 +517,10 @@ export default function Analytics() {
     { title: "Quotations", dataIndex: "quotations", key: "quotations", width: 120 },
     { title: "Job Cards", dataIndex: "jobcards", key: "jobcards", width: 110 },
     {
-      title: "Collected (₹)",
-      dataIndex: "amount",
-      key: "amount",
-      render: (v) => <Text strong>{currencyText(v)}</Text>,
+      title: "Total",
+      dataIndex: "total",
+      key: "total",
+      render: (v) => <Text strong>{v}</Text>,
     },
   ];
 
@@ -534,10 +529,10 @@ export default function Analytics() {
     { title: "Job Cards", dataIndex: "jobcards", key: "jobcards", width: 110 },
     { title: "Quotations", dataIndex: "quotations", key: "quotations", width: 120 },
     {
-      title: "Collected (₹)",
-      dataIndex: "amount",
-      key: "amount",
-      render: (v) => <Text strong>{currencyText(v)}</Text>,
+      title: "Total",
+      dataIndex: "total",
+      key: "total",
+      render: (v) => <Text strong>{v}</Text>,
     },
   ];
 
@@ -669,7 +664,7 @@ export default function Analytics() {
         </Col>
 
         <Col xs={24} lg={12}>
-          <Card title="Branch-level Sales" bodyStyle={{ padding: 12 }}>
+          <Card title="Branch-level Activity" bodyStyle={{ padding: 12 }}>
             {loading ? (
               <Spin />
             ) : (
@@ -681,7 +676,9 @@ export default function Analytics() {
                       <XAxis dataKey="branch" tick={{ fontSize: 11 }} interval={0} angle={-15} height={50} />
                       <YAxis />
                       <Tooltip />
-                      <Bar dataKey="amount" fill="#1d4ed8" name="Collected (₹)" />
+                      <Bar dataKey="bookings" stackId="a" fill="#06b6d4" name="Bookings" />
+                      <Bar dataKey="quotations" stackId="a" fill="#f59e0b" name="Quotations" />
+                      <Bar dataKey="jobcards" stackId="a" fill="#2563eb" name="Job Cards" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -734,7 +731,7 @@ export default function Analytics() {
                     { title: "Bookings", dataIndex: "bookings", key: "bookings" },
                     { title: "Quotations", dataIndex: "quotations", key: "quotations" },
                     { title: "Job Cards", dataIndex: "jobcards", key: "jobcards" },
-                    { title: "Collected (₹)", dataIndex: "amount", key: "amount", render: (v) => currencyText(v) },
+                    { title: "Total", dataIndex: "total", key: "total" },
                   ]}
                   dataSource={dailySeries.slice(-10).reverse()}
                   pagination={false}
@@ -747,7 +744,7 @@ export default function Analytics() {
         </Col>
 
         <Col xs={24} lg={12}>
-          <Card title="Sales Performance Tracking" bodyStyle={{ padding: 12 }}>
+          <Card title="Performance Tracking" bodyStyle={{ padding: 12 }}>
             {loading ? (
               <Spin />
             ) : (
@@ -759,7 +756,8 @@ export default function Analytics() {
                       <XAxis dataKey="executive" tick={{ fontSize: 11 }} interval={0} angle={-15} height={50} />
                       <YAxis />
                       <Tooltip />
-                      <Bar dataKey="amount" fill="#22c55e" name="Collected (₹)" />
+                      <Bar dataKey="jobcards" stackId="a" fill="#2563eb" name="Job Cards" />
+                      <Bar dataKey="quotations" stackId="a" fill="#f59e0b" name="Quotations" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -788,7 +786,7 @@ export default function Analytics() {
                   { title: "Executive", dataIndex: "executive", key: "executive" },
                   { title: "Quotations", dataIndex: "quotations", key: "quotations" },
                   { title: "Job Cards", dataIndex: "jobcards", key: "jobcards" },
-                  { title: "Collected (₹)", dataIndex: "amount", key: "amount", render: (v) => currencyText(v) },
+                  { title: "Total", dataIndex: "total", key: "total" },
                 ]}
                 dataSource={branchExecutiveSummary}
                 pagination={{ pageSize: 15, showSizeChanger: true }}

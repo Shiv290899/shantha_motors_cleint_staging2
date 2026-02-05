@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip, Row, Col, Card } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from "dayjs";
@@ -11,7 +11,7 @@ import { handleSmartPrint } from "../utils/printUtils";
 import PostServiceSheet from "./PostServiceSheet";
 
 // GAS endpoints (module-level) so both list + remark share same URL/secret
-const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec";
+const DEFAULT_JC_URL = "https://script.google.com/macros/s/AKfycbxwuwETUUiAoFyksSoEOHVimCtlIZYb6JTQ7yJ8-vkwth9xYwEOlMA8ktiE45UQ6VA3Lg/exec";
 const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
 const GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
 
@@ -43,6 +43,8 @@ export default function Jobcards() {
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryRows, setSummaryRows] = useState([]);
   const [branchFilter, setBranchFilter] = useState("all");
   const [serviceFilter, setServiceFilter] = useState("all"); // free | paid | all
   const [statusFilter, setStatusFilter] = useState("all"); // pending | completed | all
@@ -54,9 +56,9 @@ export default function Jobcards() {
   const [allowedBranches, setAllowedBranches] = useState([]);
   // Controlled pagination
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(25);
   const [renderMode, setRenderMode] = useState('pagination');
-  const [loadedCount, setLoadedCount] = useState(10);
+  const [loadedCount, setLoadedCount] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
   // Default to server pagination enabled unless explicitly disabled by env
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
@@ -152,10 +154,19 @@ export default function Jobcards() {
     const remarkTextRaw = payload?.remark?.text || obj?.RemarkText || obj?.['Remark Text'] || '';
     const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
     const serviceType = fv.serviceType || fv.service || pick(obj, HEAD.serviceType);
+    const savedAt =
+      payload?.savedAt ||
+      payload?.createdAt ||
+      payload?.ts ||
+      payload?.timestamp ||
+      fv?.savedAt ||
+      fv?.createdAt ||
+      fv?.timestamp ||
+      pick(obj, HEAD.ts);
     return {
       key: idx,
-      ts: pick(obj, HEAD.ts),
-      tsMs: parseTsMs(pick(obj, HEAD.ts)),
+      ts: savedAt,
+      tsMs: parseTsMs(savedAt),
       name: fv.name || pick(obj, HEAD.name),
       mobile: fv.mobile || pick(obj, HEAD.mobile),
       branch: fv.branch || pick(obj, HEAD.branch),
@@ -359,19 +370,20 @@ export default function Jobcards() {
         const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
         const data = dataArr.map((o, idx) => mapJobRow(o, idx));
         const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
+        const sortedRows = filteredRows.slice().sort((a, b) => (b.tsMs || 0) - (a.tsMs || 0));
         if (!cancelled) {
-          setRows(filteredRows);
-          const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
+          setRows(sortedRows);
+          const nextTotal = typeof js.total === 'number' ? js.total : sortedRows.length;
           setTotalCount(nextTotal);
           const map = {};
-          filteredRows.forEach(rr => {
+          sortedRows.forEach(rr => {
             if (!rr.jcNo) return;
             const lvl = (typeof rr._remarkLevel !== 'undefined' ? rr._remarkLevel : rr.remarkLevel) ?? String(rr.RemarkLevel || '').toLowerCase();
             const txt = (typeof rr._remarkText !== 'undefined' ? rr._remarkText : rr.remarkText) ?? rr.RemarkText ?? '';
             map[rr.jcNo] = { level: lvl || '', text: txt || '' };
           });
           setRemarksMap(map);
-          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
+          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: sortedRows, total: nextTotal })); } catch {
             //skdhj
           }
         }
@@ -429,19 +441,10 @@ export default function Jobcards() {
     return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
   }, [allowedBranches, branchFilter, dateRange, debouncedQ, serviceFilter, statusFilter, userRole]);
 
-  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
-
-  // Reset pagination when filters/search/date change
-  useEffect(() => {
-    setPage(1);
-    setLoadedCount(pageSize);
-  }, [branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange]);
-  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
-
   const loadExportRows = useCallback(async () => {
     if (!USE_SERVER_PAG) return rows;
     if (!GAS_URL) return rows;
-    const base = { action: 'list', page: 1, pageSize: 10000 };
+    const pageSize = 100;
     const filters = {
       q: debouncedQ || '',
       branch: branchFilter !== 'all' ? branchFilter : '',
@@ -452,19 +455,81 @@ export default function Jobcards() {
       filters.start = dateRange[0].startOf('day').valueOf();
       filters.end = dateRange[1].endOf('day').valueOf();
     }
-    const payload = GAS_SECRET ? { ...base, ...filters, secret: GAS_SECRET } : { ...base, ...filters };
-    const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
-    const js = resp?.data || resp;
-    const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
-    return dataArr.map((o, idx) => mapJobRow(o, idx)).filter((r)=>r.jcNo || r.name || r.mobile);
+    const all = [];
+    const seen = new Set();
+    let page = 1;
+    let maxPages = 200;
+    let total = null;
+    while (page <= maxPages) {
+      const base = { action: 'list', page, pageSize };
+      const payload = GAS_SECRET ? { ...base, ...filters, secret: GAS_SECRET } : { ...base, ...filters };
+      const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+      const js = resp?.data || resp;
+      if (typeof js?.total === 'number' && Number.isFinite(js.total)) {
+        total = js.total;
+        maxPages = Math.ceil(js.total / pageSize);
+      }
+      const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+      if (!dataArr.length) break;
+      let added = 0;
+      dataArr.forEach((row) => {
+        const key = String(row?.values?.['JC No'] || row?.values?.['JC No.'] || row?.values?.['Job Card No'] || row?.jcNo || row?.JCNo || row?.['JC No'] || row?.['JC No.'] || '').trim();
+        const dedupeKey = key || JSON.stringify(row);
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey);
+          all.push(row);
+          added += 1;
+        }
+      });
+      if (total !== null && seen.size >= total) break;
+      if (added === 0) break;
+      if (dataArr.length < pageSize) break;
+      page += 1;
+    }
+    return all.map((o, idx) => mapJobRow(o, idx)).filter((r)=>r.jcNo || r.name || r.mobile);
   }, [USE_SERVER_PAG, GAS_URL, GAS_SECRET, branchFilter, dateRange, debouncedQ, mapJobRow, rows, serviceFilter, statusFilter]);
+
+  const filtered = useMemo(
+    () => (USE_SERVER_PAG ? rows : applyFilters(rows)),
+    [USE_SERVER_PAG, applyFilters, rows]
+  );
+
+  // Branch summary should be based on full filtered dataset, not just visible rows
+  useEffect(() => {
+    let cancelled = false;
+    const loadSummary = async () => {
+      if (!USE_SERVER_PAG) {
+        setSummaryRows(applyFilters(rows));
+        return;
+      }
+      setSummaryLoading(true);
+      try {
+        const baseRows = await loadExportRows();
+        const scoped = applyFilters(baseRows);
+        if (!cancelled) setSummaryRows(scoped);
+      } catch {
+        if (!cancelled) setSummaryRows([]);
+      } finally {
+        if (!cancelled) setSummaryLoading(false);
+      }
+    };
+    loadSummary();
+    return () => { cancelled = true; };
+  }, [USE_SERVER_PAG, loadExportRows, applyFilters, branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange, userRole, allowedBranches, rows]);
+
+  // Reset pagination when filters/search/date change
+  useEffect(() => {
+    setPage(1);
+    setLoadedCount(pageSize);
+  }, [branchFilter, serviceFilter, statusFilter, debouncedQ, dateRange]);
+  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
 
   const handleExportCsv = async () => {
     const msgKey = 'export-jobcards';
     message.loading({ key: msgKey, content: 'Preparing CSV…', duration: 0 });
     try {
       const baseRows = USE_SERVER_PAG ? await loadExportRows() : rows;
-      const scoped = applyFilters(baseRows);
+      const scoped = USE_SERVER_PAG ? baseRows : applyFilters(baseRows);
       if (!scoped.length) {
         message.info({ key: msgKey, content: 'No rows to export for current filters' });
         return;
@@ -643,6 +708,20 @@ export default function Jobcards() {
   const total = USE_SERVER_PAG ? totalCount : rows.length;
   const tableHeight = isMobile ? 420 : 600;
   const visibleRows = USE_SERVER_PAG ? filtered : (renderMode === 'loadMore' ? filtered.slice(0, loadedCount) : filtered);
+  const branchSummary = useMemo(() => {
+    const base = (USE_SERVER_PAG ? summaryRows : filtered) || [];
+    const map = new Map();
+    base.forEach((r) => {
+      const label = String(r.branch || "Unknown").trim() || "Unknown";
+      const key = normalizeKey(label);
+      if (!map.has(key)) {
+        map.set(key, { key, branch: label, total: 0 });
+      }
+      const row = map.get(key);
+      row.total += 1;
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [USE_SERVER_PAG, summaryRows, filtered]);
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -686,6 +765,44 @@ export default function Jobcards() {
           }}>Refresh</Button>
         </Space>
       </div>
+
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        {summaryLoading ? (
+          <Col xs={24}>
+            <Tag color="blue">Loading branch totals…</Tag>
+          </Col>
+        ) : null}
+        {branchSummary.map((b) => (
+          <Col key={b.key} xs={12} sm={8} md={6} lg={4} xl={3}>
+            <Card size="small" bodyStyle={{ padding: "6px 8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{
+                  fontWeight: 600,
+                  fontSize: 12,
+                  lineHeight: "16px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  flex: 1,
+                }}>
+                  {b.branch}
+                </span>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  lineHeight: "16px",
+                  padding: "0 6px",
+                  borderRadius: 10,
+                  background: "#eef2ff",
+                  color: "#1d4ed8",
+                }}>
+                  {b.total}
+                </span>
+              </div>
+            </Card>
+          </Col>
+        ))}
+      </Row>
 
       <Table
         dataSource={visibleRows}

@@ -20,6 +20,7 @@ const DEFAULT_HEADERS = [
   'Customer_Observation',
   'Expected_Delivery_Date',
   'Payload',
+  'Updated At',
   'Payment_Mode',
   'JC No.',
   'RemarkLevel',
@@ -307,6 +308,7 @@ function headerIx_(s){
     idxVehType: pos(/vehicle[\s_]*type/i),
     idxPostAt: pos(/^(post[\s_]*service[\s_]*at|post[\s_]serviced[\s_]at)$/i),
     idxUTR: pos(/^(utr(\sno|\snumber)?)/i),
+    idxUpdatedAt: pos(/updated\s*at/i),
   };
 }
 
@@ -345,7 +347,7 @@ function ensureColAfter_(s, name, afterName){
 
 function ensureCoreOptionalCols_(s){
   let ix = headerIx_(s);
-  ['Executive','Allotted Mechanic','Company','Model','Colour','Odometer Reading','Fuel Level','Vehicle Type','Post Service At','UTR No']
+  ['Executive','Allotted Mechanic','Company','Model','Colour','Odometer Reading','Fuel Level','Vehicle Type','Post Service At','UTR No','Updated At']
     .forEach((col) => { ix = ensureCol_(s, col); });
   ix = ensureColAfter_(s, 'Chassis No', 'Service_Type');
   return ix;
@@ -750,6 +752,7 @@ function upsertByMobile_(d){
   if (existingPayload && typeof existingPayload === 'object') mergedPayload = JSON.parse(JSON.stringify(existingPayload));
   if (d.payload && typeof d.payload === 'object') mergedPayload = mergeObj_(mergedPayload, d.payload);
   mergedPayload.formValues = Object.assign({}, existingFv || {}, fvIncoming || {});
+  const updatedAt = mergedPayload.updatedAt || d.updatedAt || (d.payload && d.payload.updatedAt) || '';
 
   const postAt = (mergedPayload && mergedPayload.postServiceAt) ? mergedPayload.postServiceAt : (d?.payload?.postServiceAt || '');
   const utr = String(d && (d.utr || d.utrNo || (d.payload && (d.payload.utr || d.payload.utrNo)) || '')).trim();
@@ -779,6 +782,7 @@ function upsertByMobile_(d){
 
   put(row, ix.idxPostAt, postAt);
   put(row, ix.idxUTR, utr);
+  put(row, ix.idxUpdatedAt, updatedAt);
 
   if (ix.idxJC >= 0 && (d.jcNo || fv.jcNo)) row[ix.idxJC] = (d.jcNo || fv.jcNo);
 
@@ -838,6 +842,7 @@ function insertNew_(d, mobileCanonical){
     return merged;
   })();
   if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(payloadToStore);
+  put(row, ix.idxUpdatedAt, payloadToStore.updatedAt || d.updatedAt || '');
 
   put(row, ix.idxJC, serial);
 
@@ -1281,9 +1286,19 @@ function list_(opts) {
     const payload = ix.idxPayloads.length ? safeJson_(r[ix.idxPayloads[0]]) : null;
 
     const t = r[ix.idxTime];
+    const savedAtRaw =
+      (payload && (payload.savedAt || payload.createdAt || payload.ts || payload.timestamp)) ||
+      (payload && payload.formValues && (payload.formValues.savedAt || payload.formValues.createdAt || payload.formValues.timestamp)) ||
+      '';
     let tsMs = 0;
-    if (t instanceof Date) tsMs = t.getTime();
-    else if (t) { const d = new Date(String(t)); if (!isNaN(d.getTime())) tsMs = d.getTime(); }
+    if (savedAtRaw) {
+      const d = new Date(String(savedAtRaw));
+      if (!isNaN(d.getTime())) tsMs = d.getTime();
+    }
+    if (!tsMs) {
+      if (t instanceof Date) tsMs = t.getTime();
+      else if (t) { const d = new Date(String(t)); if (!isNaN(d.getTime())) tsMs = d.getTime(); }
+    }
 
     const rowBranch = String(r[ix.idxBranch] || '').trim();
     const execFromPayload = String((payload && payload.formValues && payload.formValues.executive) || '').trim();

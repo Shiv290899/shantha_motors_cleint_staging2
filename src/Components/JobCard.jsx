@@ -44,7 +44,7 @@ const { Option } = Select;
 // Apps Script Web App URL (default set here; env can override)
 // Default Job Card GAS URL
 const DEFAULT_JOBCARD_GAS_URL =
-  "https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec";
+  "https://script.google.com/macros/s/AKfycbxwuwETUUiAoFyksSoEOHVimCtlIZYb6JTQ7yJ8-vkwth9xYwEOlMA8ktiE45UQ6VA3Lg/exec";
 const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
 const JOBCARD_GAS_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 
@@ -1412,9 +1412,21 @@ export default function JobCard({ initialValues = null } = {}) {
           .replace(new RegExp(`^(?:\\s*${OBS_SEP}\\s*)+|(?:\\s*${OBS_SEP}\\s*)+$`, "g"), "")
           .trim();
 
+      const nowIso = new Date().toISOString();
+      const existingSavedAtRaw = vals.savedAt || form.getFieldValue('savedAt') || vals.createdAt;
+      const existingSavedAt = (() => {
+        if (typeof existingSavedAtRaw === 'string' && existingSavedAtRaw.trim()) return existingSavedAtRaw;
+        if (dayjs.isDayjs(existingSavedAtRaw)) return existingSavedAtRaw.toISOString();
+        if (existingSavedAtRaw instanceof Date && !isNaN(existingSavedAtRaw.getTime())) return existingSavedAtRaw.toISOString();
+        return '';
+      })();
+      const savedAt = existingSavedAt || nowIso;
+      try { form.setFieldsValue({ savedAt }); } catch { /* ignore */ }
+
       // Build a payload compatible with FetchJobcard (stores JSON in sheet)
       const payload = {
-        savedAt: new Date().toISOString(),
+        savedAt,
+        updatedAt: nowIso,
         // follow-up removed per request
         formValues: {
           jcNo: jc,
@@ -1547,8 +1559,21 @@ export default function JobCard({ initialValues = null } = {}) {
       }
 
       // Minimal post-service payload per requirement (plus payments)
+      const nowIso = new Date().toISOString();
+      const existingSavedAtRaw = valsNow.savedAt || form.getFieldValue('savedAt') || valsNow.createdAt;
+      const existingSavedAt = (() => {
+        if (typeof existingSavedAtRaw === 'string' && existingSavedAtRaw.trim()) return existingSavedAtRaw;
+        if (dayjs.isDayjs(existingSavedAtRaw)) return existingSavedAtRaw.toISOString();
+        if (existingSavedAtRaw instanceof Date && !isNaN(existingSavedAtRaw.getTime())) return existingSavedAtRaw.toISOString();
+        return '';
+      })();
+      const savedAt = existingSavedAt || nowIso;
+      try { form.setFieldsValue({ savedAt }); } catch { /* ignore */ }
+
       const payload = {
-        postServiceAt: new Date().toISOString(),
+        savedAt,
+        updatedAt: nowIso,
+        postServiceAt: nowIso,
         formValues: {
           mechanic: valsNow.mechanic || '',
           executive: valsNow.executive || '',

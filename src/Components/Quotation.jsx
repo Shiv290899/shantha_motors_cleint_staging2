@@ -279,7 +279,7 @@ export default function Quotation() {
   const [docsReq, setDocsReq] = useState(DOCS_REQUIRED);
   const [extraVehicles, setExtraVehicles] = useState([]); // up to 3 records (V2..V4)
   const [userStaffName, setUserStaffName] = useState();
-  const [userRole, setUserRole] = useState("");
+  const [, setUserRole] = useState("");
   // Defaults for restore if fields get cleared
   const [defaultBranchName, setDefaultBranchName] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]); // [{id,name,code}]
@@ -1751,13 +1751,6 @@ export default function Quotation() {
                       </div>
                     ))}
                   </Checkbox.Group>
-                </Form.Item>
-              </Col>
-
-              {/* Remarks */}
-              <Col xs={24}>
-                <Form.Item label="Remarks" name="remarks">
-                  <Input.TextArea rows={2} placeholder="Any notes for this quotation (optional)" />
                 </Form.Item>
               </Col>
 

@@ -430,6 +430,12 @@ export default function FetchJobcard({
 
   const applyRowToForm = (row) => {
     const { fields, serviceType, vehicleType } = mapRowToForm(row);
+    try {
+      const createdAt = parseTimestamp(row);
+      if (createdAt && createdAt.isValid && createdAt.isValid()) {
+        fields.savedAt = createdAt.toISOString();
+      }
+    } catch { /* ignore */ }
 
     if (applyModeRef.current === "basic") {
       applyBasicFields(fields);
@@ -479,6 +485,24 @@ export default function FetchJobcard({
       }
 
       const fv = p?.formValues || {};
+      const savedAtRaw =
+        p?.savedAt ||
+        p?.createdAt ||
+        p?.ts ||
+        p?.timestamp ||
+        fv.savedAt ||
+        fv.createdAt ||
+        fv.timestamp ||
+        '';
+      const updatedAtRaw = p?.updatedAt || fv.updatedAt || '';
+      const savedAt = (() => {
+        const d = dayjs(savedAtRaw);
+        return d.isValid() ? d.toISOString() : savedAtRaw;
+      })();
+      const updatedAt = (() => {
+        const d = dayjs(updatedAtRaw);
+        return d.isValid() ? d.toISOString() : updatedAtRaw;
+      })();
       const serviceType = fv.serviceType || null;
       const vehicleType = fv.vehicleType || null;
 
@@ -514,6 +538,8 @@ export default function FetchJobcard({
         discounts: { labour: savedDiscount },
         gstLabour: derivedGstPct,
         labourRows: Array.isArray(p?.labourRows) && p.labourRows.length ? p.labourRows : buildRows(serviceType, vehicleType),
+        savedAt: savedAt || undefined,
+        updatedAt: updatedAt || undefined,
       });
       setRegDisplay?.(fv.regNo || '');
       // Restore follow-up settings if provided in saved payload

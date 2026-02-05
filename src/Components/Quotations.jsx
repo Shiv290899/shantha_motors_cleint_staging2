@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip, Row, Col, Card } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
@@ -112,6 +112,8 @@ export default function Quotations() {
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryRows, setSummaryRows] = useState([]);
   const [branchFilter, setBranchFilter] = useState("all");
   const [modeFilter, setModeFilter] = useState("all"); // cash | loan | all
   const [statusFilter, setStatusFilter] = useState("all");
@@ -123,9 +125,9 @@ export default function Quotations() {
   const [allowedBranches, setAllowedBranches] = useState([]);
   // Controlled pagination
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(25);
   const [renderMode, setRenderMode] = useState('pagination');
-  const [loadedCount, setLoadedCount] = useState(10);
+  const [loadedCount, setLoadedCount] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
   // Default to server pagination so no env is required
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
@@ -373,20 +375,11 @@ export default function Quotations() {
     return scoped.slice().sort((a,b)=> (b.tsMs||0) - (a.tsMs||0));
   }, [allowedBranches, branchFilter, dateRange, debouncedQ, modeFilter, statusFilter, userRole]);
 
-  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
-
-  // Reset pagination on filters/search/date change
-  useEffect(() => {
-    setPage(1);
-    setLoadedCount(pageSize);
-  }, [branchFilter, modeFilter, statusFilter, debouncedQ, dateRange]);
-  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
-
   const loadExportRows = useCallback(async () => {
     if (!USE_SERVER_PAG) return rows;
     const { GAS_URL, SECRET } = gasConfig;
     if (!GAS_URL) return rows;
-    const base = { action: 'list', page: 1, pageSize: 10000 };
+    const pageSize = 100;
     const filters = {
       q: debouncedQ || '',
       branch: branchFilter !== 'all' ? branchFilter : '',
@@ -397,12 +390,68 @@ export default function Quotations() {
       filters.start = dateRange[0].startOf('day').valueOf();
       filters.end = dateRange[1].endOf('day').valueOf();
     }
-    const payload = SECRET ? { ...base, ...filters, secret: SECRET } : { ...base, ...filters };
-    const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
-    const js = resp?.data || resp;
-    const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
-    return dataArr.map((o, idx) => mapRow(o, idx)).filter((r)=>r.name || r.mobile || r.serialNo);
+    const all = [];
+    const seen = new Set();
+    let page = 1;
+    let maxPages = 200;
+    while (page <= maxPages) {
+      const base = { action: 'list', page, pageSize };
+      const payload = SECRET ? { ...base, ...filters, secret: SECRET } : { ...base, ...filters };
+      const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'GET', payload });
+      const js = resp?.data || resp;
+      if (typeof js?.total === 'number' && Number.isFinite(js.total)) {
+        maxPages = Math.ceil(js.total / pageSize);
+      }
+      const dataArr = Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []);
+      if (!dataArr.length) break;
+      let added = 0;
+      dataArr.forEach((row) => {
+        const key = String(row?.values?.['Quotation No.'] || row?.values?.['Quotation No'] || row?.values?.['Serial'] || row?.serialNo || row?.['Quotation No.'] || row?.['Quotation No'] || row?.['Serial'] || '').trim();
+        const dedupeKey = key || JSON.stringify(row);
+        if (!seen.has(dedupeKey)) {
+          seen.add(dedupeKey);
+          all.push(row);
+          added += 1;
+        }
+      });
+      if (added === 0) break;
+      if (dataArr.length < pageSize) break;
+      page += 1;
+    }
+    return all.map((o, idx) => mapRow(o, idx)).filter((r)=>r.name || r.mobile || r.serialNo);
   }, [USE_SERVER_PAG, gasConfig, branchFilter, dateRange, debouncedQ, mapRow, modeFilter, rows, statusFilter]);
+
+  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
+
+  // Branch summary should be based on full filtered dataset, not just visible rows
+  useEffect(() => {
+    let cancelled = false;
+    const loadSummary = async () => {
+      if (!USE_SERVER_PAG) {
+        setSummaryRows(filtered);
+        return;
+      }
+      setSummaryLoading(true);
+      try {
+        const baseRows = await loadExportRows();
+        const scoped = applyFilters(baseRows);
+        if (!cancelled) setSummaryRows(scoped);
+      } catch {
+        if (!cancelled) setSummaryRows([]);
+      } finally {
+        if (!cancelled) setSummaryLoading(false);
+      }
+    };
+    loadSummary();
+    return () => { cancelled = true; };
+  }, [USE_SERVER_PAG, loadExportRows, applyFilters, branchFilter, modeFilter, statusFilter, debouncedQ, dateRange, userRole, allowedBranches]);
+
+  // Reset pagination on filters/search/date change
+  useEffect(() => {
+    setPage(1);
+    setLoadedCount(pageSize);
+  }, [branchFilter, modeFilter, statusFilter, debouncedQ, dateRange]);
+  useEffect(() => { setLoadedCount(pageSize); }, [pageSize]);
 
   const handleExportCsv = async () => {
     const msgKey = 'export-quotations';
@@ -589,6 +638,20 @@ export default function Quotations() {
   const total = USE_SERVER_PAG ? totalCount : rows.length;
   const tableHeight = isMobile ? 420 : 600;
   const visibleRows = USE_SERVER_PAG ? filtered : (renderMode === 'loadMore' ? filtered.slice(0, loadedCount) : filtered);
+  const branchSummary = useMemo(() => {
+    const base = (USE_SERVER_PAG ? summaryRows : filtered) || [];
+    const map = new Map();
+    base.forEach((r) => {
+      const label = String(r.branch || "Unknown").trim() || "Unknown";
+      const key = normalizeKey(label);
+      if (!map.has(key)) {
+        map.set(key, { key, branch: label, total: 0 });
+      }
+      const row = map.get(key);
+      row.total += 1;
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [USE_SERVER_PAG, summaryRows, filtered]);
 
   return (
     <div style={{ paddingTop: 12 }}>
@@ -631,6 +694,44 @@ export default function Quotations() {
           }}>Refresh</Button>
         </Space>
       </div>
+
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        {summaryLoading ? (
+          <Col xs={24}>
+            <Tag color="blue">Loading branch totals…</Tag>
+          </Col>
+        ) : null}
+        {branchSummary.map((b) => (
+          <Col key={b.key} xs={12} sm={8} md={6} lg={4} xl={3}>
+            <Card size="small" bodyStyle={{ padding: "6px 8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{
+                  fontWeight: 600,
+                  fontSize: 12,
+                  lineHeight: "16px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  flex: 1,
+                }}>
+                  {b.branch}
+                </span>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  lineHeight: "16px",
+                  padding: "0 6px",
+                  borderRadius: 10,
+                  background: "#eef2ff",
+                  color: "#1d4ed8",
+                }}>
+                  {b.total}
+                </span>
+              </div>
+            </Card>
+          </Col>
+        ))}
+      </Row>
 
       <Table
         dataSource={visibleRows}

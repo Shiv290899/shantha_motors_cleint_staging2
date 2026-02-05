@@ -1728,21 +1728,6 @@ export default function BookingForm({
                   setOnRoadPriceOverride(next);
                 }}
               />
-              <Button
-                size={ctlSize}
-                onClick={() => {
-                  if (!onRoadPriceEditing) {
-                    setOnRoadPriceOverride((cur) =>
-                      cur == null ? Number(selectedOnRoadPrice || 0) || 0 : cur
-                    );
-                    setOnRoadPriceEditing(true);
-                    return;
-                  }
-                  setOnRoadPriceEditing(false);
-                }}
-              >
-                {onRoadPriceEditing ? "Lock" : "Edit"}
-              </Button>
             </div>
           </Form.Item>
         </Col>

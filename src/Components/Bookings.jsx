@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Tooltip, Typography, Modal, Upload, DatePicker, AutoComplete, Form, Divider, Row, Col } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, message, Popover, Tooltip, Typography, Modal, Upload, DatePicker, AutoComplete, Form, Divider, Row, Col, Card } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 // Sheet-only remarks; no backend remarks API
 import dayjs from 'dayjs';
@@ -53,9 +53,9 @@ export default function Bookings() {
   const debouncedQ = useDebouncedValue(q, 300);
   // Controlled pagination
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(25);
   const [renderMode, setRenderMode] = useState('pagination'); // 'pagination' | 'loadMore'
-  const [loadedCount, setLoadedCount] = useState(10);
+  const [loadedCount, setLoadedCount] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
   // Default to server pagination without requiring env var
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
@@ -69,6 +69,8 @@ export default function Bookings() {
   const [executiveOptions, setExecutiveOptions] = useState([]);
   const [dropdownLoading, setDropdownLoading] = useState(false);
   const [filterSourceRows, setFilterSourceRows] = useState([]);
+  const [summaryRows, setSummaryRows] = useState([]);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [stockItems, setStockItems] = useState([]);
   const [stockLoading, setStockLoading] = useState(false);
   const [stockLoadedAt, setStockLoadedAt] = useState(0);
@@ -234,6 +236,52 @@ export default function Bookings() {
     load();
     return () => { cancelled = true; };
   }, [GAS_URL_STATIC, GAS_SECRET_STATIC, mapRow]);
+
+  // Fetch all rows for branch summary (respects filters)
+  useEffect(() => {
+    let cancelled = false;
+    const loadAll = async () => {
+      if (!GAS_URL_STATIC) return;
+      setSummaryLoading(true);
+      try {
+        const SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || '';
+        const pageSize = 5000;
+        let page = 1;
+        let all = [];
+        for (;;) {
+          const base = { action: 'list' };
+          const filters = {
+            q: debouncedQ || '',
+            branch: branchFilter !== 'all' ? branchFilter : '',
+            status: statusFilter !== 'all' ? statusFilter : '',
+          };
+          if (dateRange && dateRange[0] && dateRange[1]) {
+            filters.start = dateRange[0].startOf('day').valueOf();
+            filters.end = dateRange[1].endOf('day').valueOf();
+          }
+          const payload = SECRET
+            ? { ...base, page, pageSize, ...filters, secret: SECRET }
+            : { ...base, page, pageSize, ...filters };
+          const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'GET', payload });
+          const js = resp?.data || resp;
+          const dataArr = Array.isArray(js?.data) ? js.data : [];
+          all = all.concat(dataArr.map((o, idx) => mapRow(o, idx)));
+          const total = typeof js?.total === 'number' ? js.total : null;
+          if (total !== null && all.length >= total) break;
+          if (dataArr.length === 0) break;
+          page += 1;
+          if (page > 200) break;
+        }
+        if (!cancelled) setSummaryRows(all);
+      } catch {
+        if (!cancelled) setSummaryRows([]);
+      } finally {
+        if (!cancelled) setSummaryLoading(false);
+      }
+    };
+    loadAll();
+    return () => { cancelled = true; };
+  }, [debouncedQ, branchFilter, statusFilter, dateRange, GAS_URL_STATIC, mapRow]);
 
   // Server-mode: refetch on filters/page change
   useEffect(() => {
@@ -1102,6 +1150,20 @@ export default function Bookings() {
   const total = USE_SERVER_PAG ? totalCount : rows.length;
   const tableHeight = isMobile ? 420 : 600;
   const visibleRows = USE_SERVER_PAG ? filtered : (renderMode === 'loadMore' ? filtered.slice(0, loadedCount) : filtered);
+  const branchSummary = useMemo(() => {
+    const scoped = summaryRows.length ? summaryRows : applyFilters(filterSourceRows.length ? filterSourceRows : rows);
+    const map = new Map();
+    (scoped || []).forEach((r) => {
+      const label = String(r.branch || "Unknown").trim() || "Unknown";
+      const key = normalizeKey(label);
+      if (!map.has(key)) {
+        map.set(key, { key, branch: label, total: 0 });
+      }
+      const row = map.get(key);
+      row.total += 1;
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [applyFilters, filterSourceRows, rows, summaryRows]);
 
   return (
     <div>
@@ -1150,6 +1212,44 @@ export default function Bookings() {
           }}>Refresh</Button>
         </Space>
       </div>
+
+      <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+        {summaryLoading ? (
+          <Col xs={24}>
+            <Tag color="blue">Loading branch totals…</Tag>
+          </Col>
+        ) : null}
+        {branchSummary.map((b) => (
+          <Col key={b.key} xs={12} sm={8} md={6} lg={4} xl={3}>
+            <Card size="small" bodyStyle={{ padding: "6px 8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{
+                  fontWeight: 600,
+                  fontSize: 12,
+                  lineHeight: "16px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  flex: 1,
+                }}>
+                  {b.branch}
+                </span>
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  lineHeight: "16px",
+                  padding: "0 6px",
+                  borderRadius: 10,
+                  background: "#eef2ff",
+                  color: "#1d4ed8",
+                }}>
+                  {b.total}
+                </span>
+              </div>
+            </Card>
+          </Col>
+        ))}
+      </Row>
 
       <Table
         dataSource={visibleRows}

@@ -9,7 +9,7 @@ export default function StaffAccountCard() {
   const navigate = useNavigate();
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbw7DzKCy3wZeeRBEM5XKIu6w0gt_2ouCaSkpaKv0UkjkQThCtVoRciOkkYT8sNViQuEaw/exec';
+  const DEFAULT_JC_URL = 'https://script.google.com/macros/s/AKfycbxwuwETUUiAoFyksSoEOHVimCtlIZYb6JTQ7yJ8-vkwth9xYwEOlMA8ktiE45UQ6VA3Lg/exec';
   const GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JC_URL;
   const SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || '';
   const DEFAULT_BOOKING_URL = 'https://script.google.com/macros/s/AKfycbwSn5hp1cSWlJMGhe2cYUtid2Ruqh9H13mZbq0PwBpYB0lMLufZbIjZ5zioqtKgE_0sNA/exec';
@@ -536,11 +536,11 @@ export default function StaffAccountCard() {
           <div>
             <Text strong>Sales</Text>
             <Text type='secondary' style={{ fontSize: 12, marginLeft: 6 }}>Pending Balance (Bookings)</Text>
-            <div style={{ marginTop: 8, display:'grid', gap: 8 }}>
+            <div style={{ marginTop: 8, display:'grid', gap: 8, maxHeight: isMobile ? 220 : 240, overflowY: 'auto', paddingRight: 4 }}>
               {pendingLoading ? (
                 <div style={{ padding: 8 }}><Spin size='small' /></div>
               ) : pendingSalesRows.length ? (
-                pendingSalesRows.slice(0, 8).map((r) => (
+                pendingSalesRows.map((r) => (
                   <div
                     key={r.key}
                     style={{
@@ -669,9 +669,10 @@ async function fetchPendingJobcards({ GAS_URL, SECRET, branch }){
 
 async function fetchPendingBookings({ BOOKING_GAS_URL, BOOKING_SECRET, branch }){
   if (!BOOKING_GAS_URL || !branch) return [];
-  const payload = BOOKING_SECRET
+  const basePayload = BOOKING_SECRET
     ? { action:'list', page: 1, pageSize: 10000, secret: BOOKING_SECRET }
     : { action:'list', page: 1, pageSize: 10000 };
+  const payload = branch ? { ...basePayload, branch } : basePayload;
   const resp = await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method:'GET', payload });
   const js = resp?.data || resp || {};
   const rows = Array.isArray(js?.rows) ? js.rows : (Array.isArray(js?.data) ? js.data : []);
@@ -711,9 +712,8 @@ async function fetchPendingBookings({ BOOKING_GAS_URL, BOOKING_SECRET, branch })
   });
   return items
     .filter((r) => normalizeText(r.branch) === branchNorm)
-    .filter((r) => Number(r.balanceValue || 0) > 0.01)
-    .sort((a, b) => (asTimeMs(b.dateAt) - asTimeMs(a.dateAt)))
-    .slice(0, 50);
+    .filter((r) => Number(r.balanceValue || 0) > BALANCE_TOLERANCE)
+    .sort((a, b) => (asTimeMs(b.dateAt) - asTimeMs(a.dateAt)));
 }
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
@@ -785,6 +785,67 @@ const parseMoneyValue = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
+const sumByKeys = (obj = {}, keys = []) =>
+  keys.reduce((sum, key) => sum + parseMoneyValue(obj?.[key]), 0);
+
+const sumPaymentsArray = (payments) =>
+  (Array.isArray(payments) ? payments : []).reduce(
+    (sum, pay) => sum + parseMoneyValue(pay?.amount),
+    0
+  );
+
+const deriveBookingPaymentInfo = ({ payload = {}, values = {}, collected = 0 }) => {
+  const mainTarget = [
+    payload.bookingAmount,
+    payload.bookingTarget,
+    values["Booking Amount"],
+    values["Booking_Amount"],
+    values.bookingAmount,
+    values["Total Booking Amount"],
+  ]
+    .map(parseMoneyValue)
+    .find((v) => v > 0);
+  const fallbackTarget =
+    sumByKeys(payload, ["bookingAmount1", "bookingAmount2", "bookingAmount3"]) ||
+    sumByKeys(values, [
+      "Booking Amount 1",
+      "Booking Amount 2",
+      "Booking Amount 3",
+    ]);
+  const target = mainTarget || fallbackTarget || 0;
+
+  const paidCandidates = [
+    parseMoneyValue(payload.totalCollected),
+    parseMoneyValue(payload.cashCollected) + parseMoneyValue(payload.onlineCollected),
+    sumPaymentsArray(payload.payments),
+    sumByKeys(payload, [
+      "bookingAmount1Cash",
+      "bookingAmount1Online",
+      "bookingAmount2Cash",
+      "bookingAmount2Online",
+      "bookingAmount3Cash",
+      "bookingAmount3Online",
+    ]),
+    sumByKeys(values, [
+      "Booking Amount 1 Cash",
+      "Booking Amount 1 Online",
+      "Booking Amount 2 Cash",
+      "Booking Amount 2 Online",
+      "Booking Amount 3 Cash",
+      "Booking Amount 3 Online",
+    ]),
+    parseMoneyValue(values["Collected Amount"]),
+    parseMoneyValue(values.Amount),
+    parseMoneyValue(collected),
+  ];
+  const paid = Math.max(...paidCandidates, 0);
+
+  const hasTarget = target > 0;
+  const tolerance = 0.01;
+  const isPending = hasTarget ? paid + tolerance < target : null;
+  return { target, paid, hasTarget, isPending };
+};
+
 const parseJsonValue = (value) => {
   if (value === null || value === undefined) return null;
   if (typeof value === "object") return value;
@@ -806,6 +867,9 @@ const safePositiveNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) && num >= 0 ? num : null;
 };
+
+const BALANCE_TOLERANCE = 0.01;
+const BALANCE_KEY_PATTERN = /balance/i;
 
 const readNumberCandidate = (value) => {
   if (value === null || value === undefined) return { found: false };
@@ -842,6 +906,35 @@ const scanPathsForNumbers = (sources, paths = []) => {
       if (value === null || value === undefined) continue;
       const candidate = readNumberCandidate(value);
       if (candidate.found) results.push(candidate.value);
+    }
+  }
+  return results;
+};
+
+const gatherNumbersByPattern = (source, pattern, depth = 3, seen = new WeakSet()) => {
+  if (!source || typeof source !== "object" || depth < 0) return [];
+  if (seen.has(source)) return [];
+  seen.add(source);
+  const entries = Array.isArray(source)
+    ? source.map((value, idx) => [String(idx), value])
+    : Object.entries(source);
+  const results = [];
+  for (const [key, value] of entries) {
+    if (pattern.test(String(key || ""))) {
+      const candidate = readNumberCandidate(value);
+      if (candidate.found) results.push(candidate.value);
+    }
+    if (value && typeof value === "object") {
+      results.push(
+        ...gatherNumbersByPattern(value, pattern, depth - 1, seen)
+      );
+    } else if (typeof value === "string") {
+      const parsed = parseJsonValue(value);
+      if (parsed && typeof parsed === "object") {
+        results.push(
+          ...gatherNumbersByPattern(parsed, pattern, depth - 1, seen)
+        );
+      }
     }
   }
   return results;
@@ -1122,12 +1215,24 @@ const computeBookingBalance = ({ payload = {}, values = {}, rawPayload = null })
     ? pendingInfo.pendingAmount
     : null;
   const computedBalanceLabel = pendingInfo?.pendingLabel || "";
-  const balanceValue =
+  let balanceValue =
     computedBalanceValue !== null
       ? computedBalanceValue
       : financedPurchase && dpValue !== null
         ? dpValue
         : cashValue;
+
+  if (balanceValue === null || !Number.isFinite(balanceValue)) {
+    const payloadCandidates = gatherNumbersByPattern(payload, BALANCE_KEY_PATTERN, 3);
+    const valuesCandidates = gatherNumbersByPattern(values, BALANCE_KEY_PATTERN, 2);
+    const rawCandidates = rawPayload && typeof rawPayload === 'object'
+      ? gatherNumbersByPattern(rawPayload, BALANCE_KEY_PATTERN, 2)
+      : [];
+    const candidates = [...payloadCandidates, ...valuesCandidates, ...rawCandidates]
+      .filter((v) => Number.isFinite(v) && v > BALANCE_TOLERANCE);
+    if (candidates.length) balanceValue = Math.max(...candidates);
+  }
+
   const balanceLabel =
     computedBalanceLabel ||
     (financedPurchase && balanceValue !== null ? "Balanced DP" : "Balanced Amount");
