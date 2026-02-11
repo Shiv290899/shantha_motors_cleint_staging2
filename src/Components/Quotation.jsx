@@ -297,6 +297,7 @@ export default function Quotation() {
   const [pendingItems, setPendingItems] = useState([]);
   const [pendingLoaded, setPendingLoaded] = useState(false);
   const [pendingAutoApply, setPendingAutoApply] = useState(null);
+  const [loadedQuoteMeta, setLoadedQuoteMeta] = useState({ serialNo: "", savedAt: "", createdAt: "" });
 
   // Outbox for optimistic background submission (local-only)
   const OUTBOX_KEY = 'Quotation:outbox';
@@ -984,6 +985,7 @@ export default function Quotation() {
     setFollowUpEnabled(true);
     setFollowUpAt(dayjs().add(2, 'day').hour(10).minute(0).second(0).millisecond(0));
     setFollowUpNotes("");
+    setLoadedQuoteMeta({ serialNo: "", savedAt: "", createdAt: "" });
 
     // Restore default branch and executive
     const patch = {};
@@ -1092,10 +1094,22 @@ export default function Quotation() {
       fittingsLine
     ].filter(Boolean).join(" | ");
 
+    // Keep original creation timestamp stable for existing quotations.
+    const nowIso = new Date().toISOString();
+    const loadedSerial = String(loadedQuoteMeta?.serialNo || "").trim();
+    const currentSerial = String(v.serialNo || "").trim();
+    const sameLoadedQuote = loadedSerial && currentSerial && loadedSerial === currentSerial;
+    const lockedSavedAt = sameLoadedQuote ? String(loadedQuoteMeta?.savedAt || "").trim() : "";
+    const lockedCreatedAt = sameLoadedQuote
+      ? String(loadedQuoteMeta?.createdAt || loadedQuoteMeta?.savedAt || "").trim()
+      : "";
+
     // Build payload AFTER we have v and mergedRemarks
     const payload = {
       version: 1,
-      savedAt: new Date().toISOString(),
+      savedAt: lockedSavedAt || nowIso,
+      createdAt: lockedCreatedAt || lockedSavedAt || nowIso,
+      updatedAt: nowIso,
       brand,                // "SHANTHA" | "NH"
       mode,                 // "cash" | "loan"
       vehicleType,          // "scooter" | "motorcycle"
@@ -1111,6 +1125,7 @@ export default function Quotation() {
         enabled: Boolean(followUpEnabled),
         at: followUpEnabled && followUpAt && dayjs(followUpAt).isValid() ? dayjs(followUpAt).toISOString() : null,
         notes: String(followUpNotes || ""),
+        updatedAt: nowIso,
         assignedTo: v.executive || userStaffName || "",
         branch: v.branch || "",
         customer: { name: v.name || "", mobile: v.mobile || "" },
@@ -1131,6 +1146,11 @@ export default function Quotation() {
       },
       extraVehicles,        // [{company, model, variant, onRoadPrice, downPayment, emiSet}, ...]
     };
+    setLoadedQuoteMeta({
+      serialNo: v.serialNo,
+      savedAt: payload.savedAt,
+      createdAt: payload.createdAt,
+    });
      // kept in case of debugging
     // Queue background save to Apps Script via webhook
     const data = {
@@ -1413,6 +1433,7 @@ export default function Quotation() {
                       setFollowUpEnabled={setFollowUpEnabled}
                       setFollowUpAt={setFollowUpAt}
                       setFollowUpNotes={setFollowUpNotes}
+                      onPayloadApplied={setLoadedQuoteMeta}
                       autoApply={pendingAutoApply}
                       buttonText="Fetch Details"
                       buttonProps={{

@@ -31,6 +31,7 @@ export default function FetchQuot({
   setFollowUpEnabled,
   setFollowUpAt,
   setFollowUpNotes,
+  onPayloadApplied,
   autoApply,
   buttonText = "Fetch Details",
   buttonProps = {},
@@ -215,6 +216,11 @@ export default function FetchQuot({
 
       // keep mirror in sync
       setOnRoadPrice?.(Number(fv.onRoadPrice ?? data.onRoadPrice ?? 0));
+      onPayloadApplied?.({
+        serialNo: fv.serialNo || data.serialNo || "",
+        savedAt: data.savedAt || "",
+        createdAt: data.createdAt || fv.createdAt || "",
+      });
 
       message.success("Quotation loaded.");
       setOpen(false);

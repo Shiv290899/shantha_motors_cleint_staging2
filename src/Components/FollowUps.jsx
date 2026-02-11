@@ -160,39 +160,81 @@ const buildEmiText = (price, dp, emiSet) => {
   return parts.length ? `EMI(${emiSet || "12"}): ${parts.join(" | ")}` : "";
 };
 
-const buildQuotationOfferingsText = (row) => {
-  if (!row) return "";
-  const remarks = String(row.remarks || "").trim();
+
+
+const uniqueNonEmpty = (list = []) =>
+  Array.from(
+    new Set(
+      (Array.isArray(list) ? list : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+const buildQuotationOfferingDetails = (row) => {
+  if (!row) return { remarks: "", vehicles: [] };
   const p = row.payload || {};
   const fv = p.formValues || {};
-  const extra = Array.isArray(p.extraVehicles) ? p.extraVehicles : [];
-  const offerings = [];
-  const addVehicleOffer = (label, priceRaw, dpRaw, emiSetRaw) => {
+  const globalFittings = uniqueNonEmpty(p.fittings);
+  const remarks = String(row.remarks || fv.remarks || p.remarks || "").trim();
+  const vehicles = [];
+
+  const addVehicle = ({
+    label,
+    company,
+    model,
+    variant,
+    priceRaw,
+    dpRaw,
+    emiSetRaw,
+    fittingsRaw,
+  }) => {
+    const cleanCompany = String(company || "").trim();
+    const cleanModel = String(model || "").trim();
+    const cleanVariant = String(variant || "").trim();
     const price = Number(priceRaw || 0);
     const dp = Number(dpRaw || 0);
-    if (!(price || dp)) return;
-    const parts = [];
-    if (price) parts.push(`Price ${formatCurrency(price)}`);
-    if (dp) parts.push(`DP ${formatCurrency(dp)}`);
-    const emiText = buildEmiText(price, dp, emiSetRaw || p.emiSet || "12");
-    if (emiText) parts.push(emiText);
-    offerings.push(`${label}: ${parts.join(" | ")}`);
+    const fittings = uniqueNonEmpty(fittingsRaw || globalFittings);
+    const title = [cleanCompany, cleanModel, cleanVariant].filter(Boolean).join(" ");
+    const hasMeta = Boolean(title || fittings.length || price || dp);
+    if (!hasMeta) return;
+
+    vehicles.push({
+      label,
+      title: title || "Vehicle details not available",
+      fittings,
+      priceText: price ? formatCurrency(price) : "—",
+      dpText: dp ? formatCurrency(dp) : "—",
+      emiText: price ? buildEmiText(price, dp, emiSetRaw || p.emiSet || "12") : "",
+    });
   };
-  addVehicleOffer(
-    "V1",
-    fv.onRoadPrice ?? p.onRoadPrice,
-    fv.downPayment ?? p.downPayment,
-    p.emiSet
-  );
-  extra.forEach((ev, idx) => {
-    addVehicleOffer(
-      `V${idx + 2}`,
-      ev.onRoadPrice,
-      ev.downPayment,
-      ev.emiSet || p.emiSet
-    );
+
+  addVehicle({
+    label: "Vehicle 1",
+    company: fv.company ?? p.company,
+    model: fv.bikeModel ?? fv.model ?? p.model ?? row.model,
+    variant: fv.variant ?? p.variant ?? row.variant,
+    priceRaw: fv.onRoadPrice ?? p.onRoadPrice ?? row.price,
+    dpRaw: fv.downPayment ?? p.downPayment,
+    emiSetRaw: p.emiSet,
+    fittingsRaw: p.fittings,
   });
-  return [remarks, ...offerings].filter(Boolean).join(" • ");
+
+  const extra = Array.isArray(p.extraVehicles) ? p.extraVehicles : [];
+  extra.forEach((ev, idx) => {
+    addVehicle({
+      label: `Vehicle ${idx + 2}`,
+      company: ev.company,
+      model: ev.model,
+      variant: ev.variant,
+      priceRaw: ev.onRoadPrice,
+      dpRaw: ev.downPayment,
+      emiSetRaw: ev.emiSet || p.emiSet,
+      fittingsRaw: ev.fittings,
+    });
+  });
+
+  return { remarks, vehicles };
 };
 
 /**
@@ -1455,21 +1497,23 @@ const extractRawPayloadObject = (...sources) => {
   const fmt = (d) => (d && d.isValid && d.isValid()) ? d.format('DD-MM-YYYY HH:mm') : '—';
   const stackStyle = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.2 };
   const lineStyle = { whiteSpace: isMobile ? 'normal' : 'nowrap', overflow: 'hidden', textOverflow: isMobile ? 'clip' : 'ellipsis' };
-  const smallLineStyle = { ...lineStyle, fontSize: isMobile ? 11 : 10 };
-  const tinyLineStyle = { ...lineStyle, fontSize: isMobile ? 10 : 9 };
+  const smallLineStyle = { ...lineStyle, fontSize: isMobile ? 12 : 11 };
+  
   const twoLineClamp = {
     display: '-webkit-box',
     WebkitBoxOrient: 'vertical',
     WebkitLineClamp: isMobile ? 4 : 3,
     overflow: 'hidden',
     whiteSpace: 'normal',
-    fontSize: isMobile ? 9 : 8,
-    lineHeight: 1,
+    fontSize: isMobile ? 11 : 10,
+    lineHeight: 1.25,
   };
   const offeringClamp = {
     ...twoLineClamp,
-    WebkitLineClamp: isMobile ? 3 : 4,
-    fontSize: isMobile ? 8 : 7,
+    WebkitLineClamp: 2,
+    fontSize: isMobile ? 11 : 10.5,
+    fontWeight: 600,
+    color: '#1f2937',
   };
 
   const filteredRows = React.useMemo(() => {
@@ -1895,28 +1939,63 @@ const extractRawPayloadObject = (...sources) => {
     { title: 'Status + File', key: 'statusFile', width: 170, render: (_, r) => renderBookingStatusFile(r) },
     { title: 'Balance', key: 'balance', width: 140, render: (_, r) => renderBookingBalance(r) },
   ] : [
-    { title: 'Date / Branch', key: 'dateBranch', width: 100, render: (_, r) => (
+    { title: 'Date / Branch', key: 'dateBranch', width: 145, render: (_, r) => (
       <div style={stackStyle}>
-        <div style={tinyLineStyle}>{fmt(r.dateAt)}</div>
-        <div style={tinyLineStyle}>{r.branch || '—'}</div>
+        <div style={{ ...smallLineStyle, fontWeight: 700 }}>{fmt(r.dateAt)}</div>
+        <div style={{ ...smallLineStyle, color: '#475569' }}>{r.branch || '—'}</div>
       </div>
     ) },
-    { title: 'Customer / Mobile', key: 'customerMobile', width: 120, render: (_, r) => (
+    { title: 'Customer / Mobile', key: 'customerMobile', width: 165, render: (_, r) => (
       <div style={stackStyle}>
-        <div style={tinyLineStyle}>{r.name || '—'}</div>
-        <div style={tinyLineStyle}>{r.mobile || '—'}</div>
+        <div style={{ ...smallLineStyle, fontWeight: 700 }}>{r.name || '—'}</div>
+        <div style={{ ...smallLineStyle, color: '#334155' }}>{r.mobile || '—'}</div>
       </div>
     ) },
-    { title: 'Offerings', key: 'remarks', width: 400, render: (_, r) => {
-      const offeringText = buildQuotationOfferingsText(r);
+    { title: 'Offerings', key: 'remarks', width: 265, render: (_, r) => {
+      const details = buildQuotationOfferingDetails(r);
+      const count = details.vehicles.length;
+      const popoverContent = (
+        <div className="fu-offering-pop">
+          <div className="fu-offering-head">
+            <span>{count ? `${count} Vehicle Offer${count > 1 ? 's' : ''}` : 'Offer Details'}</span>
+          </div>
+          
+          {details.vehicles.length ? details.vehicles.map((v) => (
+            <div key={v.label} className="fu-offering-vehicle">
+              <div className="fu-offering-vehicle-title">{v.label}</div>
+              <div className="fu-offering-vehicle-model">{v.title}</div>
+              <div className="fu-offering-metrics">
+                <span><b>Price</b>: {v.priceText}</span>
+                <span><b>DP</b>: {v.dpText}</span>
+              </div>
+              {v.emiText ? <div className="fu-offering-emi">{v.emiText}</div> : null}
+              {v.fittings.length ? (
+                <div className="fu-offering-fit">
+                  <b>Fittings</b>: {v.fittings.join(', ')}
+                </div>
+              ) : null}
+            </div>
+          )) : (
+            <div className="fu-offering-empty">No vehicle-wise offer added.</div>
+          )}
+        </div>
+      );
       return (
-        <Tooltip title={offeringText || undefined}>
-          <div style={offeringClamp}>{offeringText || ''}</div>
-        </Tooltip>
+        <Popover content={popoverContent} trigger={['hover', 'click']} placement="topLeft" overlayClassName="fu-offering-popover">
+          <div className="fu-offering-list">
+            {count ? details.vehicles.map((v) => (
+              <div key={v.label} className="fu-offering-list-item">
+                <span className="fu-offering-list-label">{v.label}:</span> {v.title}
+              </div>
+            )) : (
+              <div style={offeringClamp}>No offering details</div>
+            )}
+          </div>
+        </Popover>
       );
     } },
-    { title: 'Status + Actions', key: 'statusActions', width: 140, render: (_, r) => renderQuotationStatusActions(r) },
-    { title: 'Follow-up Notes', key: 'followUpNotes', width: 170, render: (_, r) => {
+    { title: 'Status + Actions', key: 'statusActions', width: 160, render: (_, r) => renderQuotationStatusActions(r) },
+    { title: 'Follow-up Notes', key: 'followUpNotes', width: 190, render: (_, r) => {
       const notes = String(r.followUpNotes || '').trim();
       return notes ? (
         <Tooltip title={notes}>
@@ -1970,16 +2049,55 @@ const extractRawPayloadObject = (...sources) => {
     { title: 'Details', key: 'details', render: (_, r) => {
       const dateBranch = [fmt(r.dateAt), r.branch || '—'].filter(Boolean).join(' | ');
       const custMobile = [r.name || '—', r.mobile || '—'].filter(Boolean).join(' | ');
-      const remarks = buildQuotationOfferingsText(r);
+      const details = buildQuotationOfferingDetails(r);
+      const count = details.vehicles.length;
       const notes = String(r.followUpNotes || '').trim();
+      const popoverContent = (
+        <div className="fu-offering-pop">
+          <div className="fu-offering-head">
+            <span>{count ? `${count} Vehicle Offer${count > 1 ? 's' : ''}` : 'Offer Details'}</span>
+          </div>
+          {details.vehicles.length ? details.vehicles.map((v) => (
+            <div key={v.label} className="fu-offering-vehicle">
+              <div className="fu-offering-vehicle-title">{v.label}</div>
+              <div className="fu-offering-vehicle-model">{v.title}</div>
+              <div className="fu-offering-metrics">
+                <span><b>Price</b>: {v.priceText}</span>
+                <span><b>DP</b>: {v.dpText}</span>
+              </div>
+              {v.emiText ? <div className="fu-offering-emi">{v.emiText}</div> : null}
+              {v.fittings.length ? (
+                <div className="fu-offering-fit">
+                  <b>Fittings</b>: {v.fittings.join(', ')}
+                </div>
+              ) : null}
+            </div>
+          )) : (
+            <div className="fu-offering-empty">No vehicle-wise offer added.</div>
+          )}
+        </div>
+      );
       return (
         <div style={stackStyle}>
           <div style={lineStyle}>{dateBranch || '—'}</div>
           <div style={smallLineStyle}>{custMobile || '—'}</div>
-          {remarks ? (
-            <div style={offeringClamp}><span style={{ color: '#64748b' }}>Offer: </span>{remarks}</div>
+          {count ? (
+            <Popover
+              content={popoverContent}
+              trigger={['click']}
+              placement="topLeft"
+              overlayClassName="fu-offering-popover"
+            >
+              <div className="fu-offering-list">
+                {details.vehicles.map((v) => (
+                  <div key={v.label} className="fu-offering-list-item">
+                    <span className="fu-offering-list-label">{v.label}:</span> {v.title}
+                  </div>
+                ))}
+              </div>
+            </Popover>
           ) : (
-            <div style={offeringClamp}></div>
+            <div style={offeringClamp}>No offering details</div>
           )}
           {notes ? (
             <div style={twoLineClamp}><span style={{ color: '#64748b' }}>Notes: </span>{notes}</div>
@@ -2042,6 +2160,96 @@ const extractRawPayloadObject = (...sources) => {
           .fu-seg .ant-segmented-item {
             border-radius: 999px !important;
             font-weight: 600;
+          }
+          .fu-offering-popover .ant-popover-inner {
+            border-radius: 14px;
+            border: 1px solid #dbeafe;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.2);
+            padding: 10px;
+            min-width: 360px;
+            max-width: 520px;
+            background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+          }
+          .fu-offering-pop { display: flex; flex-direction: column; gap: 8px; }
+          .fu-offering-head {
+            font-size: 13px;
+            font-weight: 800;
+            color: #1d4ed8;
+            letter-spacing: 0.2px;
+          }
+          .fu-offering-remarks {
+            border-left: 3px solid #93c5fd;
+            padding-left: 8px;
+            color: #0f172a;
+            font-size: 12px;
+            line-height: 1.35;
+          }
+          .fu-offering-vehicle {
+            border: 1px solid #dbeafe;
+            border-radius: 10px;
+            padding: 8px;
+            background: #f8fbff;
+          }
+          .fu-offering-vehicle-title {
+            font-size: 11px;
+            font-weight: 800;
+            color: #1e3a8a;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+          }
+          .fu-offering-vehicle-model {
+            font-size: 12px;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 4px;
+          }
+          .fu-offering-metrics {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: #1f2937;
+          }
+          .fu-offering-emi {
+            margin-top: 4px;
+            font-size: 11px;
+            color: #334155;
+            line-height: 1.3;
+          }
+          .fu-offering-fit {
+            margin-top: 4px;
+            font-size: 11px;
+            color: #334155;
+            line-height: 1.3;
+          }
+          .fu-offering-empty {
+            font-size: 12px;
+            color: #64748b;
+          }
+          .fu-offering-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+          }
+          .fu-offering-list-item {
+            font-size: 10.5px;
+            line-height: 1.3;
+            color: #1f2937;
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            -webkit-line-clamp: 1;
+            overflow: hidden;
+            white-space: normal;
+          }
+          .fu-offering-list-label {
+            font-weight: 800;
+            color: #1d4ed8;
+          }
+          @media (max-width: 640px) {
+            .fu-offering-popover .ant-popover-inner {
+              min-width: 280px;
+              max-width: calc(100vw - 24px);
+            }
           }
         `}</style>
         <Card style={softCard} bodyStyle={{ padding: isMobile ? 12 : 16 }}>

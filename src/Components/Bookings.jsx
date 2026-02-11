@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import BookingPrintQuickModal from "./BookingPrintQuickModal";
 import BookingInlineModal from "./BookingInlineModal";
 import BookingForm from "./BookingForm";
+import BookingHistoryButton from "./BookingHistoryButton";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import { createStock, listCurrentStocksPublic } from "../apiCalls/stocks";
 import { listBranchesPublic } from "../apiCalls/branches";
@@ -1194,6 +1195,7 @@ export default function Bookings() {
             setFormModal({ open: true });
             if (!branchOptions.length || !executiveOptions.length) loadDropdowns();
           }}>Booking Form</Button>
+          <BookingHistoryButton webhookUrl={GAS_URL_STATIC} />
           <Tag color="blue">Total: {total}</Tag>
           <Tag color="geekblue">Showing: {USE_SERVER_PAG ? visibleRows.length : (renderMode==='loadMore' ? visibleRows.length : filtered.length)}{statusFilter !== 'all' ? ` (status: ${statusFilter})` : ''}</Tag>
           {!USE_SERVER_PAG && (

@@ -375,10 +375,42 @@ export default function StockUpdate() {
     try {
       // For staff-like roles, show current inventory only (latest per chassis)
       const branchParam = isStaffLike ? myBranch : (branchFilter === 'all' ? undefined : branchFilter);
-      const resp = isStaffLike
-        ? await listCurrentStocks({ branch: branchParam })
-        : await listStocks({ branch: branchParam, mode: undefined });
-        const list = Array.isArray(resp?.data) ? resp.data : [];
+      const fetchAllPages = async (fetchFn) => {
+        const perPage = 5000;
+        const maxPages = 40;
+        const merged = [];
+        const seen = new Set();
+        let pageNo = 1;
+        let expectedTotal = null;
+
+        while (pageNo <= maxPages) {
+          const resp = await fetchFn({ limit: perPage, page: pageNo });
+          const list = Array.isArray(resp?.data) ? resp.data : [];
+          const total = Number(resp?.total);
+          if (Number.isFinite(total) && total > 0) expectedTotal = total;
+          if (!list.length) break;
+
+          let added = 0;
+          list.forEach((row) => {
+            const key = String(row?.movementId || row?._id || "").trim() || JSON.stringify(row);
+            if (seen.has(key)) return;
+            seen.add(key);
+            merged.push(row);
+            added += 1;
+          });
+
+          if (added === 0) break;
+          if (expectedTotal && merged.length >= expectedTotal) break;
+          if (list.length < 500) break; // server appears to cap each page at 500
+          pageNo += 1;
+        }
+
+        return merged;
+      };
+
+      const list = isStaffLike
+        ? await fetchAllPages(({ limit, page }) => listCurrentStocks({ branch: branchParam, limit, page }))
+        : await fetchAllPages(({ limit, page }) => listStocks({ branch: branchParam, mode: undefined, limit, page }));
         const rows = list.map((r, idx) => {
           // Infer action when backend snapshot doesn't carry it (common in current stock view)
           const status = String(r.status || '').toLowerCase();

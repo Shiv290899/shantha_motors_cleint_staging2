@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip, Row, Col, Card } from "antd";
+import { Table, Grid, Space, Button, Select, Input, Tag, Typography, message, DatePicker, Modal, Tooltip, Popover, Row, Col, Card } from "antd";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
@@ -105,6 +105,97 @@ const buildQuotationOfferingsText = ({ payload, baseOfferings }) => {
   return [remarks, ...offerings].filter(Boolean).join(" • ");
 };
 
+const uniqueNonEmpty = (list = []) =>
+  Array.from(
+    new Set(
+      (Array.isArray(list) ? list : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    )
+  );
+
+const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText }) => {
+  const remarks = String(baseOfferings || "").trim();
+  const vehicles = [];
+  if (payload && typeof payload === "object") {
+    const fv = payload.formValues || {};
+    const globalFittings = uniqueNonEmpty(payload.fittings);
+    const addVehicle = ({
+      label,
+      company,
+      model,
+      variant,
+      priceRaw,
+      dpRaw,
+      emiSetRaw,
+      fittingsRaw,
+    }) => {
+      const cleanCompany = String(company || "").trim();
+      const cleanModel = String(model || "").trim();
+      const cleanVariant = String(variant || "").trim();
+      const price = Number(priceRaw || 0);
+      const dp = Number(dpRaw || 0);
+      const fittings = uniqueNonEmpty(fittingsRaw || globalFittings);
+      const title = [cleanCompany, cleanModel, cleanVariant].filter(Boolean).join(" ");
+      const hasData = Boolean(title || fittings.length || price || dp);
+      if (!hasData) return;
+      vehicles.push({
+        label,
+        title: title || "Vehicle details not available",
+        priceText: price ? formatCurrency(price) : "—",
+        dpText: dp ? formatCurrency(dp) : "—",
+        emiText: price ? buildEmiText(price, dp, emiSetRaw || payload.emiSet || "12") : "",
+        fittings,
+      });
+    };
+
+    addVehicle({
+      label: "Vehicle 1",
+      company: fv.company ?? payload.company,
+      model: fv.bikeModel ?? fv.model ?? payload.model,
+      variant: fv.variant ?? payload.variant,
+      priceRaw: fv.onRoadPrice ?? payload.onRoadPrice,
+      dpRaw: fv.downPayment ?? payload.downPayment,
+      emiSetRaw: payload.emiSet,
+      fittingsRaw: payload.fittings,
+    });
+    const extra = Array.isArray(payload.extraVehicles) ? payload.extraVehicles : [];
+    extra.forEach((ev, idx) => {
+      addVehicle({
+        label: `Vehicle ${idx + 2}`,
+        company: ev.company,
+        model: ev.model,
+        variant: ev.variant,
+        priceRaw: ev.onRoadPrice,
+        dpRaw: ev.downPayment,
+        emiSetRaw: ev.emiSet || payload.emiSet,
+        fittingsRaw: ev.fittings,
+      });
+    });
+  }
+
+  if (!vehicles.length && fallbackText) {
+    const parts = String(fallbackText)
+      .split("•")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    parts.forEach((part) => {
+      const m = part.match(/^V(\d+)\s*:\s*(.+)$/i);
+      if (!m) return;
+      vehicles.push({
+        label: `Vehicle ${m[1]}`,
+        title: m[2],
+        priceText: "—",
+        dpText: "—",
+        emiText: "",
+        fittings: [],
+      });
+    });
+  }
+
+  return { remarks, vehicles };
+};
+
 export default function Quotations() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -180,6 +271,25 @@ export default function Quotations() {
     let payload = null;
     try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
     const fv = (payload && payload.formValues) ? payload.formValues : {};
+    const tsFallback = pick(obj, HEAD.ts);
+    const createdTs = String(
+      fv.createdAt ||
+      (payload && (
+        payload.createdAt ||
+        payload.created_at ||
+        payload.createdOn ||
+        payload.created_on ||
+        payload.quoteCreatedAt ||
+        payload.quotationCreatedAt
+      )) ||
+      obj['Created At'] ||
+      obj['CreatedAt'] ||
+      obj['Quotation Created At'] ||
+      obj['Quotation Created'] ||
+      obj['Created Time'] ||
+      tsFallback ||
+      ''
+    ).trim();
     const mode = (payload && payload.mode) || '';
     const status = (payload && payload.followUp && payload.followUp.status) || pick(obj, HEAD.status) || '';
     const brand = (payload && payload.brand) || '';
@@ -207,8 +317,8 @@ export default function Quotations() {
     const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
     return {
       key: idx,
-      ts: pick(obj, HEAD.ts),
-      tsMs: parseTsMs(pick(obj, HEAD.ts)),
+      ts: createdTs || tsFallback,
+      tsMs: parseTsMs(createdTs || tsFallback),
       name: fv.name || pick(obj, HEAD.name),
       mobile: fv.mobile || pick(obj, HEAD.mobile),
       branch: fv.branch || pick(obj, HEAD.branch),
@@ -219,6 +329,8 @@ export default function Quotations() {
       variant,
       price,
       offerings,
+      offeringsBase,
+      payload,
       mode: mode || (payload && payload.mode) || '',
       brand,
       status,
@@ -562,15 +674,47 @@ export default function Quotations() {
     ) },
     
     { title: "Offerings", key: "offerings", width: 280, render: (_, r) => {
-      const offerings = String(r.offerings || '').trim();
+      const details = buildQuotationOfferingDetails({
+        payload: r.payload,
+        baseOfferings: r.offeringsBase,
+        fallbackText: r.offerings,
+      });
+      const count = details.vehicles.length;
+      const popoverContent = (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 360, maxWidth: 520 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#1d4ed8" }}>
+            {count ? `${count} Vehicle Offer${count > 1 ? "s" : ""}` : "Offer Details"}
+          </div>
+          {details.vehicles.length ? details.vehicles.map((v) => (
+            <div key={v.label} style={{ border: "1px solid #dbeafe", borderRadius: 10, padding: 8, background: "#f8fbff" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#1e3a8a", textTransform: "uppercase", marginBottom: 4 }}>{v.label}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{v.title}</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, color: "#1f2937" }}>
+                <span><b>Price</b>: {v.priceText}</span>
+                <span><b>DP</b>: {v.dpText}</span>
+              </div>
+              {v.emiText ? <div style={{ marginTop: 4, fontSize: 11, color: "#334155", lineHeight: 1.3 }}>{v.emiText}</div> : null}
+              {v.fittings.length ? <div style={{ marginTop: 4, fontSize: 11, color: "#334155", lineHeight: 1.3 }}><b>Fittings</b>: {v.fittings.join(", ")}</div> : null}
+            </div>
+          )) : (
+            <div style={{ fontSize: 12, color: "#64748b" }}>No vehicle-wise offer added.</div>
+          )}
+        </div>
+      );
       return (
         <div style={stackStyle}>
-          {offerings ? (
-            <Tooltip title={<span style={{ whiteSpace: 'pre-wrap' }}>{offerings}</span>} placement="topLeft">
-              <div style={offeringClamp}>{offerings}</div>
-            </Tooltip>
+          {count ? (
+            <Popover content={popoverContent} trigger={['hover', 'click']} placement="topLeft">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {details.vehicles.map((v) => (
+                  <div key={v.label} style={{ ...lineStyle, fontSize: 10.5, color: "#1f2937" }}>
+                    <span style={{ fontWeight: 800, color: "#1d4ed8" }}>{v.label}:</span> {v.title}
+                  </div>
+                ))}
+              </div>
+            </Popover>
           ) : (
-            <div style={offeringClamp}></div>
+            <div style={offeringClamp}>No offering details</div>
           )}
         </div>
       );
@@ -592,21 +736,16 @@ export default function Quotations() {
         </div>
       );
     } },
-    { title: "Model / ORP / Mode / Executive", key: "vehicleMeta", width: 190, render: (_, r) => {
-        const model = String(r.model || '').trim();
-        const variant = String(r.variant || '').trim();
-        const modelVariant = model && variant ? `${model} || ${variant}` : (model || variant || '—');
-        const price = String(r.price || '').trim() || '—';
-        const mode = String(r.mode || '').trim();
+    { title: "Mode / Executive", key: "vehicleMeta", width: 120, render: (_, r) => {
+        const mode = String(r.mode || '').trim().toUpperCase();
         const exec = String(r.executive || '').trim();
         const metaLine = [
-          price,
-          mode ? mode.toUpperCase() : '—',
+          
           exec || '—',
         ].join(' || ');
         return (
           <div style={stackStyle}>
-            <div style={metaLineStyle}>{modelVariant}</div>
+            <div style={{ ...metaLineStyle, fontSize: 10, fontWeight: 700 }}>{mode || '—'}</div>
             <div style={metaLineStyle}>{metaLine}</div>
           </div>
         );

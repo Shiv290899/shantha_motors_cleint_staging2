@@ -16,7 +16,6 @@ import {
   Radio,
   Tag,
   Checkbox,
-  AutoComplete,
   Modal,
   Space,
   Spin,
@@ -180,6 +179,7 @@ const HEADERS = {
   model: ["Model", "Model Name"],
   variant: ["Variant"],
   price: ["On-Road Price", "On Road Price", "OnRoadPrice", "Price"],
+  color: ["Color", "Colours", "Colors", "Colour", "Available Colors"],
 };
 
 const pick = (row, keys) =>
@@ -193,6 +193,7 @@ const normalizeSheetRow = (row = {}) => ({
   company: pick(row, HEADERS.company),
   model: pick(row, HEADERS.model),
   variant: pick(row, HEADERS.variant),
+  color: pick(row, HEADERS.color),
   onRoadPrice:
     Number(String(pick(row, HEADERS.price) || "0").replace(/[,\s₹]/g, "")) || 0,
 });
@@ -202,6 +203,15 @@ const normalizeFallbackRow = (row = {}) => ({
   company: String(row["Company Name"] || row.company || "").trim(),
   model: String(row["Model Name"] || row.model || "").trim(),
   variant: String(row["Variant"] || row.variant || "").trim(),
+  color: String(
+    row["Color"] ||
+      row["Colours"] ||
+      row["Colors"] ||
+      row["Colour"] ||
+      row["Available Colors"] ||
+      row.color ||
+      ""
+  ).trim(),
   onRoadPrice:
     Number(
       String(row["On-Road Price"] || row.onRoadPrice || "0").replace(
@@ -978,6 +988,28 @@ export default function BookingForm({
     return uniqCaseInsensitive(base.map((r) => r.variant));
   }, [bikeData, selectedCompany, selectedModel]);
 
+  const splitColors = (value) => {
+    if (!value) return [];
+    return String(value)
+      .split(/[|,/;\n]+/)
+      .map((c) => c.trim())
+      .filter(Boolean);
+  };
+
+  const catalogColors = useMemo(() => {
+    const companyKey = normalizeKey(selectedCompany);
+    const modelKey = normalizeKey(selectedModel);
+    const variantKey = normalizeKey(selectedVariant);
+    if (!companyKey || !modelKey || !variantKey) return [];
+    const rows = bikeData.filter((r) =>
+      normalizeKey(r.company) === companyKey &&
+      normalizeKey(r.model) === modelKey &&
+      normalizeKey(r.variant) === variantKey
+    );
+    const flat = rows.flatMap((r) => splitColors(r.color));
+    return uniqCaseInsensitive(flat);
+  }, [bikeData, selectedCompany, selectedModel, selectedVariant]);
+
   // Fetch current in-stock list once variant is selected (branch-scoped)
   useEffect(() => {
     let cancelled = false;
@@ -1010,23 +1042,7 @@ export default function BookingForm({
     setStockItems((prev) => prev.filter((item) => isActiveStock(item)));
   }, [activeBranchSet, isActiveStock]);
 
-  // Derive colors and chassis from stockItems based on selection
-  const availableColors = useMemo(() => {
-    const norm = (s) => String(s || "").trim().toLowerCase();
-    const uniq = new Set();
-    stockItems.forEach((s) => {
-      if (!isActiveStock(s)) return;
-      if (
-        norm(s.company) === norm(selectedCompany) &&
-        norm(s.model) === norm(selectedModel) &&
-        norm(s.variant) === norm(selectedVariant)
-      ) {
-        const c = String(s.color || "").trim();
-        if (c) uniq.add(c);
-      }
-    });
-    return Array.from(uniq);
-  }, [stockItems, selectedCompany, selectedModel, selectedVariant]);
+  // Chassis still comes from in-stock data, but color options come from Vehicle Catalog.
 
   const availableChassis = useMemo(() => {
     const norm = (s) => String(s || "").trim().toLowerCase();
@@ -1242,6 +1258,16 @@ export default function BookingForm({
           values.purchaseType === "nohp"
             ? values.disbursementAmount ?? undefined
             : undefined,
+        emiAmount:
+          values.purchaseType === "loan" ||
+          values.purchaseType === "nohp"
+            ? values.emiAmount ?? undefined
+            : undefined,
+        tenure:
+          values.purchaseType === "loan" ||
+          values.purchaseType === "nohp"
+            ? Number(values.tenure) || undefined
+            : undefined,
         // DP breakdown
         dp: {
           downPayment: values.downPayment ?? undefined,
@@ -1315,6 +1341,16 @@ export default function BookingForm({
           values.purchaseType === "loan" ||
           values.purchaseType === "nohp"
             ? values.disbursementAmount ?? undefined
+            : undefined,
+        emiAmount:
+          values.purchaseType === "loan" ||
+          values.purchaseType === "nohp"
+            ? values.emiAmount ?? undefined
+            : undefined,
+        tenure:
+          values.purchaseType === "loan" ||
+          values.purchaseType === "nohp"
+            ? Number(values.tenure) || undefined
             : undefined,
         financier: values.financier || values.nohpFinancier || undefined,
         addressProofMode: values.addressProofMode,
@@ -1695,22 +1731,22 @@ export default function BookingForm({
             label="Color"
             name="color"
             rules={[{ required: true, message: "Select color" }]}
-            getValueFromEvent={(e) => e?.target?.value?.toUpperCase?.() || (typeof e === 'string' ? e.toUpperCase() : e)}
           >
-            <AutoComplete
+            <Select
               size={ctlSize}
-              disabled={paymentsOnlyMode || !selectedVariant}
+              disabled={paymentsOnlyMode || !selectedVariant || !catalogColors.length}
               placeholder={
-                loadingStocks ? "Loading colors..." : "Select or type color"
+                !selectedVariant
+                  ? "Select variant first"
+                  : !catalogColors.length
+                  ? "No colors in vehicle catalog"
+                  : "Select color"
               }
-              options={availableColors.map((c) => ({ value: c }))}
-              filterOption={(inputValue, option) =>
-                String(option?.value || "")
-                  .toLowerCase()
-                  .includes(String(inputValue || "").toLowerCase())
-              }
-              onChange={() => form.setFieldsValue({ chassisNo: undefined })}
+              options={catalogColors.map((c) => ({ value: c, label: c }))}
+              onChange={(v) => form.setFieldsValue({ color: String(v || "").toUpperCase(), chassisNo: undefined })}
               style={{ textTransform: "uppercase" }}
+              showSearch={false}
+              dropdownRender={undefined}
             />
           </Form.Item>
         </Col>
@@ -2014,6 +2050,37 @@ export default function BookingForm({
           </Form.Item>
         </Col>
       </Row>
+
+      {/* Loan info (optional) */}
+      {(purchaseType === "loan" || purchaseType === "nohp") && (
+        <Row gutter={[16, 0]}>
+          <Col xs={24} md={12}>
+            <Form.Item label="EMI Amount (₹)" name="emiAmount">
+              <InputNumber
+                size={ctlSize}
+                style={{ width: "100%" }}
+                min={0}
+                step={100}
+                placeholder="Enter EMI amount"
+                disabled={paymentsOnlyMode}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={12}>
+            <Form.Item label="Tenure (Months)" name="tenure">
+              <InputNumber
+                size={ctlSize}
+                style={{ width: "100%" }}
+                min={1}
+                step={1}
+                precision={0}
+                placeholder="Enter months (e.g., 36)"
+                disabled={paymentsOnlyMode}
+              />
+            </Form.Item>
+          </Col>
+        </Row>
+      )}
 
       {/* Address */}
       <Row gutter={[16, 0]}>

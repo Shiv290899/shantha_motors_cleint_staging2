@@ -1,0 +1,1 @@
+function n(r){const e=String(r||"").toLowerCase();return e==="admin"?"/admin":e==="owner"?"/owner":e==="mechanic"?"/mechanic":e==="backend"?"/backend":e==="employees"?"/employees":"/staff"}export{n as routeForRole};

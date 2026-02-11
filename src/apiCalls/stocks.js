@@ -111,7 +111,7 @@ export const listStocksPublic = async ({ branch, mode, limit = 1000, page = 1 } 
   };
 };
 
-export const listCurrentStocks = async ({ branch, limit = 500, page = 1 } = {}) => {
+export const listCurrentStocks = async ({ branch, limit = 5000, page = 1 } = {}) => {
   const data = await gasGet({ action: "current", branch, limit, page });
   return {
     success: !!data.ok,
@@ -121,7 +121,7 @@ export const listCurrentStocks = async ({ branch, limit = 500, page = 1 } = {}) 
   };
 };
 
-export const listCurrentStocksPublic = async ({ branch, limit = 500, page = 1 } = {}) => {
+export const listCurrentStocksPublic = async ({ branch, limit = 5000, page = 1 } = {}) => {
   const data = await gasGet({ action: "current", branch, limit, page });
   return {
     success: !!data.ok,
@@ -132,7 +132,7 @@ export const listCurrentStocksPublic = async ({ branch, limit = 500, page = 1 } 
 };
 
 // Pending transfers must hit the backend (GAS does not track transfer admits/rejects)
-export const listPendingTransfers = async ({ branch, limit = 500 } = {}) => {
+export const listPendingTransfers = async ({ branch, limit = 5000 } = {}) => {
   const params = { action: "pending", limit };
   if (branch) params.branch = branch;
   const data = await gasGet(params);

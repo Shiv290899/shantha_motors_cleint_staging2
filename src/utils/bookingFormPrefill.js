@@ -108,6 +108,14 @@ export const buildBookingFormPatch = (payload = {}) => {
       purchaseMode === "loan" || purchaseMode === "nohp"
         ? toNumber(p.disbursementAmount) || undefined
         : undefined,
+    emiAmount:
+      purchaseMode === "loan" || purchaseMode === "nohp"
+        ? toNumber(p.emiAmount) || undefined
+        : undefined,
+    tenure:
+      purchaseMode === "loan" || purchaseMode === "nohp"
+        ? toNumber(p.tenure) || undefined
+        : undefined,
     addressProofMode: p.addressProofMode || p.addressProof || "aadhaar",
     addressProofTypes,
     bookingAmount1Cash: parts[0].cash || undefined,

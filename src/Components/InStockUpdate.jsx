@@ -19,7 +19,6 @@ export default function InStockUpdate() {
   const [companies, setCompanies] = useState([]);
   const [, setModels] = useState([]);
   const [, setVariants] = useState([]);
-  const [colors, setColors] = useState([]);
 
   const [selCompanies, setSelCompanies] = useState([]);
   const [selModels, setSelModels] = useState([]);
@@ -159,7 +158,6 @@ export default function InStockUpdate() {
     setCompanies(uniqCaseInsensitive(items.map((r)=>r.company)));
     setModels(uniqCaseInsensitive(items.map((r)=>r.model)));
     setVariants(uniqCaseInsensitive(items.map((r)=>r.variant)));
-    setColors(uniqCaseInsensitive(items.map((r)=>r.color)));
   }, [items]);
 
   // Dependent options for Model and Variant based on current selections
@@ -183,6 +181,22 @@ export default function InStockUpdate() {
     return uniqCaseInsensitive(base2.map((r) => r.variant));
   }, [items, selCompanies, selModels]);
 
+  const colorOptionsFiltered = useMemo(() => {
+    const companySet = toKeySet(selCompanies);
+    const base1 = companySet.size
+      ? items.filter((r) => companySet.has(normalizeKey(r.company)))
+      : items;
+    const modelSet = toKeySet(selModels);
+    const base2 = modelSet.size
+      ? base1.filter((r) => modelSet.has(normalizeKey(r.model)))
+      : base1;
+    const variantSet = toKeySet(selVariants);
+    const base3 = variantSet.size
+      ? base2.filter((r) => variantSet.has(normalizeKey(r.variant)))
+      : base2;
+    return uniqCaseInsensitive(base3.map((r) => r.color));
+  }, [items, selCompanies, selModels, selVariants]);
+
   // When upstream selections change, prune downstream selections so they remain valid
   const onCompaniesChange = (vals) => {
     const companySet = toKeySet(vals);
@@ -199,8 +213,16 @@ export default function InStockUpdate() {
     const allowedVariants = uniqCaseInsensitive(base2.map((r) => r.variant));
     const allowedVariantSet = toKeySet(allowedVariants);
     const nextVariants = selVariants.filter((v) => allowedVariantSet.has(normalizeKey(v)));
+    const nextVariantSet = toKeySet(nextVariants);
+    const base3 = nextVariantSet.size
+      ? base2.filter((r) => nextVariantSet.has(normalizeKey(r.variant)))
+      : base2;
+    const allowedColors = uniqCaseInsensitive(base3.map((r) => r.color));
+    const allowedColorSet = toKeySet(allowedColors);
+    const nextColors = selColors.filter((c) => allowedColorSet.has(normalizeKey(c)));
     setSelModels(nextModels);
     setSelVariants(nextVariants);
+    setSelColors(nextColors);
     setSelCompanies(vals);
   };
 
@@ -216,8 +238,36 @@ export default function InStockUpdate() {
     const allowedVariants = uniqCaseInsensitive(base2.map((r) => r.variant));
     const allowedVariantSet = toKeySet(allowedVariants);
     const nextVariants = selVariants.filter((v) => allowedVariantSet.has(normalizeKey(v)));
+    const nextVariantSet = toKeySet(nextVariants);
+    const base3 = nextVariantSet.size
+      ? base2.filter((r) => nextVariantSet.has(normalizeKey(r.variant)))
+      : base2;
+    const allowedColors = uniqCaseInsensitive(base3.map((r) => r.color));
+    const allowedColorSet = toKeySet(allowedColors);
+    const nextColors = selColors.filter((c) => allowedColorSet.has(normalizeKey(c)));
     setSelVariants(nextVariants);
+    setSelColors(nextColors);
     setSelModels(vals);
+  };
+
+  const onVariantsChange = (vals) => {
+    const companySet = toKeySet(selCompanies);
+    const base1 = companySet.size
+      ? items.filter((r) => companySet.has(normalizeKey(r.company)))
+      : items;
+    const modelSet = toKeySet(selModels);
+    const base2 = modelSet.size
+      ? base1.filter((r) => modelSet.has(normalizeKey(r.model)))
+      : base1;
+    const variantSet = toKeySet(vals);
+    const base3 = variantSet.size
+      ? base2.filter((r) => variantSet.has(normalizeKey(r.variant)))
+      : base2;
+    const allowedColors = uniqCaseInsensitive(base3.map((r) => r.color));
+    const allowedColorSet = toKeySet(allowedColors);
+    const nextColors = selColors.filter((c) => allowedColorSet.has(normalizeKey(c)));
+    setSelColors(nextColors);
+    setSelVariants(vals);
   };
 
   const filtered = useMemo(() => {
@@ -545,7 +595,7 @@ export default function InStockUpdate() {
             placeholder="Variant"
             style={{ minWidth: 200 }}
             value={selVariants}
-            onChange={setSelVariants}
+            onChange={onVariantsChange}
             options={variantOptionsFiltered.map((v)=>({ value: v, label: v }))}
             maxTagCount={isMobile ? 1 : 3}
           />
@@ -556,7 +606,7 @@ export default function InStockUpdate() {
             style={{ minWidth: 180 }}
             value={selColors}
             onChange={setSelColors}
-            options={colors.map((v)=>({ value: v, label: v }))}
+            options={colorOptionsFiltered.map((v)=>({ value: v, label: v }))}
             maxTagCount={isMobile ? 1 : 3}
           />
           <DatePicker.RangePicker value={dateRange} onChange={setDateRange} allowClear style={{ minWidth: 220 }} />
