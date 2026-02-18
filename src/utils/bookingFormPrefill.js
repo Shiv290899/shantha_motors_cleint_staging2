@@ -8,7 +8,35 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : 0;
 };
 
-const buildPaymentParts = (payments = []) => {
+const parseJsonSafe = (value) => {
+  if (!value || typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const read = (obj = {}, keys = []) => {
+  for (const key of keys) {
+    const val = obj?.[key];
+    if (val === undefined || val === null) continue;
+    if (typeof val === "string" && val.trim() === "") continue;
+    return val;
+  }
+  return undefined;
+};
+
+const normalizeMode = (mode) => {
+  const m = String(mode || "").toLowerCase().trim();
+  if (m === "cash" || m === "online") return m;
+  if (m === "upi" || m === "card" || m === "netbanking" || m === "bank")
+    return "online";
+  return "";
+};
+
+const buildPaymentParts = (payments = [], source = {}) => {
   const split = [
     { cash: 0, online: 0, ref: undefined },
     { cash: 0, online: 0, ref: undefined },
@@ -19,7 +47,7 @@ const buildPaymentParts = (payments = []) => {
     if (!payment) return;
     const amount = toNumber(payment.amount);
     if (!amount) return;
-    const mode = String(payment.mode || "").toLowerCase();
+    const mode = normalizeMode(payment.mode) || "cash";
     const part =
       Number(payment.part) && Number(payment.part) >= 1 && Number(payment.part) <= 3
         ? Number(payment.part) - 1
@@ -27,7 +55,8 @@ const buildPaymentParts = (payments = []) => {
     if (mode === "online") {
       split[part].online += amount;
       if (!split[part].ref) {
-        split[part].ref = payment.reference || payment.utr || payment.ref || "";
+        split[part].ref =
+          payment.reference || payment.utr || payment.ref || payment.txnId || "";
       }
     } else {
       split[part].cash += amount;
@@ -35,88 +64,119 @@ const buildPaymentParts = (payments = []) => {
   };
 
   payments.forEach((payment, idx) => assign(payment, idx));
+
+  for (let idx = 0; idx < 3; idx++) {
+    const cashKey = `bookingAmount${idx + 1}Cash`;
+    const onlineKey = `bookingAmount${idx + 1}Online`;
+    split[idx].cash = split[idx].cash || toNumber(read(source, [cashKey]));
+    split[idx].online = split[idx].online || toNumber(read(source, [onlineKey]));
+    if (!split[idx].ref) {
+      split[idx].ref =
+        read(source, [
+          `paymentReference${idx + 1}`,
+          `paymentRef${idx + 1}`,
+          `utr${idx + 1}`,
+        ]) ||
+        undefined;
+    }
+    const legacyAmount = toNumber(read(source, [`bookingAmount${idx + 1}`]));
+    const legacyMode = normalizeMode(read(source, [`paymentMode${idx + 1}`]));
+    if (!split[idx].cash && !split[idx].online && legacyAmount) {
+      if (legacyMode === "online") split[idx].online = legacyAmount;
+      else split[idx].cash = legacyAmount;
+    }
+  }
+
+  if (!split[0].cash && !split[0].online) {
+    const bookingAmount = toNumber(
+      read(source, ["bookingAmount", "Booking Amount", "Booking_Amount"])
+    );
+    const paymentMode = normalizeMode(
+      read(source, ["paymentMode", "Payment Mode", "Purchase Mode", "purchaseMode"])
+    );
+    if (bookingAmount > 0) {
+      if (paymentMode === "online") split[0].online = bookingAmount;
+      else split[0].cash = bookingAmount;
+    }
+  }
+
   return split;
 };
 
-export const buildBookingFormPatch = (payload = {}) => {
-  const p = payload || {};
-  const vehicle = p.vehicle || {};
-  const purchaseMode =
-    String(p.purchaseMode || p.purchaseType || "").toLowerCase() || "cash";
-  const addressProofTypes = Array.isArray(p.addressProofTypes)
-    ? p.addressProofTypes
-    : String(p.addressProofTypes || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean);
+const parseAddressProofTypes = (value) => {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  return String(value)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+};
 
-  let payments = Array.isArray(p.payments) ? p.payments : [];
-  const hasPayments =
-    Array.isArray(payments) && payments.some((pay) => toNumber(pay?.amount) > 0);
-  const parts = buildPaymentParts(payments);
-  if (!hasPayments) {
-    for (let idx = 0; idx < 3; idx++) {
-      const cashKey = `bookingAmount${idx + 1}Cash`;
-      const onlineKey = `bookingAmount${idx + 1}Online`;
-      parts[idx].cash = parts[idx].cash || toNumber(p[cashKey]);
-      parts[idx].online = parts[idx].online || toNumber(p[onlineKey]);
-      if (!parts[idx].ref) {
-        parts[idx].ref =
-          p[`paymentReference${idx + 1}`] ||
-          p[`paymentRef${idx + 1}`] ||
-          p[`utr${idx + 1}`] ||
-          p.utr ||
-          undefined;
-      }
-    }
-    parts[0].cash =
-      parts[0].cash ||
-      toNumber(p.bookingAmount1Cash) ||
-      toNumber(p.bookingAmount) ||
-      0;
-    parts[0].online =
-      parts[0].online ||
-      toNumber(p.bookingAmount1Online) ||
-      (String(p.paymentMode || "").toLowerCase() === "online"
-        ? toNumber(p.bookingAmount)
-        : 0);
-  }
+export const buildBookingFormPatch = (payload = {}) => {
+  const row = payload && typeof payload === "object" ? payload : {};
+  const nestedRaw = parseJsonSafe(read(row, ["rawPayload", "Raw Payload"]));
+  const source = { ...nestedRaw, ...row };
+  const rawVehicle =
+    nestedRaw.vehicle && typeof nestedRaw.vehicle === "object" ? nestedRaw.vehicle : {};
+  const rowVehicle =
+    row.vehicle && typeof row.vehicle === "object" ? row.vehicle : {};
+  const vehicle = { ...rawVehicle, ...rowVehicle };
+
+  const purchaseMode = String(
+    read(source, ["purchaseMode", "purchaseType", "Purchase Mode"]) || "cash"
+  ).toLowerCase();
+  const addressProofTypes = parseAddressProofTypes(
+    read(source, ["addressProofTypes", "Address Proof Types"])
+  );
+
+  const payments = Array.isArray(source.payments) ? source.payments : [];
+  const parts = buildPaymentParts(payments, source);
+
+  const financier = read(source, ["financier", "Financier"]) || undefined;
+  const nohpFinancier = read(source, ["nohpFinancier"]) || financier || undefined;
 
   const patch = {
-    executive: p.executive || undefined,
-    branch: p.branch || undefined,
-    customerName: p.customerName || p.name || "",
-    mobileNumber: toDigits10(p.mobileNumber || p.mobile || ""),
-    address: p.address || "",
-    company: vehicle.company || "",
-    bikeModel: vehicle.model || "",
-    variant: vehicle.variant || "",
-    color: vehicle.color || undefined,
+    executive: read(source, ["executive", "Executive"]) || undefined,
+    branch: read(source, ["branch", "Branch"]) || undefined,
+    customerName: read(source, ["customerName", "name", "Customer Name"]) || "",
+    mobileNumber: toDigits10(
+      read(source, ["mobileNumber", "mobile", "Mobile Number"]) || ""
+    ),
+    address: read(source, ["address", "Address"]) || "",
+    company: read(source, ["company", "Company", "Company Name", "brand"]) || vehicle.company || "",
+    bikeModel: read(source, ["bikeModel", "model", "Model"]) || vehicle.model || "",
+    variant: read(source, ["variant", "Variant"]) || vehicle.variant || "",
+    color:
+      read(source, ["color", "colour", "Color", "Colour"]) ||
+      vehicle.color ||
+      undefined,
     chassisNo:
       String(vehicle.availability || "").toLowerCase() === "allot"
         ? "__ALLOT__"
-        : vehicle.chassisNo || undefined,
-    rtoOffice: p.rtoOffice || "KA",
+        : read(source, ["chassisNo", "Chassis Number"]) || vehicle.chassisNo || undefined,
+    rtoOffice: read(source, ["rtoOffice", "RTO Office"]) || "KA",
     purchaseType: purchaseMode,
-    financier:
-      purchaseMode === "loan" ? p.financier || undefined : undefined,
-    nohpFinancier:
-      purchaseMode === "nohp"
-        ? p.financier || p.nohpFinancier || undefined
-        : undefined,
+    financier: purchaseMode === "loan" ? financier : undefined,
+    nohpFinancier: purchaseMode === "nohp" ? nohpFinancier : undefined,
     disbursementAmount:
       purchaseMode === "loan" || purchaseMode === "nohp"
-        ? toNumber(p.disbursementAmount) || undefined
+        ? toNumber(
+            read(source, ["disbursementAmount", "Disbursement Amount"]) ||
+              read(source, ["loanDisbursementAmount"])
+          ) || undefined
         : undefined,
     emiAmount:
       purchaseMode === "loan" || purchaseMode === "nohp"
-        ? toNumber(p.emiAmount) || undefined
+        ? toNumber(read(source, ["emiAmount", "EMI Amount"])) || undefined
         : undefined,
     tenure:
       purchaseMode === "loan" || purchaseMode === "nohp"
-        ? toNumber(p.tenure) || undefined
+        ? toNumber(read(source, ["tenure", "tenureMonths", "Tenure", "Tenure Months"])) ||
+          undefined
         : undefined,
-    addressProofMode: p.addressProofMode || p.addressProof || "aadhaar",
+    addressProofMode:
+      read(source, ["addressProofMode", "addressProof", "Address Proof Mode"]) ||
+      "aadhaar",
     addressProofTypes,
     bookingAmount1Cash: parts[0].cash || undefined,
     bookingAmount1Online: parts[0].online || undefined,
@@ -128,21 +188,24 @@ export const buildBookingFormPatch = (payload = {}) => {
     bookingAmount3Online: parts[2].online || undefined,
     paymentReference3: parts[2].ref || undefined,
     downPayment: toNumber(
-      (p.dp && p.dp.downPayment) ?? p.downPayment
+      read(source, ["downPayment"]) ?? read(source, ["dp"])?.downPayment
     ),
     extraFittingAmount: toNumber(
-      (p.dp && p.dp.extraFittingAmount) ?? p.extraFittingAmount
+      read(source, ["extraFittingAmount"]) ?? read(source, ["dp"])?.extraFittingAmount
     ),
     affidavitCharges: toNumber(
-      (p.dp && p.dp.affidavitCharges) ?? p.affidavitCharges
+      read(source, ["affidavitCharges"]) ?? read(source, ["dp"])?.affidavitCharges
+    ),
+    discountAmount: toNumber(
+      read(source, ["discountAmount"]) ?? read(source, ["dp"])?.discountAmount
     ),
   };
 
   return {
     patch,
     metadata: {
-      bookingId: p.bookingId || p.serialNo || undefined,
-      mobile: toDigits10(p.mobileNumber || p.mobile || ""),
+      bookingId: read(source, ["bookingId", "Booking ID", "serialNo"]) || undefined,
+      mobile: toDigits10(read(source, ["mobileNumber", "mobile", "Mobile Number"]) || ""),
       vehicle,
     },
   };

@@ -21,7 +21,7 @@ import {
   Spin,
 } from "antd";
 import { InboxOutlined, CreditCardOutlined, PrinterOutlined } from "@ant-design/icons";
-import { listCurrentStocksPublic } from "../apiCalls/stocks";
+import { createStock, listCurrentStocksPublic } from "../apiCalls/stocks";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
 import { listBranchesPublic } from "../apiCalls/branches";
 import { listUsersPublic } from "../apiCalls/adminUsers";
@@ -225,6 +225,7 @@ export default function BookingForm({
   asModal = false,
   initialValues = null,
   onSuccess,
+  autoUpdateStockOnSave = true,
   startPaymentsOnly = false,
   editRefDefault = null,
   allowBranchSelect = false,
@@ -1421,6 +1422,39 @@ export default function BookingForm({
         throw new Error(
           String((resp?.data || resp)?.message || "Submission failed")
         );
+      }
+
+      // When a concrete chassis is booked, mark it as invoiced so it drops from current stock.
+      if (autoUpdateStockOnSave && !paymentsOnlyMode) {
+        const bookedChassis = String(values.chassisNo || "").trim().toUpperCase();
+        if (bookedChassis && bookedChassis !== "__ALLOT__") {
+          const stockRow = {
+            Chassis_No: bookedChassis,
+            Company: values.company || "",
+            Model: values.bikeModel || "",
+            Variant: values.variant || "",
+            Color: values.color || "",
+            Action: "invoice",
+            Customer_Name: values.customerName || "",
+            Source_Branch:
+              values.branch ||
+              branchDefault ||
+              chassisInfo?.branch ||
+              "",
+            Notes: (resp?.data || resp)?.bookingId
+              ? `Book via Booking ID ${(resp?.data || resp)?.bookingId}`
+              : "Book via Booking form",
+          };
+          const createdBy =
+            currentUser?.name || currentUser?.email || values.executive || "user";
+          const stockResp = await createStock({ data: stockRow, createdBy });
+          if (!(stockResp?.success ?? stockResp?.ok)) {
+            throw new Error(
+              stockResp?.message ||
+                "Booking saved, but failed to mark stock as booked."
+            );
+          }
+        }
       }
 
       if (!silent) message.success("Booking saved successfully");

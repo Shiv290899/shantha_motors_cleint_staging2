@@ -171,11 +171,30 @@ const uniqueNonEmpty = (list = []) =>
     )
   );
 
+const normalizePurchaseMode = (value) => String(value || "").trim().toLowerCase();
+const isFinancedMode = (value) => ["loan", "nohp", "hp", "finance"].includes(normalizePurchaseMode(value));
+
 const buildQuotationOfferingDetails = (row) => {
   if (!row) return { remarks: "", vehicles: [] };
   const p = row.payload || {};
   const fv = p.formValues || {};
   const globalFittings = uniqueNonEmpty(p.fittings);
+  const globalMode =
+    fv.mode ??
+    p.mode ??
+    p.purchaseMode ??
+    p.purchaseType ??
+    p.paymentType ??
+    row.mode ??
+    row.purchaseMode ??
+    row.purchaseType ??
+    row.paymentType ??
+    row.values?.mode ??
+    row.values?.Mode ??
+    row.values?.purchaseMode ??
+    row.values?.purchaseType ??
+    row.values?.paymentType ??
+    "cash";
   const remarks = String(row.remarks || fv.remarks || p.remarks || "").trim();
   const vehicles = [];
 
@@ -188,6 +207,7 @@ const buildQuotationOfferingDetails = (row) => {
     dpRaw,
     emiSetRaw,
     fittingsRaw,
+    modeRaw,
   }) => {
     const cleanCompany = String(company || "").trim();
     const cleanModel = String(model || "").trim();
@@ -197,6 +217,7 @@ const buildQuotationOfferingDetails = (row) => {
     const fittings = uniqueNonEmpty(fittingsRaw || globalFittings);
     const title = [cleanCompany, cleanModel, cleanVariant].filter(Boolean).join(" ");
     const hasMeta = Boolean(title || fittings.length || price || dp);
+    const showFinance = isFinancedMode(modeRaw ?? globalMode);
     if (!hasMeta) return;
 
     vehicles.push({
@@ -205,7 +226,8 @@ const buildQuotationOfferingDetails = (row) => {
       fittings,
       priceText: price ? formatCurrency(price) : "—",
       dpText: dp ? formatCurrency(dp) : "—",
-      emiText: price ? buildEmiText(price, dp, emiSetRaw || p.emiSet || "12") : "",
+      emiText: showFinance && price ? buildEmiText(price, dp, emiSetRaw || p.emiSet || "12") : "",
+      showFinance,
     });
   };
 
@@ -218,6 +240,7 @@ const buildQuotationOfferingDetails = (row) => {
     dpRaw: fv.downPayment ?? p.downPayment,
     emiSetRaw: p.emiSet,
     fittingsRaw: p.fittings,
+    modeRaw: fv.mode ?? p.mode ?? p.purchaseMode ?? p.purchaseType ?? p.paymentType,
   });
 
   const extra = Array.isArray(p.extraVehicles) ? p.extraVehicles : [];
@@ -231,6 +254,7 @@ const buildQuotationOfferingDetails = (row) => {
       dpRaw: ev.downPayment,
       emiSetRaw: ev.emiSet || p.emiSet,
       fittingsRaw: ev.fittings,
+      modeRaw: ev.mode ?? ev.purchaseMode ?? ev.purchaseType ?? ev.paymentType,
     });
   });
 
@@ -268,8 +292,6 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
 
   const [reschedule, setReschedule] = useState({ open: false, serial: null, at: null, notes: '' });
   const [closing, setClosing] = useState({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
-  const [rescheduleSaving, setRescheduleSaving] = useState(false);
-  const [closingSaving, setClosingSaving] = useState(false);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
   const invoiceRef = React.useRef(null);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
@@ -282,7 +304,7 @@ export default function FollowUps({ mode = 'quotation', webhookUrl, onClose }) {
   const [preparingBooking, setPreparingBooking] = useState(false);
 
   const normalizedUserRole = String(userRole || '').toLowerCase();
-  const isPrivilegedUser = ['owner','admin'].includes(normalizedUserRole);
+  const isPrivilegedUser = ['owner','admin','backend'].includes(normalizedUserRole);
   const resolvedMyBranch = String(me.branch || allowedBranches[0] || '').trim();
   const branchFilterValue = isPrivilegedUser
     ? (selectedBranch && selectedBranch !== 'all' ? selectedBranch : '')
@@ -1455,7 +1477,12 @@ const extractRawPayloadObject = (...sources) => {
     isPrivilegedUser,
   ]);
 
-  const updateFollowUp = async (serialNo, patch) => {
+  const updateFollowUp = async (serialNo, patch, opts = {}) => {
+    const {
+      refreshOnSuccess = true,
+      showSuccessMessage = true,
+      showErrorMessage = true,
+    } = opts || {};
     try {
       // Ensure branch travels with update (some GAS scripts depend on it)
       const branchForUpdate = !isPrivilegedUser
@@ -1479,13 +1506,58 @@ const extractRawPayloadObject = (...sources) => {
       const resp = await callWebhook({ method: 'POST', payload: { action: 'updateFollowup', serialNo, patch: withBranch } });
       const j = resp?.data || resp;
       if (!j?.success) throw new Error('Failed');
-      message.success('Updated');
-      await fetchFollowUps();
+      if (showSuccessMessage) message.success('Updated');
+      if (refreshOnSuccess) await fetchFollowUps();
       return true;
     } catch  {
-      message.error('Update failed');
+      if (showErrorMessage) message.error('Update failed');
       return false;
     }
+  };
+
+  const applyOptimisticFollowUpPatch = (serialNo, patch) => {
+    let previousRow = null;
+    const serial = String(serialNo || '').trim();
+    setAllRows((prev) => (prev || []).map((r) => {
+      if (String(r?.serialNo || '').trim() !== serial) return r;
+      previousRow = { ...r };
+      const next = { ...r };
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'status')) {
+        next.status = String(patch?.status || '').toLowerCase();
+      }
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'closeReason')) {
+        next.closeReason = patch?.closeReason || '';
+      }
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'closeNotes')) {
+        next.closeNotes = patch?.closeNotes || '';
+      }
+      const noteText = patch?.followUp?.notes ?? patch?.followupNotes ?? patch?.notes ?? patch?.closeNotes;
+      if (Object.prototype.hasOwnProperty.call(patch || {}, 'followUp') || Object.prototype.hasOwnProperty.call(patch || {}, 'closeNotes') || Object.prototype.hasOwnProperty.call(patch || {}, 'notes')) {
+        next.followUpNotes = String(noteText || '').trim();
+      }
+      if (patch?.followUp && Object.prototype.hasOwnProperty.call(patch.followUp, 'at')) {
+        const raw = patch.followUp.at;
+        if (!raw) {
+          next.followUpAt = null;
+        } else {
+          const d = dayjs(raw);
+          if (d.isValid()) {
+            next.followUpAt = d;
+            next.sortAtMs = d.valueOf();
+          }
+        }
+      }
+      return next;
+    }));
+    return previousRow;
+  };
+
+  const rollbackOptimisticFollowUpPatch = (serialNo, previousRow) => {
+    if (!previousRow) return;
+    const serial = String(serialNo || '').trim();
+    setAllRows((prev) => (prev || []).map((r) => (
+      String(r?.serialNo || '').trim() === serial ? previousRow : r
+    )));
   };
 
   const buildStampedNote = (note) => {
@@ -1662,7 +1734,7 @@ const extractRawPayloadObject = (...sources) => {
         regNo: row?.regNo || fv.regNo || "",
         custName: row?.name || fv.custName || fv.name || "",
         custMobile: row?.mobile || fv.custMobile || fv.mobile || "",
-        km: fv.km || "",
+        km: row?.km || fv.km || "",
         model: row?.model || fv.model || "",
         colour: fv.colour || row?.colour || "",
         branch: row?.branch || fv.branch || "",
@@ -1740,11 +1812,15 @@ const extractRawPayloadObject = (...sources) => {
     }
   };
 
-  const statusTagStyle = { fontSize: isMobile ? 9 : 10, lineHeight: '1.1', marginRight: 0 };
+  const statusTagStyle = {
+    fontSize: isMobile ? (isQuotation ? 10 : 9) : (isQuotation ? 11 : 10),
+    lineHeight: '1.1',
+    marginRight: 0,
+  };
   const actionBtnStyle = { height: isMobile ? 22 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12, fontWeight: 700 };
   const actionBtnSecondaryStyle = { height: isMobile ? 22 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12 };
-  const quotationActionBtnStyle = { height: isMobile ? 20 : 22, padding: isMobile ? '0 6px' : '0 8px', borderRadius: 999, fontSize: isMobile ? 10 : 11, fontWeight: 600 };
-  const quotationActionBtnSecondaryStyle = { height: isMobile ? 20 : 22, padding: isMobile ? '0 6px' : '0 8px', borderRadius: 999, fontSize: isMobile ? 10 : 11 };
+  const quotationActionBtnStyle = { height: isMobile ? 24 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12, fontWeight: 700 };
+  const quotationActionBtnSecondaryStyle = { height: isMobile ? 24 : 26, padding: isMobile ? '0 8px' : '0 10px', borderRadius: 999, fontSize: isMobile ? 11 : 12 };
   const iconBtnStyle = { height: isMobile ? 20 : 18, padding: '0 6px', fontSize: isMobile ? 11 : 10 };
 
   const renderJobcardStatusActions = (r) => {
@@ -1753,6 +1829,7 @@ const extractRawPayloadObject = (...sources) => {
     const isCompleted = status === 'completed';
     const isInvoiceLoading = invoiceLoadingId === (r.jcNo || r.key || r.mobile || '');
     const miniStack = { display: 'flex', flexDirection: 'column', gap: 2, lineHeight: 1.1 };
+    const mobile = String(r?.mobile || '').replace(/[^\d+]/g, '');
     return (
       <div style={miniStack}>
         <Tooltip title={r.closeReason || r.followUpNotes || ''}>
@@ -1760,63 +1837,113 @@ const extractRawPayloadObject = (...sources) => {
             {STATUS_LABEL[r.status] || r.status}
           </Tag>
         </Tooltip>
-        {isPending ? (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           <Button
             size="small"
-            type="primary"
             icon={<PhoneOutlined />}
-            style={actionBtnStyle}
-            onClick={() => openPostService(r)}
-          >
-            Post Service
-          </Button>
-        ) : isCompleted ? (
-          <Button
-            size="small"
-            type="default"
-            icon={<FileTextOutlined />}
-            loading={isInvoiceLoading}
             style={actionBtnSecondaryStyle}
-            onClick={() => handleServiceInvoice(r)}
+            onClick={() => {
+              if (!mobile) {
+                message.warning('Mobile number not available');
+                return;
+              }
+              window.location.href = `tel:${mobile}`;
+            }}
           >
-            Service Invoice
+            Call
           </Button>
-        ) : (
-          <span style={{ fontSize: 10, color: '#999' }}>—</span>
-        )}
+          {isPending ? (
+            <Button
+              size="small"
+              type="primary"
+              icon={<PhoneOutlined />}
+              style={actionBtnStyle}
+              onClick={() => openPostService(r)}
+            >
+              Post Service
+            </Button>
+          ) : isCompleted ? (
+            <Button
+              size="small"
+              type="default"
+              icon={<FileTextOutlined />}
+              loading={isInvoiceLoading}
+              style={actionBtnSecondaryStyle}
+              onClick={() => handleServiceInvoice(r)}
+            >
+              Service Invoice
+            </Button>
+          ) : null}
+        </div>
       </div>
     );
   };
 
-  const renderQuotationStatusActions = (r) => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.1 }}>
-      <Tooltip title={r.closeReason || r.followUpNotes || ''}>
-        <Tag color={STATUS_COLOR[r.status] || 'default'} style={statusTagStyle}>
-          {STATUS_LABEL[r.status] || r.status}
-        </Tag>
-      </Tooltip>
-      <div style={{ display: 'flex', gap: 4 }}>
-        <Tooltip title="Mark done/booked with reason">
+  const handleQuotationCall = (r) => {
+    const mobile = String(r?.mobile || '').replace(/[^\d+]/g, '');
+    if (!mobile) {
+      message.warning('Mobile number not available');
+      return;
+    }
+    window.location.href = `tel:${mobile}`;
+  };
+
+  const renderQuotationStatusActions = (r) => {
+    const statusKey = String(r?.status || 'pending').toLowerCase();
+    const isPending = statusKey === 'pending';
+
+    if (!isPending) {
+      return (
+        <div style={{ display: 'flex', lineHeight: 1.1 }}>
+          <Tooltip title={r.closeReason || r.followUpNotes || ''}>
+            <Tag color={STATUS_COLOR[statusKey] || 'default'} style={statusTagStyle}>
+              {STATUS_LABEL[statusKey] || statusKey}
+            </Tag>
+          </Tooltip>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, lineHeight: 1.1 }}>
+        <Tooltip title={r.closeReason || r.followUpNotes || ''}>
+          <Tag color={STATUS_COLOR[statusKey] || 'default'} style={statusTagStyle}>
+            {STATUS_LABEL[statusKey] || statusKey}
+          </Tag>
+        </Tooltip>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          <Tooltip title="Call customer">
+            <Button
+              size="small"
+              icon={<PhoneOutlined />}
+              style={quotationActionBtnSecondaryStyle}
+              onClick={() => handleQuotationCall(r)}
+            >
+              Call
+            </Button>
+          </Tooltip>
+          <Tooltip title="Mark done/booked with reason">
+            <Button
+              size="small"
+              type="primary"
+              icon={<CheckCircleOutlined />}
+              style={quotationActionBtnStyle}
+              onClick={() => setClosing({ open: true, serial: r.serialNo, status: 'converted', reason: '', notes: '' })}
+            >
+              Done
+            </Button>
+          </Tooltip>
           <Button
             size="small"
-            type="primary"
-            icon={<CheckCircleOutlined />}
-            style={quotationActionBtnStyle}
-            onClick={() => setClosing({ open: true, serial: r.serialNo, status: 'converted', reason: '', notes: '' })}
+            style={quotationActionBtnSecondaryStyle}
+            onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}
           >
-            Done
+            Reschedule
           </Button>
-        </Tooltip>
-        <Button
-          size="small"
-          style={quotationActionBtnSecondaryStyle}
-          onClick={() => setReschedule({ open: true, serial: r.serialNo, at: r.followUpAt || dayjs(), notes: r.followUpNotes || '' })}
-        >
-          Reschedule
-        </Button>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderBookingInvoiceInsurance = (r) => {
     const vals = r.values || {};
@@ -1966,9 +2093,9 @@ const extractRawPayloadObject = (...sources) => {
               <div className="fu-offering-vehicle-model">{v.title}</div>
               <div className="fu-offering-metrics">
                 <span><b>Price</b>: {v.priceText}</span>
-                <span><b>DP</b>: {v.dpText}</span>
+                {v.showFinance ? <span><b>DP</b>: {v.dpText}</span> : null}
               </div>
-              {v.emiText ? <div className="fu-offering-emi">{v.emiText}</div> : null}
+              {v.showFinance && v.emiText ? <div className="fu-offering-emi">{v.emiText}</div> : null}
               {v.fittings.length ? (
                 <div className="fu-offering-fit">
                   <b>Fittings</b>: {v.fittings.join(', ')}
@@ -2063,9 +2190,9 @@ const extractRawPayloadObject = (...sources) => {
               <div className="fu-offering-vehicle-model">{v.title}</div>
               <div className="fu-offering-metrics">
                 <span><b>Price</b>: {v.priceText}</span>
-                <span><b>DP</b>: {v.dpText}</span>
+                {v.showFinance ? <span><b>DP</b>: {v.dpText}</span> : null}
               </div>
-              {v.emiText ? <div className="fu-offering-emi">{v.emiText}</div> : null}
+              {v.showFinance && v.emiText ? <div className="fu-offering-emi">{v.emiText}</div> : null}
               {v.fittings.length ? (
                 <div className="fu-offering-fit">
                   <b>Fittings</b>: {v.fittings.join(', ')}
@@ -2114,7 +2241,7 @@ const extractRawPayloadObject = (...sources) => {
 
   return (
     <ErrorBoundary>
-      <div className="fu-bg">
+      <div className={`fu-bg ${isQuotation ? 'fu-mode-quotation' : ''}`}>
         <style>{`
           .fu-bg {
             background:
@@ -2124,6 +2251,47 @@ const extractRawPayloadObject = (...sources) => {
               linear-gradient(180deg, rgba(248,250,252,0.95), rgba(255,255,255,0.86));
             border-radius: 18px;
             padding: 14px;
+          }
+          .fu-mode-quotation {
+            background:
+              radial-gradient(1200px 620px at 2% 0%, rgba(29, 78, 216, 0.18), transparent 58%),
+              radial-gradient(980px 540px at 96% 0%, rgba(14, 165, 233, 0.12), transparent 56%),
+              radial-gradient(820px 420px at 50% 100%, rgba(34, 197, 94, 0.10), transparent 62%),
+              linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.88));
+          }
+          .fu-mode-quotation .fu-card-quotation {
+            border: 1px solid #dbeafe;
+            box-shadow: 0 14px 36px rgba(30, 64, 175, 0.12);
+          }
+          .fu-head-grid {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            justify-content: space-between;
+          }
+          .fu-head-controls-wrap {
+            border: 1px solid #dbeafe;
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(248,250,252,0.92));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+            padding: 10px;
+          }
+          .fu-mode-quotation .compact-table-quotation .ant-table-thead > tr > th {
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.35px;
+            color: #0f172a;
+          }
+          .fu-mode-quotation .compact-table-quotation .ant-table-tbody > tr:nth-child(even) > td {
+            background: rgba(248, 250, 252, 0.78);
+          }
+          .fu-mode-quotation .compact-table-quotation .ant-table-tbody > tr > td {
+            padding-top: 10px;
+            padding-bottom: 10px;
+          }
+          .fu-mode-quotation .compact-table-quotation .ant-table-tbody > tr:hover > td {
+            background: rgba(30, 64, 175, 0.08) !important;
           }
           .row-pending td { background: rgba(250, 140, 22, 0.09) !important; }
           .compact-table { border-radius: 16px; overflow: hidden; }
@@ -2246,14 +2414,20 @@ const extractRawPayloadObject = (...sources) => {
             color: #1d4ed8;
           }
           @media (max-width: 640px) {
+            .fu-head-grid {
+              flex-direction: column;
+            }
+            .fu-head-controls-wrap {
+              padding: 8px;
+            }
             .fu-offering-popover .ant-popover-inner {
               min-width: 280px;
               max-width: calc(100vw - 24px);
             }
           }
         `}</style>
-        <Card style={softCard} bodyStyle={{ padding: isMobile ? 12 : 16 }}>
-          <div style={{ display: 'flex', alignItems: isMobile ? 'stretch' : 'flex-start', justifyContent: isMobile ? 'flex-start' : 'space-between', gap: 14, flexWrap: 'wrap', flexDirection: isMobile ? 'column' : 'row' }}>
+        <Card className={isQuotation ? 'fu-card-quotation' : ''} style={softCard} bodyStyle={{ padding: isMobile ? 12 : 16 }}>
+          <div className="fu-head-grid" style={{ alignItems: isMobile ? 'stretch' : 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
             {/* Left: identity */}
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', minWidth: isMobile ? '100%' : 260, width: isMobile ? '100%' : undefined }}>
               <Avatar size={isMobile ? 36 : 44} style={{ background: '#111827' }}>
@@ -2306,6 +2480,7 @@ const extractRawPayloadObject = (...sources) => {
             {/* Right: controls */}
             <div style={{ flex: 1, minWidth: isMobile ? '100%' : 320 }}>
               <div style={{ display: 'flex', justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
+                <div className={isQuotation ? 'fu-head-controls-wrap' : ''} style={{ width: '100%' }}>
                 <Space wrap={!isMobile} direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
                   {isJobcard ? (
                     <Select
@@ -2364,9 +2539,24 @@ const extractRawPayloadObject = (...sources) => {
                       value={selectedBranch}
                       onChange={(v) => setSelectedBranch(v)}
                       options={branchOptions}
+                      placeholder="Filter branch"
                       style={{ minWidth: isMobile ? '100%' : 150, width: controlWidth }}
                     />
                   )}
+
+                  {isQuotation ? (
+                    <Button
+                      onClick={() => {
+                        setFilter('all');
+                        setDateRange(null);
+                        setQ('');
+                        if (isPrivilegedUser) setSelectedBranch('all');
+                      }}
+                      style={isMobile ? { ...pillBtn, width: '100%' } : pillBtn}
+                    >
+                      Reset
+                    </Button>
+                  ) : null}
 
                   <Button
                     onClick={fetchFollowUps}
@@ -2378,6 +2568,7 @@ const extractRawPayloadObject = (...sources) => {
                     Refresh
                   </Button>
                 </Space>
+                </div>
               </div>
             </div>
           </div>
@@ -2394,7 +2585,7 @@ const extractRawPayloadObject = (...sources) => {
             size="small"
             sticky={!isMobile}
             tableLayout={isMobile ? 'auto' : 'fixed'}
-            className="compact-table"
+            className={`compact-table ${isQuotation ? 'compact-table-quotation' : ''}`}
             rowClassName={(r) => (isRowPendingStatus(r) ? 'row-pending' : '')}
             onRow={(row) => ({
               onClick: (event) => {
@@ -2433,21 +2624,22 @@ const extractRawPayloadObject = (...sources) => {
       <Modal
         title={`Reschedule ${reschedule.serial || ''}`}
         open={reschedule.open}
-        confirmLoading={rescheduleSaving}
-        maskClosable={!rescheduleSaving}
-        keyboard={!rescheduleSaving}
-        closable={!rescheduleSaving}
-        onCancel={() => rescheduleSaving ? null : setReschedule({ open: false, serial: null, at: null, notes: '' })}
-        onOk={async () => {
-          if (rescheduleSaving) return;
-          setRescheduleSaving(true);
-          try {
-            const stamped = buildStampedNote(reschedule.notes);
-            const ok = await updateFollowUp(reschedule.serial, { followUp: { at: reschedule.at?.toISOString?.() || null, notes: stamped }, status: 'pending' });
-            if (ok) setReschedule({ open: false, serial: null, at: null, notes: '' });
-          } finally {
-            setRescheduleSaving(false);
-          }
+        onCancel={() => setReschedule({ open: false, serial: null, at: null, notes: '' })}
+        onOk={() => {
+          const serial = reschedule.serial;
+          const stamped = buildStampedNote(reschedule.notes);
+          const patch = { followUp: { at: reschedule.at?.toISOString?.() || null, notes: stamped }, status: 'pending' };
+          const previousRow = applyOptimisticFollowUpPatch(serial, patch);
+          setReschedule({ open: false, serial: null, at: null, notes: '' });
+          void (async () => {
+            const ok = await updateFollowUp(serial, patch, { refreshOnSuccess: false, showSuccessMessage: false, showErrorMessage: true });
+            if (!ok) {
+              rollbackOptimisticFollowUpPatch(serial, previousRow);
+              await fetchFollowUps();
+              return;
+            }
+            void fetchFollowUps();
+          })();
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
@@ -2459,38 +2651,34 @@ const extractRawPayloadObject = (...sources) => {
       <Modal
         title={`Mark Done – ${closing.serial || ''}`}
         open={closing.open}
-        confirmLoading={closingSaving}
-        maskClosable={!closingSaving}
-        keyboard={!closingSaving}
-        closable={!closingSaving}
-        cancelButtonProps={{ disabled: closingSaving }}
-        okButtonProps={{ disabled: closingSaving }}
-        onCancel={() => closingSaving ? null : setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' })}
-        onOk={async () => {
-          if (closingSaving) return;
-          setClosingSaving(true);
-          try {
-            const stamped = buildStampedNote(closing.details);
-            const patch = {
-              status: closing.status || 'converted',
-              closeReason: closing.status || 'converted',
-              closeNotes: closing.details || '',
-              closedAt: new Date().toISOString(),
-              followUp: { notes: stamped },
+        onCancel={() => setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' })}
+        onOk={() => {
+          const serial = closing.serial;
+          const stamped = buildStampedNote(closing.details);
+          const patch = {
+            status: closing.status || 'converted',
+            closeReason: closing.status || 'converted',
+            closeNotes: closing.details || '',
+            closedAt: new Date().toISOString(),
+            followUp: { notes: stamped },
+          };
+          if (closing.status === 'purchased_elsewhere') {
+            patch.purchasedElsewhere = {
+              boughtFrom: closing.boughtFrom || '',
+              offer: closing.offer || '',
             };
-            if (closing.status === 'purchased_elsewhere') {
-              patch.purchasedElsewhere = {
-                boughtFrom: closing.boughtFrom || '',
-                offer: closing.offer || '',
-              };
-            }
-            const ok = await updateFollowUp(closing.serial, patch);
-            if (ok) {
-              setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
-            }
-          } finally {
-            setClosingSaving(false);
           }
+          const previousRow = applyOptimisticFollowUpPatch(serial, patch);
+          setClosing({ open: false, serial: null, status: 'converted', details: '', boughtFrom: '', offer: '' });
+          void (async () => {
+            const ok = await updateFollowUp(serial, patch, { refreshOnSuccess: false, showSuccessMessage: false, showErrorMessage: true });
+            if (!ok) {
+              rollbackOptimisticFollowUpPatch(serial, previousRow);
+              await fetchFollowUps();
+              return;
+            }
+            void fetchFollowUps();
+          })();
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>

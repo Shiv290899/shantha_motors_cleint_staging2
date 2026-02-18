@@ -101,6 +101,11 @@ export default function FetchJobcard({
     }
     return "";
   };
+  const nonEmpty = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+  const prefer = (...vals) => {
+    for (const v of vals) if (nonEmpty(v)) return v;
+    return "";
+  };
 
   const tenDigits = (x) => String(x || "").replace(/\D/g, "").slice(-10);
   const normalizeReg = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -305,20 +310,52 @@ export default function FetchJobcard({
       const fvFromValues = {
         jcNo: String(v['JC No.'] || ''),
         branch: String(v.Branch || ''),
+        mechanic: String(v.Allotted_Mechanic || v['Allotted Mechanic'] || ''),
+        executive: String(v.Executive || ''),
         regNo: formatReg(v.Vehicle_No || v['Vehicle No'] || '', ''),
+        company: String(v.Company || ''),
+        serviceType: String(v.Service_Type || v['Service Type'] || ''),
         model: String(v.Model || ''),
         colour: String(v.Colour || v.Color || ''),
+        chassisNo: String(v.Chassis_No || v['Chassis No'] || '').toUpperCase(),
         km: String(v.KM || v['Odometer Reading'] || v['Odomete Reading'] || '').replace(/\D/g,'') || '',
-        serviceType: String(v.Service_Type || v['Service Type'] || ''),
+        fuelLevel: String(v.Fuel_Level || v['Fuel Level'] || ''),
+        vehicleType: String(v.Vehicle_Type || v['Vehicle Type'] || ''),
+        paymentMode: String(v.Payment_Mode || v['Payment Mode'] || ''),
         custName: String(v.Customer_Name || ''),
         custMobile: String(v.Mobile || ''),
         obs: String(v.Customer_Observation || ''),
         expectedDelivery: String(v.Expected_Delivery_Date || ''),
         amount: String(v.Collected_Amount || ''),
+        utr: String(v.UTR_No || v['UTR No'] || ''),
       };
       if (r && r.payload && typeof r.payload === 'object') {
         const p = r.payload || {};
-        const merged = { ...fvFromValues, ...(p.formValues || {}) };
+        const pf = p.formValues || {};
+        const merged = {
+          jcNo: prefer(pf.jcNo, fvFromValues.jcNo),
+          branch: prefer(pf.branch, fvFromValues.branch),
+          mechanic: prefer(pf.mechanic, fvFromValues.mechanic),
+          executive: prefer(pf.executive, fvFromValues.executive),
+          expectedDelivery: prefer(pf.expectedDelivery, fvFromValues.expectedDelivery),
+          regNo: prefer(pf.regNo, fvFromValues.regNo),
+          company: prefer(pf.company, fvFromValues.company),
+          model: prefer(pf.model, fvFromValues.model),
+          colour: prefer(pf.colour, pf.color, fvFromValues.colour),
+          chassisNo: prefer(pf.chassisNo, pf.chassis, fvFromValues.chassisNo),
+          km: String(prefer(pf.km, fvFromValues.km)).replace(/\D/g, ''),
+          fuelLevel: prefer(pf.fuelLevel, fvFromValues.fuelLevel),
+          callStatus: prefer(pf.callStatus, ''),
+          custName: prefer(pf.custName, fvFromValues.custName),
+          custMobile: prefer(pf.custMobile, fvFromValues.custMobile),
+          obs: prefer(pf.obs, fvFromValues.obs),
+          vehicleType: prefer(pf.vehicleType, fvFromValues.vehicleType),
+          serviceType: prefer(pf.serviceType, fvFromValues.serviceType),
+          floorMat: prefer(pf.floorMat, fvFromValues.floorMat),
+          amount: prefer(pf.amount, fvFromValues.amount),
+          paymentMode: prefer(pf.paymentMode, fvFromValues.paymentMode),
+          utr: prefer(pf.utr, pf.utrNo, fvFromValues.utr),
+        };
         return {
           payload: {
             ...p,
@@ -485,6 +522,14 @@ export default function FetchJobcard({
       }
 
       const fv = p?.formValues || {};
+      const sv = p?._values || {};
+      const pv = (keys) => {
+        for (const k of keys) {
+          const val = sv?.[k];
+          if (val !== undefined && val !== null && String(val).trim() !== '') return val;
+        }
+        return '';
+      };
       const savedAtRaw =
         p?.savedAt ||
         p?.createdAt ||
@@ -517,23 +562,23 @@ export default function FetchJobcard({
 
       form.setFieldsValue({
         jcNo: fv.jcNo || '',
-        branch: fv.branch || undefined,
-        mechanic: fv.mechanic || undefined,
-        executive: fv.executive || undefined,
+        branch: fv.branch || pv(['Branch']) || undefined,
+        mechanic: fv.mechanic || pv(['Allotted_Mechanic', 'Allotted Mechanic']) || undefined,
+        executive: fv.executive || pv(['Executive']) || undefined,
         expectedDelivery: fv.expectedDelivery ? dayjs(fv.expectedDelivery, ["DD-MM-YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY","YYYY-MM-DD", dayjs.ISO_8601], true) : null,
-        regNo: fv.regNo || '',
-        company: String(fv.company || "").toUpperCase(),
-        model: String(fv.model || "").toUpperCase(),
-        colour: fv.colour || '',
-        chassisNo: String(fv.chassisNo || fv.chassis || '').toUpperCase(),
-        km: fv.km ? `${String(fv.km).replace(/\D/g,'')} KM` : '',
-        fuelLevel: fv.fuelLevel || undefined,
+        regNo: fv.regNo || pv(['Vehicle_No', 'Vehicle No']) || '',
+        company: String(fv.company || pv(['Company']) || "").toUpperCase(),
+        model: String(fv.model || pv(['Model']) || "").toUpperCase(),
+        colour: fv.colour || pv(['Colour', 'Color']) || '',
+        chassisNo: String(fv.chassisNo || fv.chassis || pv(['Chassis_No', 'Chassis No']) || '').toUpperCase(),
+        km: (fv.km || pv(['KM', 'Odometer Reading', 'Odomete Reading'])) ? `${String(fv.km || pv(['KM', 'Odometer Reading', 'Odomete Reading'])).replace(/\D/g,'')} KM` : '',
+        fuelLevel: fv.fuelLevel || pv(['Fuel_Level', 'Fuel Level']) || undefined,
         callStatus: fv.callStatus || '',
         custName: fv.custName || '',
-        custMobile: String(fv.custMobile || '').replace(/\D/g,'').slice(-10),
-        obs: (fv.obs || '').replace(/\s*#\s*/g, "\n"),
-        vehicleType: vehicleType || undefined,
-        serviceType: serviceType || undefined,
+        custMobile: String(fv.custMobile || pv(['Mobile']) || '').replace(/\D/g,'').slice(-10),
+        obs: String(fv.obs || pv(['Customer_Observation']) || '').replace(/\s*#\s*/g, "\n"),
+        vehicleType: vehicleType || pv(['Vehicle_Type', 'Vehicle Type']) || undefined,
+        serviceType: serviceType || pv(['Service_Type', 'Service Type']) || undefined,
         floorMat: fv.floorMat === 'Yes' ? 'Yes' : fv.floorMat === 'No' ? 'No' : undefined,
         discounts: { labour: savedDiscount },
         gstLabour: derivedGstPct,

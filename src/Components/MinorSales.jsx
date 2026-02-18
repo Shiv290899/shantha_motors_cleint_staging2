@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from "react";
-import { Card, Form, Input, InputNumber, Button, Row, Col, Divider, message, Space, Typography, Table, Popconfirm, Select } from "antd";
+import { Card, Form, Input, InputNumber, Button, Row, Col, Divider, message, Space, Typography, Table, Popconfirm, AutoComplete } from "antd";
 import { handleSmartPrint } from "../utils/printUtils";
 import MinorSalesPrintSheet from "./MinorSalesPrintSheet";
 import { saveBookingViaWebhook } from "../apiCalls/forms";
@@ -15,16 +15,12 @@ const phoneRule = [
   { pattern: /^[6-9]\d{9}$/, message: "Enter a valid 10-digit Indian mobile number" },
 ];
 
-const ITEM_DEFS = {
-  helmet: { label: "Helmet", prices: [500, 400] },
-  mat: { label: "Floor Mat", prices: [200, 150, 100] },
-  vehicleCover: { label: "Vehicle Cover", prices: [300, 250, 200] },
-  numberPlateFrame: { label: "Number Plate Frame", prices: [200, 150, 100] },
-  others: { label: "Others", prices: [] },
-};
-const ITEM_OPTIONS = [...Object.entries(ITEM_DEFS)]
-  .sort((a, b) => (a[0] === 'others') - (b[0] === 'others'))
-  .map(([value, def]) => ({ value, label: def.label }));
+const ITEM_CATALOG = [
+  { label: "Helmet", prices: [500, 400] },
+  { label: "Floor Mat", prices: [200, 150, 100] },
+  { label: "Vehicle Cover", prices: [300, 250, 200] },
+  { label: "Number Plate Frame", prices: [200, 150, 100] },
+];
 
 const toNum = (v) => Number(String(v ?? 0).replace(/[₹,\s]/g, "")) || 0;
 
@@ -33,6 +29,7 @@ function inr(n) {
 }
 
 function normalize10(s) { return String(s || "").replace(/\D/g, "").slice(-10); }
+function normalizeItemKey(s) { return String(s || "").trim().toUpperCase(); }
 
 function genOrderId() {
   const d = new Date();
@@ -98,15 +95,28 @@ export default function MinorSales() {
     })();
   }, []);
 
-  const selectedKey = Form.useWatch('item', form);
-  const selectedDef = selectedKey ? ITEM_DEFS[selectedKey] : null;
+  const selectedItemName = Form.useWatch('item', form);
   const selectedPrice = Form.useWatch('price', form);
   const qty = Form.useWatch('qty', form) || 1;
-
-  const customItemName = Form.useWatch('customItemName', form);
-  const customQty = Form.useWatch('customQty', form) || 1;
   const payCash = Form.useWatch('paymentCash', form);
   const payOnline = Form.useWatch('paymentOnline', form);
+
+  const itemOptions = useMemo(() => {
+    const q = normalizeItemKey(selectedItemName);
+    const list = ITEM_CATALOG.filter((it) => !q || normalizeItemKey(it.label).includes(q));
+    return list.map((it) => ({ value: it.label }));
+  }, [selectedItemName]);
+
+  const exactCatalogItem = useMemo(() => {
+    const key = normalizeItemKey(selectedItemName);
+    if (!key) return null;
+    return ITEM_CATALOG.find((it) => normalizeItemKey(it.label) === key) || null;
+  }, [selectedItemName]);
+
+  const priceOptions = useMemo(
+    () => (exactCatalogItem?.prices || []).map((p) => ({ value: String(p), label: `₹${p}` })),
+    [exactCatalogItem]
+  );
 
   const cartTotal = useMemo(() => {
     if (!Array.isArray(cart) || cart.length === 0) return 0;
@@ -117,20 +127,13 @@ export default function MinorSales() {
   const splitMatchesTotal = cartTotal > 0 && splitTotal === toNum(cartTotal);
 
   const selectedItemRow = useMemo(() => {
-    if (!selectedKey) return null;
-    if (selectedKey === 'others') {
-      const unit = Number(selectedPrice);
-      const q = Number(customQty || 1);
-      const name = (customItemName || '').trim();
-      if (!name || !unit) return null;
-      return { item: name.toUpperCase(), qty: q, unitPrice: unit, amount: unit * q };
-    }
-    if (!selectedDef || !selectedPrice) return null;
+    const name = String(selectedItemName || '').trim();
+    if (!name) return null;
+    const unit = toNum(selectedPrice);
+    if (!unit) return null;
     const q = Number(qty || 1);
-    const unit = Number(selectedPrice);
-    const label = String(selectedDef.label || '').toUpperCase();
-    return { item: label, qty: q, unitPrice: unit, amount: unit * q };
-  }, [selectedKey, selectedDef, selectedPrice, qty, customQty, customItemName]);
+    return { item: name, qty: q, unitPrice: unit, amount: unit * q };
+  }, [selectedItemName, selectedPrice, qty]);
 
   // Autofill cash with total when amounts are empty to reduce clicks
   useEffect(() => {
@@ -157,40 +160,8 @@ export default function MinorSales() {
       }
       return [...prev, selectedItemRow];
     });
-    if (selectedKey === 'others') {
-      form.setFieldsValue({ item: undefined, price: undefined, customQty: 1, customItemName: undefined });
-    } else {
-      form.setFieldsValue({ item: undefined, price: undefined, qty: 1 });
-    }
+    form.setFieldsValue({ item: undefined, price: undefined, qty: 1 });
   }
-
-  // Auto-add to cart when a predefined item's price is selected (qty defaults to 1)
-  useEffect(() => {
-    if (!selectedKey || selectedKey === 'others') return;
-    if (!selectedDef) return;
-    if (!selectedPrice) return;
-    // Ensure qty defaults to 1 if empty
-    const q = form.getFieldValue('qty');
-    if (!q) form.setFieldsValue({ qty: 1 });
-    // Add immediately then reset selectors
-    const row = selectedItemRow;
-    if (row && row.item && Number(row.unitPrice) > 0) {
-      setCart(prev => {
-        const idx = prev.findIndex(p => p.item === row.item && Number(p.unitPrice) === Number(row.unitPrice));
-        if (idx >= 0) {
-          const next = [...prev];
-          const mergedQty = Number(next[idx].qty || 0) + Number(row.qty || 1);
-          next[idx] = { ...next[idx], qty: mergedQty, amount: mergedQty * Number(next[idx].unitPrice) };
-          return next;
-        }
-        return [...prev, row];
-      });
-      // Reset selection after auto-add
-      form.setFieldsValue({ item: undefined, price: undefined, qty: 1 });
-      message.success('Added to cart');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey, selectedPrice]);
 
   function updateCartQty(index, newQty) {
     setCart(prev => {
@@ -308,7 +279,7 @@ export default function MinorSales() {
 
   // removed legacy printSlip (use printAndSaveSlip)
 
-  const initValues = useMemo(() => ({ item: undefined, price: undefined, qty: 1, customQty: 1, paymentCash: 0, paymentOnline: 0 }), []);
+  const initValues = useMemo(() => ({ item: undefined, price: undefined, qty: 1, paymentCash: 0, paymentOnline: 0 }), []);
 
   async function _handleSave() {
     try {
@@ -433,93 +404,55 @@ export default function MinorSales() {
             <Form.Item
               name="item"
               label="Item"
-              rules={[{ required: true, message: "Select item" }]}
+              rules={[{ required: true, message: "Enter item" }]}
             >
-              <Select
-                options={ITEM_OPTIONS}
-                placeholder="Choose item"
-                showSearch
-                optionFilterProp="label"
+              <AutoComplete
+                options={itemOptions}
+                placeholder="Type or choose item"
+                filterOption={(inputValue, option) =>
+                  normalizeItemKey(option?.value).includes(normalizeItemKey(inputValue))
+                }
+                defaultActiveFirstOption={false}
                 allowClear
               />
             </Form.Item>
           </Col>
           <Col xs={24} md={8}>
-            {selectedKey === "others" ? (
-              <Form.Item
-                name="price"
-                label="Price (₹)"
-                rules={[{ required: true, message: "Enter price" }]}
-              >
-                <InputNumber
-                  style={{ width: "100%" }}
-                  min={1}
-                  step={1}
-                  placeholder="Enter price"
-                />
-              </Form.Item>
-            ) : (
-              <Form.Item
-                name="price"
-                label="Price (₹)"
-                rules={[{ required: true, message: "Select price" }]}
-              >
-                <Select
-                  placeholder="Select price"
-                  disabled={!selectedDef}
-                  options={(selectedDef?.prices || []).map((p) => ({
-                    label: `₹${p}`,
-                    value: p,
-                  }))}
-                />
-              </Form.Item>
-            )}
+            <Form.Item
+              name="price"
+              label="Price (₹)"
+              rules={[
+                { required: true, message: "Enter price" },
+                {
+                  validator: (_, v) => toNum(v) > 0 ? Promise.resolve() : Promise.reject(new Error("Enter valid price")),
+                },
+              ]}
+            >
+              <AutoComplete
+                options={priceOptions}
+                placeholder={exactCatalogItem ? "Type price or choose suggestion" : "Type price"}
+                filterOption={(inputValue, option) =>
+                  String(option?.value || "").includes(String(inputValue || "").replace(/\D/g, ""))
+                }
+                defaultActiveFirstOption={false}
+                allowClear
+              />
+            </Form.Item>
           </Col>
           <Col xs={24} md={6}>
-            {selectedKey === "others" ? (
-              <Form.Item
-                name="customQty"
-                label="Quantity"
-                rules={[{ required: true, message: "Enter quantity" }]}
-              >
-                <InputNumber
-                  style={{ width: "100%" }}
-                  min={1}
-                  step={1}
-                />
-              </Form.Item>
-            ) : (
-              <Form.Item
-                name="qty"
-                label="Quantity"
-                rules={[{ required: true, message: "Enter quantity" }]}
-              >
-                <InputNumber
-                  style={{ width: "100%" }}
-                  min={1}
-                  step={1}
-                />
-              </Form.Item>
-            )}
+            <Form.Item
+              name="qty"
+              label="Quantity"
+              rules={[{ required: true, message: "Enter quantity" }]}
+            >
+              <InputNumber
+                style={{ width: "100%" }}
+                min={1}
+                step={1}
+              />
+            </Form.Item>
           </Col>
         </Row>
-
-        {selectedKey === "others" && (
-          <Row gutter={[12, 12]}>
-            <Col xs={24} md={16}>
-              <Form.Item
-                name="customItemName"
-                label="Item Name (Others)"
-                rules={[{ required: true, message: "Enter item name" }]}
-                getValueFromEvent={(e) =>
-                  e && e.target ? e.target.value.toUpperCase() : e
-                }
-              >
-                <Input placeholder="TYPE ITEM NAME" />
-              </Form.Item>
-            </Col>
-          </Row>
-        )}
 
         <Row>
           <Col span={24}>
@@ -527,11 +460,7 @@ export default function MinorSales() {
               onClick={addToCart}
               type="primary"
               ghost
-              disabled={
-                selectedKey === "others"
-                  ? !(customItemName && selectedPrice)
-                  : !(selectedDef && selectedPrice)
-              }
+              disabled={!selectedItemRow}
             >
               Add to cart
             </Button>

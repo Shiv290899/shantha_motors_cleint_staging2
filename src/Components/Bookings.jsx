@@ -44,7 +44,7 @@ export default function Bookings() {
   const [loading, setLoading] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
+  const [dateRange, setDateRange] = useState(() => [dayjs().startOf('month'), dayjs()]); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // 'today' | 'yesterday' | null
   const [, setUpdating] = useState(null);
   const [printModal, setPrintModal] = useState({ open: false, row: null });
@@ -62,7 +62,6 @@ export default function Bookings() {
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
-  const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
   const [actionModal, setActionModal] = useState({ open: false, type: '', row: null, fileList: [], loading: false });
   const [formModal, setFormModal] = useState({ open: false });
@@ -365,7 +364,7 @@ export default function Bookings() {
   const applyFilters = useCallback((list) => {
     const allowedSet = toKeySet(allowedBranches);
     const scoped = (list || []).filter((r) => {
-      if (allowedSet.size && !["owner","admin"].includes(userRole)) {
+      if (allowedSet.size && !["owner","admin","backend"].includes(userRole)) {
         if (!allowedSet.has(normalizeKey(r.branch))) return false;
       }
       if (branchFilter !== "all" && normalizeKey(r.branch) !== normalizeKey(branchFilter)) return false;
@@ -1457,34 +1456,42 @@ export default function Bookings() {
       <Modal
         open={remarkModal.open}
         title={`Update Remark: ${remarkModal.refId}`}
-        onCancel={()=> remarkSaving ? null : setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
-        confirmLoading={remarkSaving}
-        maskClosable={!remarkSaving}
-        keyboard={!remarkSaving}
-        closable={!remarkSaving}
-        cancelButtonProps={{ disabled: remarkSaving }}
-        onOk={async ()=>{
-          if (remarkSaving) return;
-          setRemarkSaving(true);
-          try {
-            if (!GAS_URL_STATIC) { message.error('Booking GAS URL not configured'); return; }
-            const stampedText = stampRemark(remarkModal.text);
-            const body = GAS_SECRET_STATIC ? { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET_STATIC } : { action: 'remark', bookingId: remarkModal.refId, level: remarkModal.level, text: stampedText };
-            const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'POST', payload: body });
-            if (resp && (resp.ok || resp.success)) {
-              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
-              setRows(prev => prev.map(x => x.bookingId === remarkModal.refId ? {
-                ...x,
-                RemarkLevel: remarkModal.level.toUpperCase(),
-                RemarkText: stampedText,
-                _remarkLevel: remarkModal.level,
-                _remarkText: stampedText
-              } : x));
+        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onOk={()=>{
+          if (!GAS_URL_STATIC) { message.error('Booking GAS URL not configured'); return; }
+          const { refId, level, text } = remarkModal;
+          const stampedText = stampRemark(text);
+          const prevRemark = remarksMap[refId];
+          const prevRow = rows.find((x) => x.bookingId === refId);
+          setRemarksMap((m)=> ({ ...m, [refId]: { level, text: stampedText } }));
+          setRows(prev => prev.map(x => x.bookingId === refId ? {
+            ...x,
+            RemarkLevel: level.toUpperCase(),
+            RemarkText: stampedText,
+            _remarkLevel: level,
+            _remarkText: stampedText
+          } : x));
+          setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+          void (async () => {
+            try {
+              const body = GAS_SECRET_STATIC ? { action: 'remark', bookingId: refId, level, text: stampedText, secret: GAS_SECRET_STATIC } : { action: 'remark', bookingId: refId, level, text: stampedText };
+              const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL_STATIC, method: 'POST', payload: body });
+              const out = resp?.data || resp;
+              if (!(out && (out.ok || out.success))) throw new Error('Save failed');
               message.success('Remark saved to sheet');
-              setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
-            } else { message.error('Save failed'); }
-          } catch { message.error('Save failed'); }
-          finally { setRemarkSaving(false); }
+            } catch {
+              setRemarksMap((m) => {
+                const next = { ...m };
+                if (prevRemark) next[refId] = prevRemark;
+                else delete next[refId];
+                return next;
+              });
+              if (prevRow) {
+                setRows(prev => prev.map(x => x.bookingId === refId ? prevRow : x));
+              }
+              message.error('Save failed');
+            }
+          })();
         }}
       >
         <Space direction='vertical' style={{ width: '100%' }}>

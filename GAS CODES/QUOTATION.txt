@@ -129,6 +129,9 @@ function json_(obj) {
 function safeJson_(txt, def) {
   try { return JSON.parse(String(txt || '')); } catch (e) { return def; }
 }
+function deepClone_(obj, def) {
+  try { return JSON.parse(JSON.stringify(obj)); } catch (e) { return def; }
+}
 function toTenDigits_(s) { return String(s||'').replace(/\D/g,'').replace(/^0+/,'').slice(-10); }
 function startOfDay_(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function endOfDay_(d) { const x = new Date(d); x.setHours(23,59,59,999); return x; }
@@ -170,6 +173,45 @@ function idxSerial_(headers) { return headerIndex_(headers, 'Quotation_ID', /(qu
 // Optional remark columns (auto-created on first write)
 function idxRemarkLevel_(headers) { return headerIndex_(headers, 'RemarkLevel', /remark.*level/i); }
 function idxRemarkText_(headers) { return headerIndex_(headers, 'RemarkText', /remark.*text/i); }
+
+// Keep only non-column data in Payload to avoid repeated storage.
+function compactQuotationPayload_(payload, fv) {
+  const p = deepClone_(payload && typeof payload === 'object' ? payload : {}, {}) || {};
+  const formValues = p.formValues && typeof p.formValues === 'object' ? p.formValues : {};
+  const compactFV = {};
+
+  const address = String(formValues.address || (fv && fv.address) || '').trim();
+  if (address) compactFV.address = address;
+  if (formValues.onRoadPrice !== undefined && formValues.onRoadPrice !== null && String(formValues.onRoadPrice).trim() !== '') {
+    compactFV.onRoadPrice = Number(formValues.onRoadPrice || 0) || 0;
+  }
+  if (formValues.downPayment !== undefined && formValues.downPayment !== null && String(formValues.downPayment).trim() !== '') {
+    compactFV.downPayment = Number(formValues.downPayment || 0) || 0;
+  }
+
+  if (Object.keys(compactFV).length) p.formValues = compactFV;
+  else delete p.formValues;
+
+  // Duplicate columns (Customer/Vehicle/Branch/Exec/Quotation/Remarks) should not be stored in payload.
+  delete p.name;
+  delete p.mobile;
+  delete p.serialNo;
+  delete p.company;
+  delete p.model;
+  delete p.variant;
+  delete p.branch;
+  delete p.executive;
+  delete p.remarks;
+  delete p.remark; // dedicated columns already store remark level/text
+
+  if (p.followUp && typeof p.followUp === 'object') {
+    delete p.followUp.customer;
+    delete p.followUp.branch;
+    delete p.followUp.assignedTo;
+  }
+
+  return p;
+}
 
 // ---------- Serial (numeric fallback only) ----------
 function nextSerial_() {
@@ -236,6 +278,8 @@ function saveQuotation_(data) {
     if (!cSer) return { success:false, message:'Quotation_ID column not found' };
 
     const now = new Date();
+    const compactPayload = compactQuotationPayload_(payload, fv);
+
     const values = {
       [cTs]: now,
       [cName]: fv.name || '',
@@ -244,7 +288,7 @@ function saveQuotation_(data) {
       [cMod]: fv.bikeModel || '',
       [cVar]: fv.variant || '',
       [cRem]: fv.remarks || '',
-      [cPay]: JSON.stringify(payload),
+      [cPay]: JSON.stringify(compactPayload),
       [cBr]:  fv.branch || '',
       [cEx]:  fv.executive || '',
       [cSer]: serial,
@@ -327,6 +371,7 @@ function search_(mode, query) {
           company: pickCell(/company/i),
           bikeModel: pickCell(/\bmodel\b/i),
           variant: pickCell(/\bvariant\b/i),
+          remarks: pickCell(/remarks?/i),
           branch: pickCell(/branch/i),
           executive: pickCell(/executive/i),
         }
@@ -417,6 +462,7 @@ function updateFollowup_(serialNo, patch) {
   const headers = headerRow_(sh);
   const cSerial = idxSerial_(headers);
   const cPayload = idxPayload_(headers);
+  const cRem = idxRemarks_(headers);
   if (!cSerial || !cPayload) return { success:false, message:'Required columns not found' };
 
   let targetRow = -1;
@@ -448,13 +494,13 @@ function updateFollowup_(serialNo, patch) {
     if ('purchasedElsewhere' in patchObj) payload.purchasedElsewhere = patchObj.purchasedElsewhere;
     if ('notes' in patchObj) payload.notes = patchObj.notes;
     if ('followupNotes' in patchObj) payload.followupNotes = patchObj.followupNotes;
-    if ('remarks' in patchObj) payload.remarks = patchObj.remarks;
+    if ('remarks' in patchObj && cRem) sh.getRange(targetRow, cRem).setValue(String(patchObj.remarks || ''));
   }
   if (!('status' in fu)) fu.status = 'pending';
   if (!('enabled' in fu)) fu.enabled = true;
 
   payload.followUp = fu;
-  sh.getRange(targetRow, cPayload).setValue(JSON.stringify(payload));
+  sh.getRange(targetRow, cPayload).setValue(JSON.stringify(compactQuotationPayload_(payload, {})));
 
   return { success:true, row: targetRow, serialNo, followUp: fu };
 }
@@ -581,7 +627,7 @@ function list_({ page = 1, pageSize = 10, limit = 0, branch = '', mode = '', q =
   return { data, total };
 }
 
-// ---------- Upsert remark into Payload + dedicated columns ----------
+// ---------- Upsert remark into dedicated columns ----------
 function updateRemark_(serialNo, level, text, by) {
   if (!serialNo) return { success:false, message:'serialNo is required' };
   const lv = String(level || '').toLowerCase();
@@ -616,14 +662,7 @@ function updateRemark_(serialNo, level, text, by) {
 
   const cell = sh.getRange(row, cPayload).getValue();
   const payload = safeJson_(cell, {}) || {};
-  const nowIso = new Date().toISOString();
-  payload.remark = {
-    level: lv,
-    text: String(text || '').slice(0, 240),
-    by: String(by || '').slice(0, 120),
-    at: nowIso,
-  };
-  sh.getRange(row, cPayload).setValue(JSON.stringify(payload));
+  sh.getRange(row, cPayload).setValue(JSON.stringify(compactQuotationPayload_(payload, {})));
 
   sh.getRange(row, rl).setValue(lv.toUpperCase());
   sh.getRange(row, rt).setValue(String(text || '').slice(0, 240));

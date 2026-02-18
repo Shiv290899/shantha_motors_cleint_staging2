@@ -894,13 +894,13 @@ export default function JobCard({ initialValues = null } = {}) {
           const staffName = staffNameRaw ? toCaps(staffNameRaw) : undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
           // who can switch branches
-          const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
+          const can = Boolean(user?.canSwitchBranch) || ["owner","admin","backend"].includes(String(role||'').toLowerCase());
           setCanSwitch(can);
           // Build allowed branch list
           try {
             const roleLc = String(role || '').toLowerCase();
-            if (["owner","admin"].includes(roleLc)) {
-              // Owners/Admins: load all branches and staff list for executive dropdown
+            if (["owner","admin","backend"].includes(roleLc)) {
+              // Owners/Admins/Backend: load all branches and staff list for executive dropdown
               try {
                 const res = await listBranchesPublic({ status: 'active', limit: 500 });
                 if (res?.success && Array.isArray(res?.data?.items)) {
@@ -1480,6 +1480,10 @@ export default function JobCard({ initialValues = null } = {}) {
 
   // ---- Post-service: update existing row by mobile, with payment mode ----
   const handlePostServiceFlow = async (mode) => {
+    if (isPostLocked) {
+      message.warning("Post-service already completed for this Job Card. Editing is locked.");
+      return;
+    }
     try {
       setPostSaving(true);
       // Ensure spinner paints before heavy work
@@ -1640,6 +1644,16 @@ export default function JobCard({ initialValues = null } = {}) {
         onlineCollected,
         totalCollected: collectedAmount,
       };
+
+      // Lock editable sections immediately once post-service is submitted.
+      setPostServiceLock({
+        locked: true,
+        at: nowIso,
+        mobile: mobile10,
+        amount: collectedAmount,
+        mode: paymentMode || null,
+      });
+
       const outboxId = enqueueOutbox({ type: 'post', data });
       setTimeout(async () => {
         try {
@@ -1979,6 +1993,7 @@ export default function JobCard({ initialValues = null } = {}) {
             title={pendingCount !== null ? `PendingCases (${pendingCount})` : "PendingCases"}
             open={pendingOpen}
             onCancel={() => setPendingOpen(false)}
+            width="min(1200px, 96vw)"
             footer={[
               <Button key="refresh" onClick={() => loadPendingCases()}>Refresh</Button>,
               <Button key="close" type="primary" onClick={() => setPendingOpen(false)}>Close</Button>,
@@ -1993,8 +2008,23 @@ export default function JobCard({ initialValues = null } = {}) {
                 size="small"
                 dataSource={pendingItems}
                 renderItem={(item) => (
-                  <List.Item
-                    actions={[
+                  <List.Item>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, width: "100%" }}>
+                      <div
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          whiteSpace: "normal",
+                          overflow: "visible",
+                          wordBreak: "break-word",
+                          fontWeight: 600,
+                          fontSize: 16,
+                          lineHeight: 1.4
+                        }}
+                        title={`${item.name || "-"} | ${item.mobile || "-"} | ${item.jcNo || "-"} | ${item.regNo || "-"} | ${item.branch || "-"}${item.followUpAt ? ` | ${item.followUpAt}` : ""}${item.followUpNotes ? ` | ${item.followUpNotes}` : ""}`}
+                      >
+                        {(item.name || "-")} | {(item.mobile || "-")} | {(item.jcNo || "-")} | {(item.regNo || "-")} | {(item.branch || "-")}{item.followUpAt ? ` | ${item.followUpAt}` : ""}{item.followUpNotes ? ` | ${item.followUpNotes}` : ""}
+                      </div>
                       <Button
                         size="small"
                         type="primary"
@@ -2008,15 +2038,7 @@ export default function JobCard({ initialValues = null } = {}) {
                         }}
                       >
                         Post Service
-                      </Button>,
-                    ]}
-                  >
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 2, width: "100%" }}>
-                      <div style={{ fontWeight: 600 }}>{item.name || "-"}</div>
-                      <div>📞 {item.mobile || "-"} | 🧾 {item.jcNo || "-"}</div>
-                      <div>🏍️ {item.regNo || "-"} | 🏢 {item.branch || "-"}</div>
-                      {item.followUpAt ? <div>🗓️ {item.followUpAt}</div> : null}
-                      {item.followUpNotes ? <div style={{ color: "#666" }}>{item.followUpNotes}</div> : null}
+                      </Button>
                     </div>
                   </List.Item>
                 )}
@@ -2651,9 +2673,9 @@ export default function JobCard({ initialValues = null } = {}) {
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
           <Button onClick={() => setPostOpen(false)} disabled={postSaving}>Cancel</Button>
-          <Button onClick={() => handlePostServiceFlow(false)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save</Button>
-          <Button icon={<FaWhatsapp style={{ color: '#25D366' }} />} onClick={() => handlePostServiceFlow('whatsapp')} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>WhatsApp</Button>
-          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Print</Button>
+          <Button onClick={() => handlePostServiceFlow(false)} disabled={isPostLocked || postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Save</Button>
+          <Button icon={<FaWhatsapp style={{ color: '#25D366' }} />} onClick={() => handlePostServiceFlow('whatsapp')} disabled={isPostLocked || postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>WhatsApp</Button>
+          <Button type="primary" onClick={() => handlePostServiceFlow(true)} disabled={isPostLocked || postSaving || actionCooldownUntil > Date.now() || postDuePreview !== 0} loading={postSaving}>Print</Button>
           
         </div>
       </Modal>

@@ -71,35 +71,42 @@ const buildEmiText = (price, dp, emiSet) => {
   return parts.length ? `EMI(${emiSet || "12"}): ${parts.join(" | ")}` : "";
 };
 
+const normalizePurchaseMode = (value) => String(value || "").trim().toLowerCase();
+const isFinancedMode = (value) => ["loan", "nohp", "hp", "finance"].includes(normalizePurchaseMode(value));
+
 const buildQuotationOfferingsText = ({ payload, baseOfferings }) => {
   const remarks = String(baseOfferings || '').trim();
   if (!payload || typeof payload !== 'object') return remarks;
   const fv = payload.formValues || {};
   const extra = Array.isArray(payload.extraVehicles) ? payload.extraVehicles : [];
+  const globalMode = fv.mode ?? payload.mode ?? payload.purchaseMode ?? payload.purchaseType ?? payload.paymentType ?? "cash";
   const offerings = [];
-  const addVehicleOffer = (label, priceRaw, dpRaw, emiSetRaw) => {
+  const addVehicleOffer = (label, priceRaw, dpRaw, emiSetRaw, modeRaw) => {
     const price = Number(priceRaw || 0);
     const dp = Number(dpRaw || 0);
     if (!(price || dp)) return;
+    const showFinance = isFinancedMode(modeRaw ?? globalMode);
     const parts = [];
     if (price) parts.push(`Price ${formatCurrency(price)}`);
-    if (dp) parts.push(`DP ${formatCurrency(dp)}`);
-    const emiText = buildEmiText(price, dp, emiSetRaw || payload.emiSet || "12");
-    if (emiText) parts.push(emiText);
+    if (showFinance && dp) parts.push(`DP ${formatCurrency(dp)}`);
+    const emiText = showFinance ? buildEmiText(price, dp, emiSetRaw || payload.emiSet || "12") : "";
+    if (showFinance && emiText) parts.push(emiText);
     offerings.push(`${label}: ${parts.join(" | ")}`);
   };
   addVehicleOffer(
     "V1",
     fv.onRoadPrice ?? payload.onRoadPrice,
     fv.downPayment ?? payload.downPayment,
-    payload.emiSet
+    payload.emiSet,
+    fv.mode ?? payload.mode ?? payload.purchaseMode ?? payload.purchaseType ?? payload.paymentType
   );
   extra.forEach((ev, idx) => {
     addVehicleOffer(
       `V${idx + 2}`,
       ev.onRoadPrice,
       ev.downPayment,
-      ev.emiSet || payload.emiSet
+      ev.emiSet || payload.emiSet,
+      ev.mode ?? ev.purchaseMode ?? ev.purchaseType ?? ev.paymentType
     );
   });
   return [remarks, ...offerings].filter(Boolean).join(" • ");
@@ -120,6 +127,7 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
   if (payload && typeof payload === "object") {
     const fv = payload.formValues || {};
     const globalFittings = uniqueNonEmpty(payload.fittings);
+    const globalMode = fv.mode ?? payload.mode ?? payload.purchaseMode ?? payload.purchaseType ?? payload.paymentType ?? "cash";
     const addVehicle = ({
       label,
       company,
@@ -129,6 +137,7 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
       dpRaw,
       emiSetRaw,
       fittingsRaw,
+      modeRaw,
     }) => {
       const cleanCompany = String(company || "").trim();
       const cleanModel = String(model || "").trim();
@@ -138,14 +147,16 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
       const fittings = uniqueNonEmpty(fittingsRaw || globalFittings);
       const title = [cleanCompany, cleanModel, cleanVariant].filter(Boolean).join(" ");
       const hasData = Boolean(title || fittings.length || price || dp);
+      const showFinance = isFinancedMode(modeRaw ?? globalMode);
       if (!hasData) return;
       vehicles.push({
         label,
         title: title || "Vehicle details not available",
         priceText: price ? formatCurrency(price) : "—",
         dpText: dp ? formatCurrency(dp) : "—",
-        emiText: price ? buildEmiText(price, dp, emiSetRaw || payload.emiSet || "12") : "",
+        emiText: showFinance && price ? buildEmiText(price, dp, emiSetRaw || payload.emiSet || "12") : "",
         fittings,
+        showFinance,
       });
     };
 
@@ -158,6 +169,7 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
       dpRaw: fv.downPayment ?? payload.downPayment,
       emiSetRaw: payload.emiSet,
       fittingsRaw: payload.fittings,
+      modeRaw: fv.mode ?? payload.mode ?? payload.purchaseMode ?? payload.purchaseType ?? payload.paymentType,
     });
     const extra = Array.isArray(payload.extraVehicles) ? payload.extraVehicles : [];
     extra.forEach((ev, idx) => {
@@ -170,6 +182,7 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
         dpRaw: ev.downPayment,
         emiSetRaw: ev.emiSet || payload.emiSet,
         fittingsRaw: ev.fittings,
+        modeRaw: ev.mode ?? ev.purchaseMode ?? ev.purchaseType ?? ev.paymentType,
       });
     });
   }
@@ -189,6 +202,7 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
         dpText: "—",
         emiText: "",
         fittings: [],
+        showFinance: false,
       });
     });
   }
@@ -210,7 +224,7 @@ export default function Quotations() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [q, setQ] = useState("");
   const debouncedQ = useDebouncedValue(q, 300);
-  const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
+  const [dateRange, setDateRange] = useState(() => [dayjs().startOf('month'), dayjs()]); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
@@ -224,7 +238,6 @@ export default function Quotations() {
   const USE_SERVER_PAG = String((import.meta.env.VITE_USE_SERVER_PAGINATION ?? 'true')).toLowerCase() === 'true';
   const [remarksMap, setRemarksMap] = useState({}); // key: serialNo -> { level, text }
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
-  const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
   const [filterSourceRows, setFilterSourceRows] = useState([]); // full list for dropdown options
 
@@ -691,9 +704,9 @@ export default function Quotations() {
               <div style={{ fontSize: 12, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{v.title}</div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: 12, color: "#1f2937" }}>
                 <span><b>Price</b>: {v.priceText}</span>
-                <span><b>DP</b>: {v.dpText}</span>
+                {v.showFinance ? <span><b>DP</b>: {v.dpText}</span> : null}
               </div>
-              {v.emiText ? <div style={{ marginTop: 4, fontSize: 11, color: "#334155", lineHeight: 1.3 }}>{v.emiText}</div> : null}
+              {v.showFinance && v.emiText ? <div style={{ marginTop: 4, fontSize: 11, color: "#334155", lineHeight: 1.3 }}>{v.emiText}</div> : null}
               {v.fittings.length ? <div style={{ marginTop: 4, fontSize: 11, color: "#334155", lineHeight: 1.3 }}><b>Fittings</b>: {v.fittings.join(", ")}</div> : null}
             </div>
           )) : (
@@ -911,37 +924,42 @@ export default function Quotations() {
       <Modal
         open={remarkModal.open}
         title={`Update Remark: ${remarkModal.refId}`}
-        onCancel={()=> remarkSaving ? null : setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
-        confirmLoading={remarkSaving}
-        maskClosable={!remarkSaving}
-        keyboard={!remarkSaving}
-        closable={!remarkSaving}
-        cancelButtonProps={{ disabled: remarkSaving }}
-        onOk={async ()=>{
-          if (remarkSaving) return;
-          setRemarkSaving(true);
-          try {
-            // Sheet-only: call GAS to persist
-            if (!GAS_URL) { message.error('Quotation GAS URL not configured'); return; }
-            const stampedText = stampRemark(remarkModal.text);
-            const body = GAS_SECRET ? { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', serialNo: remarkModal.refId, level: remarkModal.level, text: stampedText };
-            const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
-            if (resp && (resp.ok || resp.success)) {
-              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
-              // also update rows array for immediate tag color
-              setRows(prev => prev.map(x => x.serialNo === remarkModal.refId ? {
-                ...x,
-                RemarkLevel: remarkModal.level.toUpperCase(),
-                RemarkText: stampedText,
-                _remarkLevel: remarkModal.level,
-                _remarkText: stampedText
-              } : x));
+        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onOk={()=>{
+          if (!GAS_URL) { message.error('Quotation GAS URL not configured'); return; }
+          const { refId, level, text } = remarkModal;
+          const stampedText = stampRemark(text);
+          const prevRemark = remarksMap[refId];
+          const prevRow = rows.find((x) => x.serialNo === refId);
+          setRemarksMap((m)=> ({ ...m, [refId]: { level, text: stampedText } }));
+          setRows(prev => prev.map(x => x.serialNo === refId ? {
+            ...x,
+            RemarkLevel: level.toUpperCase(),
+            RemarkText: stampedText,
+            _remarkLevel: level,
+            _remarkText: stampedText
+          } : x));
+          setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
+          void (async () => {
+            try {
+              const body = GAS_SECRET ? { action: 'remark', serialNo: refId, level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', serialNo: refId, level, text: stampedText };
+              const resp = await saveBookingViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
+              const out = resp?.data || resp;
+              if (!(out && (out.ok || out.success))) throw new Error('Save failed');
               message.success('Remark saved to sheet');
-              // Also mirror to Google Sheet via Apps Script (kept short and resilient)
-              setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
-            } else { message.error('Save failed'); }
-          } catch { message.error('Save failed'); }
-          finally { setRemarkSaving(false); }
+            } catch {
+              setRemarksMap((m) => {
+                const next = { ...m };
+                if (prevRemark) next[refId] = prevRemark;
+                else delete next[refId];
+                return next;
+              });
+              if (prevRow) {
+                setRows(prev => prev.map(x => x.serialNo === refId ? prevRow : x));
+              }
+              message.error('Save failed');
+            }
+          })();
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>

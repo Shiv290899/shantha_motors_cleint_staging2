@@ -303,7 +303,7 @@ function headerIx_(s){
     idxChassis: pos(/^(chassis|chassis[\s_]*no|chassis[\s_]*number)$/i),
     idxModel: pos(/^model$/i),
     idxColour: pos(/^(colour|color)$/i),
-    idxKM: pos(/^(odometer.|km)$/i),
+    idxKM: pos(/^(odometer(\s*reading)?|odometer[\s_]*reading|odomete[\s_]*reading|km)$/i),
     idxFuel: pos(/^fuel[\s_]*level$/i),
     idxVehType: pos(/vehicle[\s_]*type/i),
     idxPostAt: pos(/^(post[\s_]*service[\s_]*at|post[\s_]serviced[\s_]at)$/i),
@@ -367,18 +367,63 @@ function nextSerial_(){
 
 function ten_(x){ return String(x||'').replace(/\D/g,'').slice(-10); }
 function safeJson_(x){ try{return JSON.parse(String(x||'{}'))}catch(_){return null} }
+function nonEmpty_(v){ return !(v === undefined || v === null || String(v).trim() === ''); }
+function pickOne_(arr){
+  for (var i = 0; i < arr.length; i++) {
+    if (nonEmpty_(arr[i])) return arr[i];
+  }
+  return '';
+}
+function digitsOnly_(v){ return String(v || '').replace(/\D/g, ''); }
+function canonicalFormValues_(d){
+  const fv = (d && d.formValues && typeof d.formValues === 'object') ? d.formValues : {};
+  const pfv = (d && d.payload && d.payload.formValues && typeof d.payload.formValues === 'object') ? d.payload.formValues : {};
+  const out = {};
+
+  out.jcNo = String(pickOne_([fv.jcNo, pfv.jcNo, d && d.jcNo]) || '').trim();
+  out.custName = String(pickOne_([fv.custName, fv.customerName, fv.name, pfv.custName, pfv.customerName, pfv.name]) || '').trim();
+  out.custMobile = ten_(pickOne_([fv.custMobile, fv.mobile, fv.customerMobile, pfv.custMobile, pfv.mobile, pfv.customerMobile, d && d.mobile]));
+  out.amount = pickOne_([fv.amount, pfv.amount, d && d.collectedAmount, d && d.serviceAmount]);
+  out.paymentMode = String(pickOne_([fv.paymentMode, pfv.paymentMode, d && d.paymentMode]) || '').trim().toLowerCase();
+  out.regNo = String(pickOne_([fv.regNo, fv.vehicleNo, fv.vehicle_no, pfv.regNo, pfv.vehicleNo, pfv.vehicle_no]) || '').trim();
+  out.serviceType = String(pickOne_([fv.serviceType, fv.service, pfv.serviceType, pfv.service]) || '').trim();
+  out.branch = String(pickOne_([fv.branch, pfv.branch, d && d.branch]) || '').trim();
+  out.obs = String(pickOne_([fv.obs, fv.observation, fv.customerObservation, pfv.obs, pfv.observation, pfv.customerObservation]) || '').trim();
+  out.expectedDelivery = String(pickOne_([fv.expectedDelivery, fv.expected_delivery, pfv.expectedDelivery, pfv.expected_delivery]) || '').trim();
+  out.executive = String(pickOne_([fv.executive, fv.execute, fv.execName, pfv.executive, pfv.execute, pfv.execName]) || '').trim();
+  out.mechanic = String(pickOne_([fv.mechanic, fv.allottedMechanic, pfv.mechanic, pfv.allottedMechanic]) || '').trim();
+  out.company = String(pickOne_([fv.company, pfv.company]) || '').trim();
+  out.model = String(pickOne_([fv.model, pfv.model]) || '').trim();
+  out.colour = String(pickOne_([fv.colour, fv.color, pfv.colour, pfv.color]) || '').trim();
+  out.chassisNo = String(pickOne_([fv.chassisNo, fv.chassis, pfv.chassisNo, pfv.chassis]) || '').trim();
+  out.km = digitsOnly_(pickOne_([fv.km, fv.odometer, fv.odometerReading, fv.odometer_reading, pfv.km, pfv.odometer, pfv.odometerReading, pfv.odometer_reading]));
+  out.fuelLevel = String(pickOne_([fv.fuelLevel, pfv.fuelLevel]) || '').trim();
+  out.vehicleType = String(pickOne_([fv.vehicleType, pfv.vehicleType]) || '').trim();
+  out.floorMat = String(pickOne_([fv.floorMat, pfv.floorMat]) || '').trim();
+  out.remarks = String(pickOne_([fv.remarks, fv.remark, pfv.remarks, pfv.remark, d && d.remarks, d && d.remark]) || '').trim();
+  return out;
+}
 
 function cleanPayload_(rawPayload, fv){
   if (!rawPayload || typeof rawPayload !== 'object') return {};
   const std = new Set([
     'custName','custMobile','amount','paymentMode',
-    'regNo','serviceType','branch','obs','expectedDelivery','jcNo'
+    'regNo','serviceType','branch','obs','expectedDelivery','jcNo',
+    'executive','mechanic','company','model','colour','color',
+    'km','fuelLevel','vehicleType','chassisNo','chassis',
+    'remarks','remark'
   ]);
   const out = JSON.parse(JSON.stringify(rawPayload));
   if (out.formValues && typeof out.formValues === 'object') {
     Object.keys(out.formValues).forEach(k => { if (std.has(k)) delete out.formValues[k]; });
+    if (!Object.keys(out.formValues).length) delete out.formValues;
   }
   Object.keys(out).forEach(k => { if (std.has(k)) delete out[k]; });
+  if (out.followUp && typeof out.followUp === 'object') {
+    delete out.followUp.branch;
+    delete out.followUp.assignedTo;
+    delete out.followUp.customer;
+  }
   return out;
 }
 
@@ -710,7 +755,7 @@ function upsertByMobile_(d){
     ensureCoreOptionalCols_(s);
     let ix = headerIx_(s);
 
-  const fvIncoming = d.formValues || {};
+  const fvIncoming = canonicalFormValues_(d);
   const jcIncoming = String(
     d.jcNo ||
     fvIncoming.jcNo ||
@@ -746,12 +791,12 @@ function upsertByMobile_(d){
   const fv = Object.assign({}, existingFv || {}, fvIncoming || {});
 
   const put = (row, i, v) => { if (i >= 0 && v !== undefined && v !== null && String(v) !== '') row[i] = v; };
-  const digits = (s) => String(s||'').replace(/\D/g,'');
 
   let mergedPayload = {};
   if (existingPayload && typeof existingPayload === 'object') mergedPayload = JSON.parse(JSON.stringify(existingPayload));
   if (d.payload && typeof d.payload === 'object') mergedPayload = mergeObj_(mergedPayload, d.payload);
   mergedPayload.formValues = Object.assign({}, existingFv || {}, fvIncoming || {});
+  mergedPayload = cleanPayload_(mergedPayload, fv);
   const updatedAt = mergedPayload.updatedAt || d.updatedAt || (d.payload && d.payload.updatedAt) || '';
 
   const postAt = (mergedPayload && mergedPayload.postServiceAt) ? mergedPayload.postServiceAt : (d?.payload?.postServiceAt || '');
@@ -776,7 +821,7 @@ function upsertByMobile_(d){
   put(row, ix.idxChassis, fv.chassisNo || fv.chassis);
   put(row, ix.idxModel, fv.model);
   put(row, ix.idxColour, fv.colour);
-  put(row, ix.idxKM, digits(fv.km));
+  put(row, ix.idxKM, digitsOnly_(fv.km));
   put(row, ix.idxFuel, fv.fuelLevel);
   put(row, ix.idxVehType, fv.vehicleType);
 
@@ -800,12 +845,11 @@ function insertNew_(d, mobileCanonical){
   ensureCoreOptionalCols_(s);
   let ix = headerIx_(s);
 
-  const fv = d.formValues || {};
+  const fv = canonicalFormValues_(d);
   const serial = String(fv.jcNo || nextSerial_());
   const mobile10 = mobileCanonical || ten_(fv.custMobile);
 
   const put = (row, i, v) => { if (i >= 0) row[i] = (v === undefined || v === null) ? '' : v; };
-  const digits = (s) => String(s||'').replace(/\D/g,'');
 
   const postAt = (d && d.payload && d.payload.postServiceAt) ? d.payload.postServiceAt : '';
   const utr = String(d && (d.utr || d.utrNo || (d.payload && (d.payload.utr || d.payload.utrNo)) || '')).trim();
@@ -828,7 +872,7 @@ function insertNew_(d, mobileCanonical){
   put(row, ix.idxChassis, fv.chassisNo || fv.chassis || '');
   put(row, ix.idxModel, fv.model || '');
   put(row, ix.idxColour, fv.colour || '');
-  put(row, ix.idxKM, digits(fv.km || ''));
+  put(row, ix.idxKM, digitsOnly_(fv.km || ''));
   put(row, ix.idxFuel, fv.fuelLevel || '');
   put(row, ix.idxVehType, fv.vehicleType || '');
 
@@ -839,7 +883,7 @@ function insertNew_(d, mobileCanonical){
     const base = (d && d.payload && typeof d.payload === 'object') ? d.payload : {};
     const merged = mergeObj_({ formValues: {} }, base);
     merged.formValues = Object.assign({}, fv || {});
-    return merged;
+    return cleanPayload_(merged, fv);
   })();
   if (ix.idxPayloads.length) row[ix.idxPayloads[0]] = JSON.stringify(payloadToStore);
   put(row, ix.idxUpdatedAt, payloadToStore.updatedAt || d.updatedAt || '');
@@ -950,7 +994,7 @@ function postService_(d){
   const prevAmt = Number(prevPayload?.postServiceAmount || existingFull?.rowValues?.[existingFull.ix.idxAmount] || 0) || 0;
   const alreadyLogged = prevPayload?.postServiceLogged === true;
 
-  const fv0 = d.formValues || {};
+  const fv0 = canonicalFormValues_(d);
   let branch    = fv0.branch    || d?.payload?.formValues?.branch    || '';
   let executive = fv0.executive || d?.payload?.formValues?.executive || '';
 
@@ -1045,11 +1089,10 @@ function postService_(d){
 function toRowObject_(row, ix){
   const payload = ix.idxPayloads.length ? safeJson_(row[ix.idxPayloads[0]]) : null;
 
-  const pr = payload && payload.remark ? payload.remark : null;
   const levelFromCols = (ix.idxRemarkLevel >= 0) ? String(row[ix.idxRemarkLevel] || '') : '';
   const textFromCols = (ix.idxRemarkText >= 0) ? String(row[ix.idxRemarkText] || '') : '';
-  const remarkLevel = pr && pr.level ? pr.level : levelFromCols;
-  const remarkText = pr && pr.text ? pr.text : textFromCols;
+  const remarkLevel = levelFromCols;
+  const remarkText = textFromCols;
 
   return {
     values: {
@@ -1067,15 +1110,23 @@ function toRowObject_(row, ix){
       RemarkLevel: remarkLevel || '',
       RemarkText: remarkText || '',
       Executive: ix.idxExecutive2 >= 0 ? row[ix.idxExecutive2] : '',
+      'Allotted Mechanic': ix.idxMechanic >= 0 ? row[ix.idxMechanic] : '',
       Allotted_Mechanic: ix.idxMechanic >= 0 ? row[ix.idxMechanic] : '',
       Company: ix.idxCompany >= 0 ? row[ix.idxCompany] : '',
+      'Chassis No': ix.idxChassis >= 0 ? row[ix.idxChassis] : '',
       Chassis_No: ix.idxChassis >= 0 ? row[ix.idxChassis] : '',
       Model: ix.idxModel >= 0 ? row[ix.idxModel] : '',
+      Color: ix.idxColour >= 0 ? row[ix.idxColour] : '',
       Colour: ix.idxColour >= 0 ? row[ix.idxColour] : '',
+      'Odometer Reading': ix.idxKM >= 0 ? row[ix.idxKM] : '',
       KM: ix.idxKM >= 0 ? row[ix.idxKM] : '',
+      'Fuel Level': ix.idxFuel >= 0 ? row[ix.idxFuel] : '',
       Fuel_Level: ix.idxFuel >= 0 ? row[ix.idxFuel] : '',
+      'Vehicle Type': ix.idxVehType >= 0 ? row[ix.idxVehType] : '',
       Vehicle_Type: ix.idxVehType >= 0 ? row[ix.idxVehType] : '',
+      'Post Service At': ix.idxPostAt >= 0 ? row[ix.idxPostAt] : '',
       Post_Service_At: ix.idxPostAt >= 0 ? row[ix.idxPostAt] : '',
+      'UTR No': ix.idxUTR >= 0 ? row[ix.idxUTR] : '',
       UTR_No: ix.idxUTR >= 0 ? row[ix.idxUTR] : '',
     },
     payload
@@ -1167,9 +1218,9 @@ function followups_(filter, branch, executive){
     const at = fu.at ? new Date(fu.at) : null;
     const t = isValidDate_(at) ? at.getTime() : null;
 
-    const rowBranch = String(fu.branch || r[ix.idxBranch] || '').trim();
+    const rowBranch = String((ix.idxBranch >= 0 ? r[ix.idxBranch] : '') || fu.branch || '').trim();
     const execPayload = payload && payload.formValues ? String(payload.formValues.executive || '') : '';
-    const rowExec = String(execPayload || fu.assignedTo || '').trim();
+    const rowExec = String((ix.idxExecutive2 >= 0 ? r[ix.idxExecutive2] : '') || execPayload || fu.assignedTo || '').trim();
 
     if (wantBranchKey && norm_(rowBranch) !== wantBranchKey) continue;
     if (wantExecKey && norm_(rowExec) !== wantExecKey) continue;
@@ -1254,8 +1305,16 @@ function updateFollowup_(serialNo, patch){
   cur.followUp = mergeObj_(cur.followUp || {}, (patch && patch.followUp) || {});
   if (typeof patch?.status !== 'undefined') cur.followUp.status = patch.status;
   if (cur.followUp && typeof cur.followUp.enabled === 'undefined') cur.followUp.enabled = true;
+  if (patch && patch.followUp && typeof patch.followUp === 'object') {
+    if (typeof patch.followUp.branch !== 'undefined') {
+      if (ix.idxBranch >= 0) row[ix.idxBranch] = String(patch.followUp.branch || '');
+    }
+    if (typeof patch.followUp.assignedTo !== 'undefined') {
+      if (ix.idxExecutive2 >= 0) row[ix.idxExecutive2] = String(patch.followUp.assignedTo || '');
+    }
+  }
 
-  row[ix.idxPayloads[0]] = JSON.stringify(cur);
+  row[ix.idxPayloads[0]] = JSON.stringify(cleanPayload_(cur, {}));
   s.getRange(hit,1,1,ix.width).setValues([row]);
   return { success:true, updated:true, row: hit };
 }
@@ -1301,6 +1360,7 @@ function list_(opts) {
     }
 
     const rowBranch = String(r[ix.idxBranch] || '').trim();
+    const execFromSheet = String((ix.idxExecutive2 >= 0 ? r[ix.idxExecutive2] : '') || '').trim();
     const execFromPayload = String((payload && payload.formValues && payload.formValues.executive) || '').trim();
     const branchPayload = String((payload && payload.formValues && payload.formValues.branch) || '').trim();
     const paymentMode = ix.idxPayment >= 0 ? String(r[ix.idxPayment] || '') : '';
@@ -1311,8 +1371,8 @@ function list_(opts) {
     const amt = ix.idxAmount >= 0 ? r[ix.idxAmount] : '';
     const hasAmount = String(amt || '').trim().length > 0;
     const status = (hasPost || hasPayments || (hasPaymentMode && hasAmount)) ? 'completed' : 'pending';
-    const model = payload && payload.formValues ? (payload.formValues.model || '') : '';
-    const company = payload && payload.formValues ? (payload.formValues.company || '') : '';
+    const model = String((ix.idxModel >= 0 ? r[ix.idxModel] : '') || (payload && payload.formValues ? payload.formValues.model : '') || '').trim();
+    const company = String((ix.idxCompany >= 0 ? r[ix.idxCompany] : '') || (payload && payload.formValues ? payload.formValues.company : '') || '').trim();
 
     return {
       raw: r,
@@ -1324,9 +1384,10 @@ function list_(opts) {
       serviceType: String(r[ix.idxSvc] || '').toLowerCase(),
       branchSheet: rowBranch,
       branchPayload,
-      executive: execFromPayload,
+      executive: execFromSheet || execFromPayload,
       paymentMode,
       jcNo: String(r[ix.idxJC] || '').trim(),
+      company,
       model,
       status
     };
@@ -1352,7 +1413,7 @@ function list_(opts) {
     }
 
     if (q) {
-      const hay = [x.name, x.mobile, x.jcNo, x.regNo, x.model, company, x.branchSheet, x.branchPayload, x.executive, x.paymentMode];
+      const hay = [x.name, x.mobile, x.jcNo, x.regNo, x.model, x.company, x.branchSheet, x.branchPayload, x.executive, x.paymentMode];
       let hit = false;
       for (var i=0;i<hay.length;i++){ if (norm_(hay[i]).indexOf(norm_(q)) !== -1) { hit = true; break; } }
       if (!hit) return false;
@@ -1412,14 +1473,7 @@ function updateRemark_(jcNo, level, text, by) {
 
   var row = s.getRange(hit,1,1,ix.width).getValues()[0];
   var payload = safeJson_(row[ix.idxPayloads[0]]) || {};
-  var nowIso = new Date().toISOString();
-  payload.remark = {
-    level: lv,
-    text: String(text || '').slice(0, 240),
-    by: String(by || '').slice(0, 120),
-    at: nowIso
-  };
-  row[ix.idxPayloads[0]] = JSON.stringify(payload);
+  row[ix.idxPayloads[0]] = JSON.stringify(cleanPayload_(payload, {}));
 
   var info = ensureRemarkCols_(s, headerIx_(s));
   var rl = info.idxRemarkLevel;

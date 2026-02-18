@@ -191,6 +191,248 @@ function findExistingBooking_(mobile, bookingId) {
   return { found: false, rowIndex: -1, rowData: null };
 }
 
+function numOrZero_(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  var n = Number(String(v).replace(/[,\s₹]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function pickOne_() {
+  for (var i = 0; i < arguments.length; i++) {
+    var v = arguments[i];
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'string' && v.trim() === '') continue;
+    return v;
+  }
+  return '';
+}
+
+function parseJsonSafe_(v, def) {
+  try { return JSON.parse(String(v || '')); } catch (_) { return def; }
+}
+
+function parseAddressProofTypes_(v) {
+  if (Array.isArray(v)) return v.map(function (x) { return String(x || '').trim(); }).filter(Boolean);
+  if (v === undefined || v === null) return [];
+  return String(v).split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+}
+
+function normalizePaymentMode_(mode) {
+  var m = String(mode || '').trim().toLowerCase();
+  if (m === 'upi' || m === 'card' || m === 'bank' || m === 'netbanking') return 'online';
+  if (m === 'cash' || m === 'online') return m;
+  return '';
+}
+
+function normalizePayments_(src, rawNested, prev) {
+  var base = [];
+  if (Array.isArray(src && src.payments) && src.payments.length) base = src.payments;
+  else if (Array.isArray(rawNested && rawNested.payments) && rawNested.payments.length) base = rawNested.payments;
+  else if (Array.isArray(prev && prev.payments) && prev.payments.length) base = prev.payments;
+
+  var out = [];
+  if (base.length) {
+    for (var i = 0; i < base.length; i++) {
+      var p = base[i] || {};
+      var amount = numOrZero_(p.amount);
+      if (!(amount > 0)) continue;
+      var mode = normalizePaymentMode_(p.mode) || 'cash';
+      var part = Number(p.part);
+      if (!(part >= 1 && part <= 3)) part = Math.min(3, i + 1);
+      out.push({
+        part: part,
+        amount: amount,
+        mode: mode,
+        reference: String(p.reference || p.ref || p.utr || p.txnId || '').trim() || undefined
+      });
+    }
+  }
+
+  if (!out.length) {
+    for (var partNo = 1; partNo <= 3; partNo++) {
+      var cash = numOrZero_(pickOne_(
+        src && src['bookingAmount' + partNo + 'Cash'],
+        rawNested && rawNested['bookingAmount' + partNo + 'Cash'],
+        prev && prev['bookingAmount' + partNo + 'Cash']
+      ));
+      var online = numOrZero_(pickOne_(
+        src && src['bookingAmount' + partNo + 'Online'],
+        rawNested && rawNested['bookingAmount' + partNo + 'Online'],
+        prev && prev['bookingAmount' + partNo + 'Online']
+      ));
+      var legacyAmt = numOrZero_(pickOne_(
+        src && src['bookingAmount' + partNo],
+        rawNested && rawNested['bookingAmount' + partNo],
+        prev && prev['bookingAmount' + partNo]
+      ));
+      var legacyMode = normalizePaymentMode_(pickOne_(
+        src && src['paymentMode' + partNo],
+        rawNested && rawNested['paymentMode' + partNo],
+        prev && prev['paymentMode' + partNo]
+      ));
+      var ref = String(pickOne_(
+        src && src['paymentReference' + partNo],
+        src && src['paymentRef' + partNo],
+        src && src['utr' + partNo],
+        rawNested && rawNested['paymentReference' + partNo],
+        rawNested && rawNested['paymentRef' + partNo],
+        rawNested && rawNested['utr' + partNo],
+        prev && prev['paymentReference' + partNo],
+        prev && prev['paymentRef' + partNo],
+        prev && prev['utr' + partNo]
+      ) || '').trim();
+      if (!cash && !online && legacyAmt > 0) {
+        if (legacyMode === 'online') online = legacyAmt;
+        else cash = legacyAmt;
+      }
+      if (cash > 0) out.push({ part: partNo, amount: cash, mode: 'cash' });
+      if (online > 0) out.push({ part: partNo, amount: online, mode: 'online', reference: ref || undefined });
+    }
+  }
+
+  return out;
+}
+
+function toPaymentSplit_(payments) {
+  var split = [
+    { part: 1, cash: 0, online: 0, total: 0, mode: '' },
+    { part: 2, cash: 0, online: 0, total: 0, mode: '' },
+    { part: 3, cash: 0, online: 0, total: 0, mode: '' }
+  ];
+  var list = Array.isArray(payments) ? payments : [];
+  for (var i = 0; i < list.length; i++) {
+    var p = list[i] || {};
+    var part = Number(p.part);
+    if (!(part >= 1 && part <= 3)) part = Math.min(3, i + 1);
+    var idxPart = part - 1;
+    var amt = numOrZero_(p.amount);
+    if (!(amt > 0)) continue;
+    var mode = normalizePaymentMode_(p.mode) || 'cash';
+    if (mode === 'online') split[idxPart].online += amt;
+    else split[idxPart].cash += amt;
+  }
+  for (var j = 0; j < split.length; j++) {
+    split[j].total = split[j].cash + split[j].online;
+    split[j].mode = split[j].cash && split[j].online ? 'cash+online' : (split[j].online ? 'online' : (split[j].cash ? 'cash' : ''));
+  }
+  return split;
+}
+
+function buildCompactBookingPayload_(incoming, prevPayload, opt) {
+  var src = incoming || {};
+  var prev = (prevPayload && typeof prevPayload === 'object') ? prevPayload : {};
+  var rowCells = (opt && opt.rowCells) || [];
+  var headers = (opt && opt.headers) || [];
+  var rawNested = parseJsonSafe_(pickOne_(src.rawPayload, prev.rawPayload), {});
+  var prevVehicle = (prev && prev.vehicle && typeof prev.vehicle === 'object') ? prev.vehicle : {};
+  var srcVehicle = (src && src.vehicle && typeof src.vehicle === 'object') ? src.vehicle : {};
+  var rawVehicle = (rawNested && rawNested.vehicle && typeof rawNested.vehicle === 'object') ? rawNested.vehicle : {};
+  var purchaseMode = String(pickOne_(
+    src.purchaseMode, src.purchaseType, rawNested.purchaseMode, rawNested.purchaseType, prev.purchaseMode, prev.purchaseType,
+    getCell_(headers, rowCells, 'Purchase Mode')
+  ) || '').toLowerCase();
+
+  var payments = normalizePayments_(src, rawNested, prev);
+  var paymentSplit = toPaymentSplit_(payments);
+  var bookingAmount = numOrZero_(pickOne_(
+    src.bookingAmount,
+    rawNested.bookingAmount,
+    prev.bookingAmount,
+    getCell_(headers, rowCells, 'Booking Amount')
+  ));
+  if (!(bookingAmount > 0) && payments.length) {
+    bookingAmount = payments.reduce(function (sum, p) { return sum + numOrZero_(p.amount); }, 0);
+  }
+
+  var cashCollected = numOrZero_(pickOne_(src.cashCollected, rawNested.cashCollected, prev.cashCollected));
+  var onlineCollected = numOrZero_(pickOne_(src.onlineCollected, rawNested.onlineCollected, prev.onlineCollected));
+  if (!(cashCollected > 0) && !(onlineCollected > 0) && payments.length) {
+    cashCollected = payments
+      .filter(function (p) { return normalizePaymentMode_(p.mode) === 'cash'; })
+      .reduce(function (sum, p) { return sum + numOrZero_(p.amount); }, 0);
+    onlineCollected = payments
+      .filter(function (p) { return normalizePaymentMode_(p.mode) === 'online'; })
+      .reduce(function (sum, p) { return sum + numOrZero_(p.amount); }, 0);
+  }
+  var totalCollected = cashCollected + onlineCollected;
+
+  var downPayment = numOrZero_(pickOne_(src.downPayment, rawNested.downPayment, rawNested.dp && rawNested.dp.downPayment, prev.downPayment));
+  var extraFittingAmount = numOrZero_(pickOne_(src.extraFittingAmount, rawNested.extraFittingAmount, rawNested.dp && rawNested.dp.extraFittingAmount, prev.extraFittingAmount));
+  var discountAmount = numOrZero_(pickOne_(src.discountAmount, rawNested.discountAmount, rawNested.dp && rawNested.dp.discountAmount, prev.discountAmount));
+  var affidavitCharges = numOrZero_(pickOne_(src.affidavitCharges, rawNested.affidavitCharges, rawNested.dp && rawNested.dp.affidavitCharges, prev.affidavitCharges));
+  var totalDp = numOrZero_(pickOne_(src.totalDp, rawNested.totalDp, rawNested.dp && rawNested.dp.totalDp, prev.totalDp));
+  var balancedDp = numOrZero_(pickOne_(src.balancedDp, rawNested.balancedDp, rawNested.dp && rawNested.dp.balancedDp, prev.balancedDp));
+  var onRoadPrice = numOrZero_(pickOne_(src.onRoadPrice, rawNested.onRoadPrice, prev.onRoadPrice));
+  var totalVehicleCost = numOrZero_(pickOne_(src.totalVehicleCost, rawNested.totalVehicleCost, rawNested.cash && rawNested.cash.totalVehicleCost, prev.totalVehicleCost));
+  var balancedAmount = numOrZero_(pickOne_(src.balancedAmount, rawNested.balancedAmount, rawNested.cash && rawNested.cash.balancedAmount, prev.balancedAmount));
+
+  var compact = {
+    source: 'booking',
+    bookingId: String(pickOne_(src.bookingId, prev.bookingId, (opt && opt.bookingId), getCell_(headers, rowCells, 'Booking ID')) || '').trim(),
+    customerName: String(pickOne_(src.customerName, src.name, rawNested.customerName, rawNested.name, prev.customerName, getCell_(headers, rowCells, 'Customer Name')) || '').trim(),
+    mobileNumber: String(pickOne_(src.mobileNumber, src.mobile, rawNested.mobileNumber, rawNested.mobile, prev.mobileNumber, getCell_(headers, rowCells, 'Mobile Number')) || '').replace(/\D/g, '').slice(-10),
+    branch: String(pickOne_(src.branch, rawNested.branch, prev.branch, getCell_(headers, rowCells, 'Branch')) || '').trim(),
+    executive: String(pickOne_(src.executive, rawNested.executive, prev.executive, getCell_(headers, rowCells, 'Executive')) || '').trim(),
+    vehicle: {
+      company: String(pickOne_(src.company, srcVehicle.company, rawNested.company, rawVehicle.company, prevVehicle.company, getCell_(headers, rowCells, 'Company')) || '').trim(),
+      model: String(pickOne_(src.model, src.bikeModel, srcVehicle.model, rawNested.model, rawVehicle.model, prevVehicle.model, getCell_(headers, rowCells, 'Model')) || '').trim(),
+      variant: String(pickOne_(src.variant, srcVehicle.variant, rawNested.variant, rawVehicle.variant, prevVehicle.variant, getCell_(headers, rowCells, 'Variant')) || '').trim(),
+      color: String(pickOne_(src.color, srcVehicle.color, rawNested.color, rawVehicle.color, prevVehicle.color, getCell_(headers, rowCells, 'Color')) || '').trim(),
+      chassisNo: String(pickOne_(src.chassisNo, srcVehicle.chassisNo, rawNested.chassisNo, rawVehicle.chassisNo, prevVehicle.chassisNo, getCell_(headers, rowCells, 'Chassis Number')) || '').trim(),
+      availability: String(pickOne_(src.availability, srcVehicle.availability, rawNested.availability, rawVehicle.availability, prevVehicle.availability, getCell_(headers, rowCells, 'Chassis Availability')) || '').trim(),
+      availabilityInfo: pickOne_(srcVehicle.availabilityInfo, rawVehicle.availabilityInfo, prevVehicle.availabilityInfo, {})
+    },
+    rtoOffice: String(pickOne_(src.rtoOffice, rawNested.rtoOffice, prev.rtoOffice, getCell_(headers, rowCells, 'RTO Office')) || '').trim(),
+    purchaseMode: purchaseMode,
+    financier: String(pickOne_(src.financier, rawNested.financier, prev.financier, getCell_(headers, rowCells, 'Financier')) || '').trim(),
+    nohpFinancier: String(pickOne_(src.nohpFinancier, rawNested.nohpFinancier, prev.nohpFinancier) || '').trim(),
+    disbursementAmount: numOrZero_(pickOne_(src.disbursementAmount, rawNested.disbursementAmount, prev.disbursementAmount)),
+    emiAmount: numOrZero_(pickOne_(src.emiAmount, rawNested.emiAmount, prev.emiAmount)),
+    tenure: numOrZero_(pickOne_(src.tenure, src.tenureMonths, rawNested.tenure, rawNested.tenureMonths, prev.tenure)),
+    address: String(pickOne_(src.address, rawNested.address, prev.address, getCell_(headers, rowCells, 'Address')) || '').trim(),
+    addressProofMode: String(pickOne_(src.addressProofMode, src.addressProof, rawNested.addressProofMode, rawNested.addressProof, prev.addressProofMode, getCell_(headers, rowCells, 'Address Proof Mode')) || '').trim(),
+    addressProofTypes: parseAddressProofTypes_(pickOne_(src.addressProofTypes, rawNested.addressProofTypes, prev.addressProofTypes, getCell_(headers, rowCells, 'Address Proof Types'))),
+    payments: payments,
+    paymentSplit: paymentSplit,
+    bookingAmount: bookingAmount,
+    cashCollected: cashCollected,
+    onlineCollected: onlineCollected,
+    totalCollected: totalCollected,
+    onRoadPrice: onRoadPrice,
+    downPayment: downPayment,
+    extraFittingAmount: extraFittingAmount,
+    discountAmount: discountAmount,
+    affidavitCharges: affidavitCharges,
+    totalDp: totalDp,
+    balancedDp: balancedDp,
+    totalVehicleCost: totalVehicleCost,
+    balancedAmount: balancedAmount,
+    status: String(pickOne_(src.status, prev.status, getCell_(headers, rowCells, 'Status')) || '').trim(),
+    notes: String(pickOne_(src.notes, prev.notes, getCell_(headers, rowCells, 'Notes')) || '').trim(),
+    invoiceStatus: String(pickOne_(src.invoiceStatus, prev.invoiceStatus, getCell_(headers, rowCells, 'Invoice Status')) || '').trim(),
+    invoiceFileUrl: String(pickOne_(src.invoiceFileUrl, prev.invoiceFileUrl, getCell_(headers, rowCells, 'Invoice File URL')) || '').trim(),
+    insuranceStatus: String(pickOne_(src.insuranceStatus, prev.insuranceStatus, getCell_(headers, rowCells, 'Insurance Status')) || '').trim(),
+    insuranceFileUrl: String(pickOne_(src.insuranceFileUrl, prev.insuranceFileUrl, getCell_(headers, rowCells, 'Insurance File URL')) || '').trim(),
+    rtoStatus: String(pickOne_(src.rtoStatus, prev.rtoStatus, getCell_(headers, rowCells, 'RTO Status')) || '').trim(),
+    vehicleNo: String(pickOne_(src.vehicleNo, src.regNo, prev.vehicleNo, getCell_(headers, rowCells, 'Vehicle No')) || '').trim(),
+    attachments: Array.isArray(prev.attachments) ? prev.attachments.slice(-1) : [],
+    remark: prev.remark || undefined,
+    ts: String(pickOne_(prev.ts, rawNested.ts, (opt && opt.submittedAt)) || '').trim(),
+    v: 2
+  };
+
+  if (Array.isArray(src.attachments) && src.attachments.length) compact.attachments = src.attachments.slice(-1);
+  if (purchaseMode !== 'loan' && purchaseMode !== 'nohp') {
+    compact.disbursementAmount = 0;
+    compact.emiAmount = 0;
+    compact.tenure = 0;
+  }
+  compact.updatedAt = new Date().toISOString();
+  if (!compact.ts) compact.ts = compact.updatedAt;
+
+  return compact;
+}
+
 function updateExistingBooking_(existing, data) {
   const sh = getSheet_();
   const headers = sh.getRange(1, 1, 1, HEADERS.length).getValues()[0];
@@ -231,23 +473,9 @@ function updateExistingBooking_(existing, data) {
     } catch (e) { /* ignore */ }
   }
 
-  // Merge Raw Payload (strip base64, cap big strings)
-  let payload = {};
-  try { payload = JSON.parse(String(cells[idx(headers, 'Raw Payload')] || '{}')); } catch (e) { payload = {}; }
-  payload.branch = branch || payload.branch || '';
-  payload.executive = executive || payload.executive || '';
-  payload.customerName = customerName || payload.customerName || '';
-  payload.mobileNumber = mobileNumber || payload.mobileNumber || '';
-  payload.vehicle = payload.vehicle || {};
-  payload.vehicle.company = company || payload.vehicle.company || '';
-  payload.vehicle.model = model || payload.vehicle.model || '';
-  payload.vehicle.variant = variant || payload.vehicle.variant || '';
-  payload.vehicle.color = color || payload.vehicle.color || '';
-  payload.vehicle.chassisNo = chassisNo || payload.vehicle.chassisNo || '';
-  if (addressProofMode) payload.addressProofMode = addressProofMode;
-  if (Array.isArray(data.addressProofTypes)) payload.addressProofTypes = data.addressProofTypes;
-  if (payments && payments.length) payload.payments = payments;
-  if (bookingAmount) payload.bookingAmount = bookingAmount;
+  // Build compact Raw Payload (single snapshot; no duplicate legacy fields)
+  var existingPayload = parseJsonSafe_(cells[idx(headers, 'Raw Payload')], {});
+  var payload = existingPayload && typeof existingPayload === 'object' ? JSON.parse(JSON.stringify(existingPayload)) : {};
 
   // Optional file replace (ALWAYS keep only latest link)
   const incomingFile =
@@ -301,18 +529,42 @@ function updateExistingBooking_(existing, data) {
   const vehNo = data.vehicleNo || data.regNo;
   if (vehNo != null) cells[idx(headers, 'Vehicle No')] = String(vehNo);
 
-  // Sanitize Raw Payload
-  try {
-    if (payload && payload.file && payload.file.base64) delete payload.file.base64;
-    if (payload && typeof payload.rawPayload === 'string' && payload.rawPayload.length > 20000) {
-      payload.rawPayload = payload.rawPayload.slice(0, 20000) + '…';
-    }
-  } catch (e) {}
+  payload = buildCompactBookingPayload_(Object.assign({}, data, {
+    customerName: customerName || undefined,
+    mobileNumber: mobileNumber || undefined,
+    branch: branch || undefined,
+    executive: executive || undefined,
+    company: company || undefined,
+    model: model || undefined,
+    variant: variant || undefined,
+    color: color || undefined,
+    chassisNo: chassisNo || undefined,
+    availability: availability || undefined,
+    payments: payments,
+    bookingAmount: bookingAmount || undefined,
+    purchaseMode: purchaseMode || undefined,
+    financier: financier || undefined,
+    rtoOffice: rtoOffice || undefined,
+    address: address || undefined,
+    addressProofMode: addressProofMode || undefined,
+    addressProofTypes: Array.isArray(data.addressProofTypes) ? data.addressProofTypes : undefined
+  }), payload, { rowCells: cells, headers: headers });
 
-  payload.updatedAt = new Date().toISOString();
   const rawStr = JSON.stringify(payload || {});
   cells[idx(headers, 'Raw Payload')] = rawStr.length > 45000
-    ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, payments: (payload.payments || []).slice(0, 5), updatedAt: payload.updatedAt || '', note: 'payload truncated' })
+    ? JSON.stringify({
+        bookingId: payload.bookingId || '',
+        customerName: payload.customerName || customerName || '',
+        mobileNumber: payload.mobileNumber || String(mobileNumber || '').replace(/\D/g, '').slice(-10),
+        branch: payload.branch || branch || '',
+        executive: payload.executive || executive || '',
+        vehicle: payload.vehicle || {},
+        purchaseMode: payload.purchaseMode || purchaseMode || '',
+        payments: (payload.payments || []).slice(0, 6),
+        bookingAmount: payload.bookingAmount || bookingAmount || '',
+        updatedAt: payload.updatedAt || '',
+        note: 'payload truncated'
+      })
     : rawStr;
 
   sh.getRange(existing.rowIndex, 1, 1, HEADERS.length).setValues([cells]);
@@ -483,8 +735,7 @@ function createNewBooking_(data) {
   row[idx(HEADERS, 'Status')] = 'pending';
   row[idx(HEADERS, 'Notes')] = '';
 
-  const payload = JSON.parse(JSON.stringify(data || {}));
-  try { if (payload && payload.file && payload.file.base64) delete payload.file.base64; } catch(e){}
+  var payload = {};
   collapseAttachment_(payload, row, HEADERS, savedFile && savedFile.url ? {
     name: savedFile.name,
     url: savedFile.url,
@@ -493,9 +744,41 @@ function createNewBooking_(data) {
     size: savedFile.size,
     ts: new Date().toISOString()
   } : null);
+  payload = buildCompactBookingPayload_(Object.assign({}, data, {
+    bookingId: bookingId,
+    customerName: customerName || undefined,
+    mobileNumber: mobileNumber || undefined,
+    branch: branch || undefined,
+    executive: executive || undefined,
+    company: company || undefined,
+    model: model || undefined,
+    variant: variant || undefined,
+    color: color || undefined,
+    chassisNo: chassisNo || undefined,
+    availability: availability || undefined,
+    purchaseMode: purchaseMode || undefined,
+    financier: financier || undefined,
+    rtoOffice: rtoOffice || undefined,
+    address: address || undefined,
+    addressProofMode: addressProofMode || undefined,
+    addressProofTypes: Array.isArray(data.addressProofTypes) ? data.addressProofTypes : undefined,
+    bookingAmount: bookingAmount || undefined
+  }), payload, { rowCells: row, headers: HEADERS, bookingId: bookingId, submittedAt: ts });
   const rawStr = JSON.stringify(payload || {});
   row[idx(HEADERS, 'Raw Payload')] = rawStr.length > 45000
-    ? JSON.stringify({ customerName, mobileNumber, vehicle: payload.vehicle || {}, note: 'payload truncated' })
+    ? JSON.stringify({
+        bookingId: bookingId,
+        customerName: payload.customerName || customerName || '',
+        mobileNumber: payload.mobileNumber || String(mobileNumber || '').replace(/\D/g, '').slice(-10),
+        branch: payload.branch || branch || '',
+        executive: payload.executive || executive || '',
+        vehicle: payload.vehicle || {},
+        purchaseMode: payload.purchaseMode || purchaseMode || '',
+        payments: (payload.payments || []).slice(0, 6),
+        bookingAmount: payload.bookingAmount || bookingAmount || '',
+        updatedAt: payload.updatedAt || '',
+        note: 'payload truncated'
+      })
     : rawStr;
 
   const sh = getSheet_();
@@ -591,8 +874,30 @@ function updateBooking_(bookingId, patch, mobileOpt) {
   const vehNo = patch.vehicleNo || patch.regNo;
   if (vehNo != null) cells[idx(headers, 'Vehicle No')] = String(vehNo);
 
-  if (payload && rawIdx >= 0) {
-    payload.updatedAt = new Date().toISOString();
+  if (rawIdx >= 0) {
+    payload = buildCompactBookingPayload_(Object.assign({}, patch || {}, {
+      bookingId: String(cells[idx(headers, 'Booking ID')] || ''),
+      branch: String(cells[idx(headers, 'Branch')] || ''),
+      executive: String(cells[idx(headers, 'Executive')] || ''),
+      customerName: String(cells[idx(headers, 'Customer Name')] || ''),
+      mobileNumber: String(cells[idx(headers, 'Mobile Number')] || ''),
+      company: String(cells[idx(headers, 'Company')] || ''),
+      model: String(cells[idx(headers, 'Model')] || ''),
+      variant: String(cells[idx(headers, 'Variant')] || ''),
+      color: String(cells[idx(headers, 'Color')] || ''),
+      chassisNo: String(cells[idx(headers, 'Chassis Number')] || ''),
+      purchaseMode: String(cells[idx(headers, 'Purchase Mode')] || ''),
+      financier: String(cells[idx(headers, 'Financier')] || ''),
+      rtoOffice: String(cells[idx(headers, 'RTO Office')] || ''),
+      address: String(cells[idx(headers, 'Address')] || ''),
+      addressProofMode: String(cells[idx(headers, 'Address Proof Mode')] || ''),
+      addressProofTypes: String(cells[idx(headers, 'Address Proof Types')] || ''),
+      bookingAmount: String(cells[idx(headers, 'Booking Amount')] || ''),
+      status: String(cells[idx(headers, 'Status')] || ''),
+      notes: String(cells[idx(headers, 'Notes')] || ''),
+      invoiceFileUrl: String(cells[idx(headers, 'Invoice File URL')] || ''),
+      insuranceFileUrl: String(cells[idx(headers, 'Insurance File URL')] || '')
+    }), payload || {}, { rowCells: cells, headers: headers });
     cells[rawIdx] = JSON.stringify(payload);
   }
   sh.getRange(rowIndex, 1, 1, HEADERS.length).setValues([cells]);

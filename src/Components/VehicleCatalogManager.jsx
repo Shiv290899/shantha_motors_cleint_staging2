@@ -51,11 +51,6 @@ const fetchSheetRowsCSV = async (url) => {
 
 const pick = (row, keys) => String(keys.map((k) => row[k] ?? '').find((v) => v !== '') || '').trim()
 
-const buildCatalogKey = (company, model, variant) => {
-  const toKey = (s) => String(s || '').trim().toUpperCase()
-  return [toKey(company), toKey(model), toKey(variant)].join('|')
-}
-
 const normalizeRow = (row = {}) => {
   const rawPrice =
     pick(row, HEADERS.price) ||
@@ -75,28 +70,16 @@ const normalizeRow = (row = {}) => {
   const variant = pick(row, HEADERS.variant) || row.variant || ''
   let price = num(rawPrice)
   let color = String(rawColor || '').trim()
-  const rawKey = row.key || row.Key || ''
   const rawUpdatedAt = row.UpdatedAt || row.updatedAt || row.updated_at || row.updated || ''
   const rawUpdatedBy = row.UpdatedBy || row.updatedBy || row.updated_by || row.user || ''
-  const looksLikeDate = (v) => {
-    const d = new Date(v)
-    return !Number.isNaN(d.getTime())
-  }
   const looksLikeKey = (v) => String(v || '').includes('|')
-  const fallbackKey = buildCatalogKey(company, model, variant)
   let updatedAt = rawUpdatedAt
   let updatedBy = rawUpdatedBy
-  let key = rawKey || fallbackKey
-  if (!looksLikeKey(key) || key === '') key = fallbackKey
   const maybeShifted = !isNumericLike(rawPrice) && isNumericLike(rawColor) && price === 0
   if (maybeShifted) {
     price = num(rawColor)
     color = ''
-    if (looksLikeKey(rawPrice)) key = rawPrice
-    if (!rawUpdatedBy && looksLikeDate(rawKey)) {
-      updatedAt = rawKey
-      updatedBy = rawUpdatedAt
-    }
+    if (!rawUpdatedBy && looksLikeKey(rawPrice)) updatedBy = rawUpdatedAt
   }
   return {
     id: row.id || row._id || row.rowId || row._row || undefined,
@@ -107,7 +90,6 @@ const normalizeRow = (row = {}) => {
     onRoadPrice: price,
     updatedAt,
     updatedBy,
-    key,
   }
 }
 
@@ -219,7 +201,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
     try {
       setSaving(true)
       const id = record.id || record.rowId || undefined
-      const payload = { id, company: record.company, model: record.model, variant: record.variant, key: catalogKey(record) }
+      const payload = { id, company: record.company, model: record.model, variant: record.variant }
       const resp = await deleteVehicleCatalogRow(payload)
       const ok = (resp?.success ?? resp?.ok ?? true) !== false
       if (!ok) throw new Error(resp?.message || 'Delete failed')
@@ -268,12 +250,19 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
         if (values[k]) values[k] = String(values[k]).toUpperCase()
       })
       if (values.color) values.color = String(values.color).toUpperCase().trim()
+
+      const nextKey = catalogKey(values)
+      const dup = rows.find((r) => catalogKey(r) === nextKey && String(r.id || '') !== String(editing?.id || ''))
+      if (dup) {
+        message.error('Duplicate vehicle: same Company + Model + Variant already exists')
+        return
+      }
+
       setSaving(true)
       const payload = {
         ...values,
         onRoadPrice: Number(values.onRoadPrice || 0) || 0,
         id: editing?.id,
-        key: editing?.key || catalogKey(values),
         updatedBy: (() => {
           try {
             const u = JSON.parse(localStorage.getItem('user') || 'null')
@@ -421,7 +410,7 @@ export default function VehicleCatalogManager({ csvFallbackUrl }) {
         columns={columns}
         dataSource={filteredRows}
         loading={loading}
-        rowKey={(r) => r.id || r.key || catalogKey(r)}
+        rowKey={(r) => r.id || catalogKey(r)}
         tableLayout={isMobile ? "auto" : "fixed"}
         scroll={isMobile ? { x: 'max-content' } : undefined}
         pagination={{

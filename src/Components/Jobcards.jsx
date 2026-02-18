@@ -50,7 +50,7 @@ export default function Jobcards() {
   const [statusFilter, setStatusFilter] = useState("all"); // pending | completed | all
   const [q, setQ] = useState("");
   const debouncedQ = useDebouncedValue(q, 300);
-  const [dateRange, setDateRange] = useState(null); // [dayjs, dayjs]
+  const [dateRange, setDateRange] = useState(() => [dayjs().startOf('month'), dayjs()]); // [dayjs, dayjs]
   const [quickKey, setQuickKey] = useState(null); // today | yesterday | null
   const [userRole, setUserRole] = useState("");
   const [allowedBranches, setAllowedBranches] = useState([]);
@@ -65,7 +65,6 @@ export default function Jobcards() {
   
   const [remarksMap, setRemarksMap] = useState({});
   const [remarkModal, setRemarkModal] = useState({ open: false, refId: '', level: 'ok', text: '' });
-  const [remarkSaving, setRemarkSaving] = useState(false);
   const [hasCache, setHasCache] = useState(false);
   const [filterSourceRows, setFilterSourceRows] = useState([]);
   const invoiceRef = useRef(null);
@@ -154,6 +153,7 @@ export default function Jobcards() {
     const remarkTextRaw = payload?.remark?.text || obj?.RemarkText || obj?.['Remark Text'] || '';
     const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
     const serviceType = fv.serviceType || fv.service || pick(obj, HEAD.serviceType);
+    const km = String(fv.km || obj?.KM || obj?.['Odometer Reading'] || '').replace(/\D/g, '');
     const savedAt =
       payload?.savedAt ||
       payload?.createdAt ||
@@ -178,6 +178,7 @@ export default function Jobcards() {
       serviceType: serviceType || '',
       vehicleType: fv.vehicleType || pick(obj, HEAD.vehicleType),
       amount: serviceAmount,
+      km,
       paymentMode: payMode,
       postAt,
       status,
@@ -247,7 +248,7 @@ export default function Jobcards() {
         regNo: row?.regNo || fv.regNo || "",
         custName: row?.name || fv.custName || fv.name || "",
         custMobile: row?.mobile || fv.custMobile || fv.mobile || "",
-        km: fv.km || "",
+        km: row?.km || fv.km || "",
         model: row?.model || fv.model || "",
         colour: fv.colour || row?.colour || "",
         branch: row?.branch || fv.branch || "",
@@ -404,7 +405,7 @@ export default function Jobcards() {
 
   const branches = useMemo(() => {
     const opts = uniqCaseInsensitive(optionRows.map((r) => r.branch));
-    const isPriv = ["owner","admin"].includes(userRole);
+    const isPriv = ["owner","admin","backend"].includes(userRole);
     if (!isPriv && allowedBranches.length) {
       const allowedLc = toKeySet(allowedBranches);
       return ["all", ...opts.filter((b)=> allowedLc.has(normalizeKey(b)))];
@@ -842,31 +843,42 @@ export default function Jobcards() {
       <Modal
         open={remarkModal.open}
         title={`Update Remark: ${remarkModal.refId}`}
-        confirmLoading={remarkSaving}
-        maskClosable={!remarkSaving}
-        keyboard={!remarkSaving}
-        closable={!remarkSaving}
-        cancelButtonProps={{ disabled: remarkSaving }}
-        onCancel={()=> {
-          if (remarkSaving) return;
+        onCancel={()=> setRemarkModal({ open: false, refId: '', level: 'ok', text: '' })}
+        onOk={()=>{
+          if (!GAS_URL) { message.error('Jobcards GAS URL not configured'); return; }
+          const { refId, level, text } = remarkModal;
+          const stampedText = stampRemark(text);
+          const prevRemark = remarksMap[refId];
+          const prevRow = rows.find((x) => x.jcNo === refId);
+          setRemarksMap((m)=> ({ ...m, [refId]: { level, text: stampedText } }));
+          setRows(prev => prev.map(x => x.jcNo === refId ? {
+            ...x,
+            RemarkLevel: level.toUpperCase(),
+            RemarkText: stampedText,
+            _remarkLevel: level,
+            _remarkText: stampedText
+          } : x));
           setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
-          setRemarkSaving(false);
-        }}
-        onOk={async ()=>{
-          setRemarkSaving(true);
-          try {
-            if (!GAS_URL) { message.error('Jobcards GAS URL not configured'); return; }
-            const stampedText = stampRemark(remarkModal.text);
-            const body = GAS_SECRET ? { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', jcNo: remarkModal.refId, level: remarkModal.level, text: stampedText };
-            const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
-            if (resp && (resp.ok || resp.success)) {
-              setRemarksMap((m)=> ({ ...m, [remarkModal.refId]: { level: remarkModal.level, text: stampedText } }));
-              setRows(prev => prev.map(x => x.jcNo === remarkModal.refId ? { ...x, RemarkLevel: remarkModal.level.toUpperCase(), RemarkText: stampedText, _remarkLevel: remarkModal.level, _remarkText: stampedText } : x));
+          void (async () => {
+            try {
+              const body = GAS_SECRET ? { action: 'remark', jcNo: refId, level, text: stampedText, secret: GAS_SECRET } : { action: 'remark', jcNo: refId, level, text: stampedText };
+              const resp = await saveJobcardViaWebhook({ webhookUrl: GAS_URL, method: 'POST', payload: body });
+              const out = resp?.data || resp;
+              if (!(out && (out.ok || out.success))) throw new Error('Save failed');
               message.success('Remark saved to sheet');
-              setRemarkModal({ open: false, refId: '', level: 'ok', text: '' });
-            } else { message.error('Save failed'); }
-          } catch { message.error('Save failed'); }
-          finally { setRemarkSaving(false); }
+            } catch {
+              setRemarksMap((m) => {
+                const next = { ...m };
+                if (prevRemark) next[refId] = prevRemark;
+                else delete next[refId];
+                return next;
+              });
+              if (prevRow) {
+                setRows(prev => prev.map(x => x.jcNo === refId ? prevRow : x));
+              }
+              message.error('Save failed');
+            }
+          })();
         }}
       >
         <Space direction="vertical" style={{ width: '100%' }}>

@@ -406,13 +406,13 @@ export default function Quotation() {
           const staffName = staffNameRaw ? toCaps(staffNameRaw) : undefined;
           const role = user?.role ? String(user.role).toLowerCase() : undefined;
           // who can switch branches
-          const can = Boolean(user?.canSwitchBranch) || ["owner","admin"].includes(String(role||'').toLowerCase());
+          const can = Boolean(user?.canSwitchBranch) || ["owner","admin","backend"].includes(String(role||'').toLowerCase());
           setCanSwitch(can);
           // Build allowed branch list
           try {
             const roleLc = String(role || '').toLowerCase();
-            if (["owner","admin"].includes(roleLc)) {
-              // Owners/Admins: all branches from server
+            if (["owner","admin","backend"].includes(roleLc)) {
+              // Owners/Admins/Backend: all branches from server
               const res = await listBranchesPublic({ status: 'active', limit: 500 });
               if (res?.success && Array.isArray(res?.data?.items)) {
                 const activeBranches = res.data.items.filter((b) => String(b?.status || '').toLowerCase() === 'active');
@@ -596,6 +596,7 @@ export default function Quotation() {
       followUpNotes: followUp.notes || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Followup Notes'] || '',
       status,
       payload,
+      values,
     };
   };
 
@@ -1106,7 +1107,7 @@ export default function Quotation() {
 
     // Build payload AFTER we have v and mergedRemarks
     const payload = {
-      version: 1,
+      version: 2,
       savedAt: lockedSavedAt || nowIso,
       createdAt: lockedCreatedAt || lockedSavedAt || nowIso,
       updatedAt: nowIso,
@@ -1118,31 +1119,18 @@ export default function Quotation() {
       emiSet,               // "12" | "48"
       downPayment,          // number for Vehicle 1
       onRoadPrice,          // number for Vehicle 1 (mirror state)
-      company,              // Vehicle 1 (mirror states)
-      model,
-      variant,
+      address: v.address || "",
       followUp: {
         enabled: Boolean(followUpEnabled),
         at: followUpEnabled && followUpAt && dayjs(followUpAt).isValid() ? dayjs(followUpAt).toISOString() : null,
         notes: String(followUpNotes || ""),
         updatedAt: nowIso,
-        assignedTo: v.executive || userStaffName || "",
-        branch: v.branch || "",
-        customer: { name: v.name || "", mobile: v.mobile || "" },
         status: 'pending',
       },
       formValues: {
-        serialNo: v.serialNo,
-        name: v.name,
-        mobile: v.mobile,
         address: v.address,
-        company: v.company,
-        bikeModel: v.bikeModel,
-        variant: v.variant,
         onRoadPrice: v.onRoadPrice,
-        executive: v.executive,
-        remarks: mergedRemarks,
-        branch: v.branch || "",
+        downPayment: Number(v.downPayment || 0),
       },
       extraVehicles,        // [{company, model, variant, onRoadPrice, downPayment, emiSet}, ...]
     };
@@ -1162,7 +1150,6 @@ export default function Quotation() {
         company: v.company,
         bikeModel: v.bikeModel,
         variant: v.variant,
-        onRoadPrice: v.onRoadPrice,
         executive: v.executive,
         remarks: mergedRemarks,
         branch: v.branch || "",
@@ -1455,6 +1442,7 @@ export default function Quotation() {
                 title={pendingCount !== null ? `PendingCases (${pendingCount})` : "PendingCases"}
                 open={pendingOpen}
                 onCancel={() => setPendingOpen(false)}
+                width="min(1200px, 96vw)"
                 footer={[
                   <Button key="refresh" onClick={() => loadPendingCases()}>Refresh</Button>,
                   <Button key="close" type="primary" onClick={() => setPendingOpen(false)}>Close</Button>,
@@ -1468,32 +1456,99 @@ export default function Quotation() {
                   <List
                     size="small"
                     dataSource={pendingItems}
-                    renderItem={(item) => (
-                      <List.Item
-                        actions={[
-                          <Button
-                            size="small"
-                            type="primary"
-                            onClick={() => {
-                              if (!item?.payload) return;
-                              setPendingAutoApply({ payload: item.payload, token: Date.now() });
-                              setPendingOpen(false);
-                              setPendingItems((prev) => prev.filter((p) => p.serial !== item.serial));
+                    renderItem={(item) => {
+                      const name = String(item.name || "-").trim();
+                      const mobile = String(item.mobile || "-").trim();
+                      const vehicle = String(item.vehicle || "-").trim();
+                      const followUpAt = String(item.followUpAt || "").trim();
+                      const followUpNotes = String(item.followUpNotes || "").trim();
+                      const followupText = [followUpAt, followUpNotes].filter(Boolean).join(" - ");
+                      const title = [name, mobile, vehicle, followupText].filter(Boolean).join(" | ");
+
+                      return (
+                        <List.Item style={{ paddingInline: 0 }}>
+                          <div
+                            style={{
+                              width: "100%",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: 12,
+                              padding: "10px 12px",
+                              borderRadius: 12,
+                              border: "1px solid #dbe3ef",
+                              background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)"
                             }}
                           >
-                            Open
-                          </Button>,
-                        ]}
-                      >
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 2, width: "100%" }}>
-                          <div style={{ fontWeight: 600 }}>{item.name || "-"}</div>
-                          <div>📞 {item.mobile || "-"} | 🧾 {item.serial || "-"}</div>
-                          <div>🏍️ {item.vehicle || "-"} | 🏢 {item.branch || "-"}</div>
-                          {item.followUpAt ? <div>🗓️ {item.followUpAt}</div> : null}
-                          {item.followUpNotes ? <div style={{ color: "#666" }}>{item.followUpNotes}</div> : null}
-                        </div>
-                      </List.Item>
-                    )}
+                            <div
+                              style={{
+                                flex: 1,
+                                minWidth: 0,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 10,
+                                overflow: "hidden",
+                                whiteSpace: "nowrap",
+                                textOverflow: "ellipsis"
+                              }}
+                              title={title}
+                            >
+                              <span style={{ fontSize: 22, lineHeight: 1, color: "#0ea5a8" }}>●</span>
+                              <span
+                                style={{
+                                  fontSize: 21,
+                                  lineHeight: 1.15,
+                                  fontWeight: 800,
+                                  color: "#111827",
+                                  textTransform: "uppercase",
+                                  flexShrink: 0
+                                }}
+                              >
+                                {name}
+                              </span>
+                              <span
+                                style={{
+                                  padding: "4px 10px",
+                                  borderRadius: 999,
+                                  background: "#e6fffb",
+                                  border: "1px solid #7dd3fc",
+                                  color: "#0f766e",
+                                  fontWeight: 800,
+                                  fontSize: 17,
+                                  letterSpacing: 0.2,
+                                  flexShrink: 0
+                                }}
+                              >
+                                {mobile}
+                              </span>
+                              <span style={{ color: "#9ca3af", fontWeight: 700, fontSize: 18, flexShrink: 0 }}>|</span>
+                              <span style={{ fontSize: 18, fontWeight: 700, color: "#1f2937" }}>{vehicle}</span>
+                              {followupText ? (
+                                <>
+                                  <span style={{ color: "#9ca3af", fontWeight: 700, fontSize: 18, flexShrink: 0 }}>|</span>
+                                  <span style={{ fontSize: 15, fontWeight: 600, color: "#4b5563" }}>
+                                    Follow-up: {followupText}
+                                  </span>
+                                </>
+                              ) : null}
+                            </div>
+
+                            <Button
+                              type="primary"
+                              style={{ minWidth: 74, height: 34, borderRadius: 8, fontWeight: 700 }}
+                              onClick={() => {
+                                if (!item?.payload) return;
+                                setPendingAutoApply({ payload: item.payload, values: item.values || {}, token: Date.now() });
+                                setPendingOpen(false);
+                                setPendingItems((prev) => prev.filter((p) => p.serial !== item.serial));
+                              }}
+                            >
+                              Open
+                            </Button>
+                          </div>
+                        </List.Item>
+                      );
+                    }}
                   />
                 ) : (
                   <div style={{ color: "#666" }}>No pending quotations.</div>

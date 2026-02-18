@@ -121,6 +121,14 @@ export default function FetchQuot({
     const pv = row && typeof row === 'object' ? row.payload : null;
     const values = row && typeof row === 'object' ? (row.values || {}) : {};
     const toNumber = (x) => Number(String(x || 0).replace(/[,₹\s]/g, '')) || 0;
+    const pick = (...vals) => vals.find((v) => v !== undefined && v !== null && String(v).trim() !== '') || '';
+    const pickValue = (obj, keys) => {
+      for (const k of keys) {
+        const v = obj?.[k];
+        if (v !== undefined && v !== null && String(v).trim() !== '') return v;
+      }
+      return '';
+    };
     const downPaymentFromValues =
       toNumber(
         values.downPayment ||
@@ -130,46 +138,102 @@ export default function FetchQuot({
         values.dp ||
         values["Down_Payment"]
       );
-    if (pv && typeof pv === 'object') {
-      const branch = values.branch || values.Branch || '';
-      if (branch) {
-        pv.branch = pv.branch || branch;
-        pv.formValues = { ...(pv.formValues || {}), branch: (pv.formValues && pv.formValues.branch) || branch };
-      }
-      if (!pv.downPayment && downPaymentFromValues > 0) {
-        pv.downPayment = downPaymentFromValues;
-      }
-      return pv;
-    }
+    const payload = (pv && typeof pv === 'object') ? pv : {};
+    const fv = payload.formValues || {};
+
+    const serialNo = pick(
+      pickValue(values, ['serialNo', 'Quotation_ID', 'Quotation ID', 'Quotation_Id', 'Serial', 'Quotation No', 'Quotation No.']),
+      fv.serialNo,
+      payload.serialNo
+    );
+    const name = pick(
+      pickValue(values, ['name', 'Customer_Name', 'Customer Name', 'Customer', 'Name']),
+      fv.name
+    );
+    const mobile = pick(
+      pickValue(values, ['mobile', 'Mobile', 'Mobile Number', 'Phone']),
+      fv.mobile
+    );
+    const company = pick(
+      pickValue(values, ['company', 'Company']),
+      fv.company,
+      payload.company
+    );
+    const bikeModel = pick(
+      pickValue(values, ['bikeModel', 'Bike Model', 'Model']),
+      fv.bikeModel,
+      fv.model,
+      payload.model
+    );
+    const variant = pick(
+      pickValue(values, ['variant', 'Variant']),
+      fv.variant,
+      payload.variant
+    );
+    const branch = pick(
+      pickValue(values, ['branch', 'Branch', 'Branch Name']),
+      fv.branch,
+      payload.branch
+    );
+    const executive = pick(
+      pickValue(values, ['executive', 'Executive_Name', 'Executive Name', 'Executive']),
+      fv.executive,
+      EXECUTIVES[0]?.name || ''
+    );
+    const remarks = pick(
+      pickValue(values, ['remarks', 'Remarks', 'Offerings']),
+      fv.remarks,
+      payload.remarks
+    );
+
+    const onRoadPrice = toNumber(
+      pick(
+        pickValue(values, ['onRoadPrice', 'OnRoadPrice', 'On-Road Price', 'On Road Price', 'Price']),
+        fv.onRoadPrice,
+        payload.onRoadPrice
+      )
+    );
+    const downPayment = toNumber(
+      pick(
+        pickValue(values, ['downPayment', 'DownPayment', 'Down Payment', 'DP', 'dp']),
+        fv.downPayment,
+        payload.downPayment,
+        downPaymentFromValues
+      )
+    );
+
     return {
-      version: 0,
-      brand: 'SHANTHA',
-      mode: 'cash',
-      vehicleType: 'scooter',
-      fittings: [],
-      docsReq: [],
-      emiSet: '12',
-      downPayment: downPaymentFromValues || 0,
-      onRoadPrice: toNumber(values.onRoadPrice || values.OnRoadPrice || values['On-Road Price']),
-      company: values.company || values.Company || '',
-      model: values.bikeModel || values.Model || '',
-      variant: values.variant || values.Variant || '',
-      branch: values.branch || values.Branch || '',
+      version: payload.version || 0,
+      brand: payload.brand || 'SHANTHA',
+      mode: payload.mode || 'cash',
+      vehicleType: payload.vehicleType || 'scooter',
+      fittings: Array.isArray(payload.fittings) ? payload.fittings : [],
+      docsReq: Array.isArray(payload.docsReq) ? payload.docsReq : [],
+      emiSet: payload.emiSet || '12',
+      downPayment,
+      onRoadPrice,
+      company,
+      model: bikeModel,
+      variant,
+      branch,
+      savedAt: payload.savedAt || '',
+      createdAt: payload.createdAt || '',
+      followUp: payload.followUp || { enabled: false, at: null, notes: '', status: 'pending' },
       formValues: {
-        serialNo: values.serialNo || values.Quotation_ID || values['Quotation_ID'] || values['Quotation No'] || '',
-        name: values.name || values.Customer_Name || values['Customer_Name'] || '',
-        mobile: values.mobile || values.Mobile || values['Mobile'] || '',
-        address: values.address || values.Address || '',
-        company: values.company || values.Company || '',
-        bikeModel: values.bikeModel || values.Model || '',
-        variant: values.variant || values.Variant || '',
-        onRoadPrice: toNumber(values.onRoadPrice || values.OnRoadPrice || values['On-Road Price']),
-        executive: values.executive || values.Executive_Name || EXECUTIVES[0]?.name || '',
-        remarks: values.remarks || values.Remarks || '',
-        branch: values.branch || values.Branch || '',
-        downPayment: downPaymentFromValues || 0,
+        serialNo,
+        name,
+        mobile,
+        address: pick(values.address, values.Address, fv.address, payload.address),
+        company,
+        bikeModel,
+        variant,
+        onRoadPrice,
+        downPayment,
+        executive,
+        remarks,
+        branch,
       },
-      extraVehicles: [],
+      extraVehicles: Array.isArray(payload.extraVehicles) ? payload.extraVehicles : [],
     };
   };
 
@@ -233,11 +297,12 @@ export default function FetchQuot({
   };
 
   useEffect(() => {
-    if (!autoApply?.payload) return;
-    const key = String(autoApply?.token || '') + ':' + String(autoApply?.payload?.formValues?.serialNo || autoApply?.payload?.serialNo || autoApply?.payload?.formValues?.mobile || '');
+    if (!autoApply?.payload && !autoApply?.values) return;
+    const key = String(autoApply?.token || '') + ':' + String(autoApply?.values?.serialNo || autoApply?.payload?.formValues?.serialNo || autoApply?.payload?.serialNo || autoApply?.values?.mobile || autoApply?.payload?.formValues?.mobile || '');
     if (lastAutoRef.current === key) return;
     lastAutoRef.current = key;
-    applyToForm(autoApply.payload);
+    const normalized = payloadFromWebhook({ payload: autoApply?.payload || {}, values: autoApply?.values || {} });
+    applyToForm(normalized);
   }, [autoApply]);
 
   // ---------------- search ----------------

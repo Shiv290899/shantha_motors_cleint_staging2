@@ -761,8 +761,8 @@ export default function StockUpdate() {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "stretch" : "center", marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: isMobile ? '1 1 100%' : '1 1 auto' }}>
           <strong>Total:</strong> {filteredItems.length || 0}
           <Input.Search
             placeholder="Search chassis/company/model/notes"
@@ -770,7 +770,7 @@ export default function StockUpdate() {
             value={qText}
             onChange={(e)=>setQText(e.target.value)}
             onSearch={(v)=>setQ(String(v || '').trim())}
-            style={{ width: 260 }}
+            style={{ width: isMobile ? '100%' : 260, minWidth: isMobile ? 0 : 220 }}
           />
           {isPriv && (
             <>
@@ -792,11 +792,12 @@ export default function StockUpdate() {
           )}
           <Button onClick={()=>{ setQText(''); setQ(''); setActionFilter('all'); setBranchFilter('all'); }}>Reset</Button>
       </div>
-        <Space>
-          <Button onClick={handleExportCsv}>Export CSV</Button>
-          <Button onClick={fetchList} loading={loadingList}>Refresh</Button>
+        <Space wrap size="small" style={{ width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'space-between' : 'flex-end' }}>
+          <Button onClick={handleExportCsv} style={{ flex: isMobile ? '1 1 auto' : '0 0 auto' }}>Export CSV</Button>
+          <Button onClick={fetchList} loading={loadingList} style={{ flex: isMobile ? '1 1 auto' : '0 0 auto' }}>Refresh</Button>
           <Button
             type="primary"
+            style={{ flex: isMobile ? '1 1 auto' : '0 0 auto' }}
             onClick={() => {
               setAllowedActions(["add"]);
               setAction("add");
@@ -825,7 +826,7 @@ export default function StockUpdate() {
                 : `Transfers awaiting admit for ${pendingBranch || myBranch || 'your branch'}`}
             </div>
           </div>
-          <Space size="small">
+          <Space size="small" wrap>
             <Tag color={alertPending.length ? 'orange' : 'green'} style={{ margin: 0 }}>
               {alertPending.length} pending
             </Tag>
@@ -843,12 +844,12 @@ export default function StockUpdate() {
         ) : (
           <Space direction="vertical" style={{ width: '100%', marginTop: 12 }} size="small">
             {alertPending.map((p) => (
-              <div key={p.movementId || p.key} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: 12, borderRadius: 8, border: '1px dashed #f97316', background: '#fff' }}>
-                <div style={{ flex: '1 1 260px', minWidth: 220 }}>
+              <div key={p.movementId || p.key} style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', alignItems: isMobile ? 'stretch' : 'flex-start', justifyContent: 'space-between', gap: 12, padding: 12, borderRadius: 8, border: '1px dashed #f97316', background: '#fff' }}>
+                <div style={{ flex: isMobile ? '0 0 auto' : '1 1 260px', minWidth: isMobile ? 0 : 220 }}>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span style={{ fontWeight: 700 }}>Chassis:</span>
-                    <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{p.chassis || '-'}</span>
-                    <Tag color="geekblue" style={{ marginLeft: 4 }}>
+                    <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', wordBreak: 'break-all' }}>{p.chassis || '-'}</span>
+                    <Tag color="geekblue" style={{ marginLeft: 4, maxWidth: '100%', whiteSpace: 'normal', lineHeight: 1.2 }}>
                       {[p.company, p.model, p.variant, p.color].filter(Boolean).join(' ')}
                     </Tag>
                   </div>
@@ -862,7 +863,7 @@ export default function StockUpdate() {
                   </div>
                   {p.notes && <div style={{ marginTop: 4, fontSize: 12, color: '#92400e' }}>Notes: {p.notes}</div>}
                 </div>
-                <Space size="small" align="start">
+                <Space size="small" align="start" wrap style={{ width: isMobile ? '100%' : 'auto', justifyContent: isMobile ? 'flex-end' : 'flex-start' }}>
                   <Button
                     type="primary"
                     size="small"
