@@ -4,7 +4,7 @@ import dayjs from "dayjs";
 import {
   Row, Col, Form, Input, InputNumber, Select, Button, Radio, message, Checkbox, Divider, DatePicker, Switch, List, Modal, Spin
 } from "antd";
-import { PrinterOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
+import { PrinterOutlined, PlusOutlined, DeleteOutlined, EyeOutlined, ReloadOutlined } from "@ant-design/icons";
 import FetchQuot from "./FetchQuot"; // for fetching saved quotations
 import { GetCurrentUser } from "../apiCalls/users";
 import { getBranch, listBranchesPublic } from "../apiCalls/branches";
@@ -168,6 +168,22 @@ const phoneRule = [
   { required: true, message: "Mobile number is required" },
   { pattern: /^[6-9]\d{9}$/, message: "Enter a valid 10-digit Indian mobile number" },
 ];
+
+const sanitizeCustomerName = (value) =>
+  String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trimStart();
+
+const customerNameRule = {
+  validator: async (_, value) => {
+    const v = String(value || "").trim();
+    if (!v) return Promise.resolve();
+    if (v.startsWith("=")) throw new Error("Name cannot start with =");
+    if (/[^A-Z\s]/.test(v)) throw new Error("Name can contain only letters and spaces");
+  },
+};
 
 const inr0 = (n) =>
   new Intl.NumberFormat("en-IN", {
@@ -549,6 +565,44 @@ export default function Quotation() {
   );
   const pendingCount = pendingLoaded ? pendingItems.length : null;
 
+  const parseDateLike = (raw) => {
+    if (!raw) return null;
+    if (dayjs.isDayjs(raw)) return raw.isValid() ? raw : null;
+    if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : dayjs(raw);
+    const s = String(raw).trim();
+    if (!s) return null;
+    const native = dayjs(s);
+    if (native.isValid()) return native;
+    const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})(?:\s+(\d{1,2}):(\d{2}))?$/);
+    if (!m) return null;
+    const dd = Number(m[1]);
+    const mm = Number(m[2]);
+    const yyyy = Number(m[3].length === 2 ? `20${m[3]}` : m[3]);
+    const hh = Number(m[4] || 0);
+    const min = Number(m[5] || 0);
+    const iso = `${String(yyyy).padStart(4, "0")}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}T${String(hh).padStart(2, "0")}:${String(min).padStart(2, "0")}:00`;
+    const parsed = dayjs(iso);
+    return parsed.isValid() ? parsed : null;
+  };
+
+  const formatDateLabel = (raw) => {
+    const d = parseDateLike(raw);
+    return d ? d.format("DD-MM-YYYY HH:mm") : "-";
+  };
+
+  const relativeDueLabel = (raw) => {
+    const d = parseDateLike(raw);
+    if (!d) return "";
+    const now = dayjs();
+    const mins = d.diff(now, "minute");
+    const absMins = Math.abs(mins);
+    if (absMins < 60) return mins >= 0 ? `${absMins} min` : `${absMins} min ago`;
+    const absHours = Math.round(absMins / 60);
+    if (absHours < 24) return mins >= 0 ? `${absHours} hrs` : `${absHours} hrs ago`;
+    const absDays = Math.round(absHours / 24);
+    return mins >= 0 ? `${absDays} days` : `${absDays} days ago`;
+  };
+
   const normalizePendingRow = (row) => {
     const values = row?.values || row || {};
     const payloadRaw =
@@ -581,18 +635,33 @@ export default function Quotation() {
       values['Follow Up Date'] ||
       values['Followup Date'] ||
       '';
-    const followUpAt = (() => {
-      if (!followUpAtRaw) return '';
-      const d = dayjs(followUpAtRaw, ["DD-MM-YYYY HH:mm","DD/MM/YYYY HH:mm","DD-MM-YYYY","DD/MM/YYYY", dayjs.ISO_8601], true);
-      return d.isValid() ? d.format('DD-MM-YYYY HH:mm') : String(followUpAtRaw);
-    })();
+    const createdAtRaw =
+      payload.createdAt ||
+      payload.savedAt ||
+      values['Created At'] ||
+      values['CreatedAt'] ||
+      values['Saved At'] ||
+      values['SavedAt'] ||
+      values['Created Date'] ||
+      values['Date'] ||
+      '';
+    const updatedAtRaw =
+      payload.updatedAt ||
+      values['Updated At'] ||
+      values['UpdatedAt'] ||
+      values['Last Updated'] ||
+      '';
     return {
       serial: fv.serialNo || pick(values, ['Quotation No.', 'Quotation No', 'Quotation_ID', 'Quotation ID', 'Serial']) || '-',
       name: fv.name || pick(values, ['Customer_Name', 'Customer Name', 'Name']) || '-',
       mobile: String(fv.mobile || pick(values, ['Mobile', 'Mobile Number', 'Phone']) || '').replace(/\D/g, '').slice(-10),
       vehicle: [fv.company || payload.company || values.Company, fv.bikeModel || payload.model || values.Model, fv.variant || payload.variant || values.Variant].filter(Boolean).join(' ') || '-',
       branch: fv.branch || payload.branch || values.Branch || values['Branch Name'] || '-',
-      followUpAt,
+      followUpAt: formatDateLabel(followUpAtRaw),
+      followUpAtRaw,
+      createdAt: formatDateLabel(createdAtRaw),
+      updatedAt: formatDateLabel(updatedAtRaw),
+      dueLabel: relativeDueLabel(followUpAtRaw),
       followUpNotes: followUp.notes || values['Follow-up Notes'] || values['Follow Up Notes'] || values['Followup Notes'] || '',
       status,
       payload,
@@ -1428,6 +1497,8 @@ export default function Quotation() {
                       }}
                     />
                     <Button
+                      type="default"
+                      style={{ borderColor: "#2f6de1", color: "#1e4ca1", fontWeight: 600 }}
                       onClick={async () => {
                         setPendingOpen(true);
                         await loadPendingCases();
@@ -1439,12 +1510,34 @@ export default function Quotation() {
                 </div>
               </Col>
               <Modal
-                title={pendingCount !== null ? `PendingCases (${pendingCount})` : "PendingCases"}
+                title={(
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: 8,
+                        background: "#eef3ff",
+                        color: "#2f6de1",
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      P
+                    </span>
+                    <span style={{ fontWeight: 700 }}>
+                      {pendingCount !== null ? `PendingCases (${pendingCount})` : "PendingCases"}
+                    </span>
+                  </div>
+                )}
                 open={pendingOpen}
                 onCancel={() => setPendingOpen(false)}
-                width="min(1200px, 96vw)"
+                width={820}
+                styles={{ body: { paddingTop: 8 } }}
                 footer={[
-                  <Button key="refresh" onClick={() => loadPendingCases()}>Refresh</Button>,
+                  <Button key="refresh" icon={<ReloadOutlined />} onClick={() => loadPendingCases()}>Refresh</Button>,
                   <Button key="close" type="primary" onClick={() => setPendingOpen(false)}>Close</Button>,
                 ]}
               >
@@ -1458,26 +1551,27 @@ export default function Quotation() {
                     dataSource={pendingItems}
                     renderItem={(item) => {
                       const name = String(item.name || "-").trim();
-                      const mobile = String(item.mobile || "-").trim();
+                      const mobile = String(item.mobile || "-").trim() || "-";
                       const vehicle = String(item.vehicle || "-").trim();
-                      const followUpAt = String(item.followUpAt || "").trim();
-                      const followUpNotes = String(item.followUpNotes || "").trim();
-                      const followupText = [followUpAt, followUpNotes].filter(Boolean).join(" - ");
-                      const title = [name, mobile, vehicle, followupText].filter(Boolean).join(" | ");
+                      const branch = String(item.branch || "-").trim();
+                      const followUpAt = String(item.followUpAt || "-").trim();
+                      const createdAt = String(item.createdAt || "-").trim();
+                      const title = [name, mobile, vehicle, branch].filter(Boolean).join(" | ");
+                      const avatar = (name && name !== "-" ? name[0] : "P").toUpperCase();
 
                       return (
-                        <List.Item style={{ paddingInline: 0 }}>
+                        <List.Item style={{ paddingInline: 0, paddingBlock: 6 }}>
                           <div
                             style={{
                               width: "100%",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "space-between",
-                              gap: 12,
-                              padding: "10px 12px",
+                              display: "grid",
+                              gridTemplateColumns: "1fr auto",
+                              alignItems: "start",
+                              gap: 10,
+                              padding: "10px 12px 12px",
                               borderRadius: 12,
-                              border: "1px solid #dbe3ef",
-                              background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)"
+                              border: "1px solid #d5e5ff",
+                              background: "#ffffff"
                             }}
                           >
                             <div
@@ -1485,57 +1579,108 @@ export default function Quotation() {
                                 flex: 1,
                                 minWidth: 0,
                                 display: "flex",
-                                alignItems: "center",
+                                flexDirection: "column",
                                 gap: 10,
-                                overflow: "hidden",
-                                whiteSpace: "nowrap",
-                                textOverflow: "ellipsis"
                               }}
                               title={title}
                             >
-                              <span style={{ fontSize: 22, lineHeight: 1, color: "#0ea5a8" }}>●</span>
-                              <span
-                                style={{
-                                  fontSize: 21,
-                                  lineHeight: 1.15,
-                                  fontWeight: 800,
-                                  color: "#111827",
-                                  textTransform: "uppercase",
-                                  flexShrink: 0
-                                }}
-                              >
-                                {name}
-                              </span>
-                              <span
-                                style={{
-                                  padding: "4px 10px",
-                                  borderRadius: 999,
-                                  background: "#e6fffb",
-                                  border: "1px solid #7dd3fc",
-                                  color: "#0f766e",
-                                  fontWeight: 800,
-                                  fontSize: 17,
-                                  letterSpacing: 0.2,
-                                  flexShrink: 0
-                                }}
-                              >
-                                {mobile}
-                              </span>
-                              <span style={{ color: "#9ca3af", fontWeight: 700, fontSize: 18, flexShrink: 0 }}>|</span>
-                              <span style={{ fontSize: 18, fontWeight: 700, color: "#1f2937" }}>{vehicle}</span>
-                              {followupText ? (
-                                <>
-                                  <span style={{ color: "#9ca3af", fontWeight: 700, fontSize: 18, flexShrink: 0 }}>|</span>
-                                  <span style={{ fontSize: 15, fontWeight: 600, color: "#4b5563" }}>
-                                    Follow-up: {followupText}
-                                  </span>
-                                </>
-                              ) : null}
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "nowrap" }}>
+                                <div
+                                  style={{
+                                    width: 34,
+                                    height: 34,
+                                    borderRadius: "50%",
+                                    background: "#2f6de1",
+                                    color: "#fff",
+                                    fontWeight: 700,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center"
+                                  }}
+                                >
+                                  {avatar}
+                                </div>
+                                <span
+                                  style={{
+                                    fontSize: 24,
+                                    lineHeight: 1.1,
+                                    fontWeight: 800,
+                                    color: "#111827",
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  {name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    lineHeight: 1.1,
+                                    color: "#6b7280",
+                                    fontWeight: 600,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {`Created: ${createdAt} | FU: ${followUpAt}`}
+                                </span>
+                              </div>
+
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "nowrap", marginLeft: 2, overflow: "hidden" }}>
+                                <span
+                                  style={{
+                                    padding: "2px 10px",
+                                    borderRadius: 999,
+                                    background: "#eaf1ff",
+                                    border: "1px solid #c9dbff",
+                                    color: "#1e4ca1",
+                                    fontWeight: 700,
+                                    letterSpacing: 0.2,
+                                    fontSize: 20
+                                  }}
+                                >
+                                  {mobile}
+                                </span>
+                                <span style={{ color: "#9aa5bb", fontWeight: 700, fontSize: 18 }}>|</span>
+                                <span
+                                  style={{
+                                    padding: "2px 10px",
+                                    borderRadius: 999,
+                                    background: "#eef3ff",
+                                    border: "1px solid #d2dcf5",
+                                    color: "#2b4f92",
+                                    fontWeight: 700,
+                                    fontSize: 16,
+                                    textTransform: "uppercase"
+                                  }}
+                                >
+                                  {branch}
+                                </span>
+                                <span style={{ color: "#9aa5bb", fontWeight: 700, fontSize: 18 }}>|</span>
+                                <span
+                                  style={{
+                                    padding: "2px 10px",
+                                    borderRadius: 999,
+                                    background: "#fff6e8",
+                                    border: "1px solid #f2cf90",
+                                    color: "#925f00",
+                                    fontWeight: 700,
+                                    fontSize: 14,
+                                    textTransform: "uppercase",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    maxWidth: 330,
+                                  }}
+                                >
+                                  {vehicle}
+                                </span>
+                              </div>
+
                             </div>
 
                             <Button
                               type="primary"
-                              style={{ minWidth: 74, height: 34, borderRadius: 8, fontWeight: 700 }}
+                              icon={<EyeOutlined />}
+                              style={{ minWidth: 84, height: 34, borderRadius: 8, fontWeight: 700, marginTop: 2 }}
                               onClick={() => {
                                 if (!item?.payload) return;
                                 setPendingAutoApply({ payload: item.payload, values: item.values || {}, token: Date.now() });
@@ -1622,10 +1767,10 @@ export default function Quotation() {
                 <Form.Item 
                   label="Customer Name" 
                   name="name" 
-                  rules={[{ required: true, message: "Enter name" }]}
+                  rules={[{ required: true, message: "Enter name" }, customerNameRule]}
                   getValueFromEvent={(e) => {
                     const v = e?.target?.value ?? e; 
-                    return typeof v === 'string' ? v.toUpperCase() : v;
+                    return typeof v === 'string' ? sanitizeCustomerName(v) : v;
                   }}
                 >
                   <Input placeholder="CUSTOMER NAME" style={{ textTransform: 'uppercase' }} />

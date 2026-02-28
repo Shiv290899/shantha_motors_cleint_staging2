@@ -171,6 +171,28 @@ const uniqueNonEmpty = (list = []) =>
     )
   );
 
+const normalizeFieldKey = (key) => String(key || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const pickFieldValue = (obj, aliases = []) => {
+  if (!obj || typeof obj !== "object") return "";
+  for (const alias of aliases) {
+    const direct = obj[alias];
+    if (direct !== undefined && direct !== null && String(direct).trim() !== "") {
+      return direct;
+    }
+  }
+  const normalizedAliases = aliases.map(normalizeFieldKey).filter(Boolean);
+  if (!normalizedAliases.length) return "";
+  const entries = Object.entries(obj);
+  for (const [key, value] of entries) {
+    if (value === undefined || value === null || String(value).trim() === "") continue;
+    if (normalizedAliases.includes(normalizeFieldKey(key))) {
+      return value;
+    }
+  }
+  return "";
+};
+
 const normalizePurchaseMode = (value) => String(value || "").trim().toLowerCase();
 const isFinancedMode = (value) => ["loan", "nohp", "hp", "finance"].includes(normalizePurchaseMode(value));
 
@@ -233,9 +255,22 @@ const buildQuotationOfferingDetails = (row) => {
 
   addVehicle({
     label: "Vehicle 1",
-    company: fv.company ?? p.company,
-    model: fv.bikeModel ?? fv.model ?? p.model ?? row.model,
-    variant: fv.variant ?? p.variant ?? row.variant,
+    company:
+      fv.company ??
+      p.company ??
+      row.company ??
+      pickFieldValue(row.values, ["Company", "company", "Company Name", "Brand"]),
+    model:
+      fv.bikeModel ??
+      fv.model ??
+      p.model ??
+      row.model ??
+      pickFieldValue(row.values, ["Model", "model", "Bike Model", "bikeModel"]),
+    variant:
+      fv.variant ??
+      p.variant ??
+      row.variant ??
+      pickFieldValue(row.values, ["Variant", "variant"]),
     priceRaw: fv.onRoadPrice ?? p.onRoadPrice ?? row.price,
     dpRaw: fv.downPayment ?? p.downPayment,
     emiSetRaw: p.emiSet,
@@ -1178,9 +1213,24 @@ const extractRawPayloadObject = (...sources) => {
           // quotation
           return fv.serialNo || p.serialNo || values['Quotation No.'] || values['Quotation No'] || values['Serial'] || '-';
         })();
-        const company = p.company || fv.company || values.Company || '';
-        const model = p.model || p.vehicle?.model || fv.bikeModel || fv.model || values.Model || '';
-        const variant = p.variant || p.vehicle?.variant || fv.variant || values.Variant || '';
+        const company =
+          p.company ||
+          fv.company ||
+          pickFieldValue(values, ["Company", "company", "Company Name", "Brand"]) ||
+          '';
+        const model =
+          p.model ||
+          p.vehicle?.model ||
+          fv.bikeModel ||
+          fv.model ||
+          pickFieldValue(values, ["Model", "model", "Bike Model", "bikeModel"]) ||
+          '';
+        const variant =
+          p.variant ||
+          p.vehicle?.variant ||
+          fv.variant ||
+          pickFieldValue(values, ["Variant", "variant"]) ||
+          '';
         const color = p.color || p.vehicle?.color || fv.color || values.Color || values.Colour || values['Vehicle Color'] || values['Vehicle Colour'] || '';
         const vehicle = [company, model, variant].filter(Boolean).join(' ');
         // Prefer trimmed branch for display; filtering uses `norm`
@@ -1346,6 +1396,7 @@ const extractRawPayloadObject = (...sources) => {
           bookingId: isBooking && serial && serial !== '-' ? serial : '',
           name: fv.custName || fv.name || values.Customer_Name || values['Customer Name'] || values.Customer || values.Name || '-',
           mobile: fv.custMobile || fv.mobile || values.Mobile || values['Mobile Number'] || values.Phone || '-',
+          company,
           vehicle,
           branch: String(branchDisp || '-').trim(),
           executive: fv.executive || fu.assignedTo || values.Executive || '-',

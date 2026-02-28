@@ -1,9 +1,12 @@
 // FetchJobcard.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Modal, Input, List, Space, Spin, message, Radio } from "antd";
-import { saveJobcardViaWebhook } from "../apiCalls/forms";
+import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../apiCalls/forms";
 import dayjs from "dayjs";
 import FetchQuot from "./FetchQuot"; // NEW: for fetching saved quotations
+
+const DEFAULT_BOOKING_GAS_URL =
+  "https://script.google.com/macros/s/AKfycbwSn5hp1cSWlJMGhe2cYUtid2Ruqh9H13mZbq0PwBpYB0lMLufZbIjZ5zioqtKgE_0sNA/exec";
 
 /**
  * Props:
@@ -37,6 +40,8 @@ export default function FetchJobcard({
   onAutoSearchStatusChange,
 }) {
   const JOB_SECRET = import.meta.env?.VITE_JOBCARD_GAS_SECRET || '';
+  const BOOKING_SECRET = import.meta.env?.VITE_BOOKING_GAS_SECRET || '';
+  const BOOKING_GAS_URL = import.meta.env?.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState("mobile"); // mobile | vehicle
   const [query, setQuery] = useState("");
@@ -183,6 +188,18 @@ export default function FetchJobcard({
       false
     );
     return d.isValid() ? d : dayjs(0);
+  };
+
+  const basicFieldScore = (payload) => {
+    const fv = payload?.formValues || {};
+    let score = 0;
+    if (String(fv.regNo || "").trim()) score += 3;
+    if (String(fv.custMobile || "").replace(/\D/g, "").length === 10) score += 2;
+    if (String(fv.custName || "").trim()) score += 2;
+    if (String(fv.company || "").trim()) score += 2;
+    if (String(fv.model || "").trim()) score += 2;
+    if (String(fv.colour || "").trim()) score += 1;
+    return score;
   };
 
   const payloadTimestampMs = (payload) => {
@@ -378,6 +395,98 @@ export default function FetchJobcard({
       };
     });
     return { mode: 'webhook', rows: norm };
+  };
+
+  const bookingPayloadFromRow = (row = {}) => {
+    const values = row?.values || {};
+    const p = row?.payload || row || {};
+    const vehicle = p?.vehicle || {};
+
+    const regNo = prefer(
+      vehicle?.regNo,
+      vehicle?.registrationNumber,
+      p?.regNo,
+      p?.vehicleNo,
+      values["Vehicle No"],
+      values.Vehicle_No,
+      values["Registration Number"],
+      values["Vehicle Number"],
+      values["Reg No"]
+    );
+
+    const model = prefer(
+      vehicle?.model,
+      p?.model,
+      values.Model
+    );
+
+    const fields = {
+      regNo: formatReg(regNo || "", ""),
+      custMobile: tenDigits(prefer(p?.mobileNumber, p?.mobile, values.Mobile, values["Mobile Number"], values.Phone)),
+      custName: prefer(p?.customerName, p?.name, values.Customer_Name, values["Customer Name"]),
+      company: prefer(vehicle?.company, p?.company, values.Company, values["Company Name"]),
+      model: String(model || "").toUpperCase(),
+      colour: prefer(vehicle?.colour, vehicle?.color, p?.colour, p?.color, values.Colour, values.Color),
+      chassisNo: prefer(vehicle?.chassisNo, vehicle?.chassis, p?.chassisNo, values["Chassis No"], values.Chassis_No),
+    };
+
+    return {
+      formValues: fields,
+      savedAt: prefer(p?.ts, p?.createdAt, p?.savedAt, values.Timestamp),
+      createdAt: prefer(p?.createdAt, p?.ts, values.Timestamp),
+      timestamp: prefer(p?.timestamp, p?.ts, p?.createdAt, values.Timestamp),
+      _values: values,
+    };
+  };
+
+  const fetchBookingRows = async (queryOverride, modeOverride) => {
+    if (!BOOKING_GAS_URL) return { mode: "booking", rows: [] };
+    const modeNow = modeOverride || mode;
+    if (modeNow !== "mobile" && modeNow !== "vehicle") return { mode: "booking", rows: [] };
+
+    const qStr = String(queryOverride ?? query ?? "").trim();
+    const base =
+      modeNow === "vehicle"
+        ? { action: "search", mode: "vehicle", query: qStr }
+        : { action: "search", mode: "mobile", query: qStr };
+    if (BOOKING_SECRET) base.secret = BOOKING_SECRET;
+
+    const calls = [
+      saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: "GET", payload: base }),
+      saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: "POST", payload: base }),
+    ];
+
+    if (modeNow === "vehicle") {
+      const regPayload = { ...base, mode: "reg" };
+      calls.push(saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: "GET", payload: regPayload }));
+      calls.push(saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: "POST", payload: regPayload }));
+    }
+
+    const settled = await Promise.allSettled(calls);
+    const mergedRows = settled.flatMap((res) => {
+      if (res.status !== "fulfilled") return [];
+      const j = res.value?.data || res.value;
+      return Array.isArray(j?.rows) ? j.rows : [];
+    });
+
+    const payloads = mergedRows.map((r) => bookingPayloadFromRow(r));
+    const deduped = [];
+    const seen = new Set();
+    payloads.forEach((p) => {
+      const fv = p?.formValues || {};
+      const key = [
+        String(fv.regNo || "").toUpperCase(),
+        String(fv.custMobile || ""),
+        String(fv.custName || "").toUpperCase(),
+        String(fv.company || "").toUpperCase(),
+        String(fv.model || "").toUpperCase(),
+      ].join("|");
+      if (!key) return;
+      if (seen.has(key)) return;
+      seen.add(key);
+      deduped.push({ payload: p });
+    });
+    return { mode: "booking", rows: deduped };
   };
 
   // ---------- map & apply ----------
@@ -660,6 +769,57 @@ export default function FetchJobcard({
     setLoading(true);
     if (isInline) onAutoSearchStatusChange?.(true, source);
     try {
+      if (isInline && applyModeRef.current === "basic" && (modeNow === "mobile" || modeNow === "vehicle")) {
+        let applied = false;
+        const tryApplyPayload = (payloads = []) => {
+          if (applied || !payloads.length) return false;
+          const sorted = [...payloads].sort((a, b) => {
+            const score = basicFieldScore(b) - basicFieldScore(a);
+            if (score !== 0) return score;
+            return payloadTimestampMs(b) - payloadTimestampMs(a);
+          });
+          const target = sorted[0];
+          if (!target || basicFieldScore(target) <= 0) return false;
+          applied = true;
+          applyPayloadToForm(target);
+          return true;
+        };
+
+        const jobPromise = fetchRows(qNorm, modeNow)
+          .then((result) => {
+            const payloads = (result?.rows || []).map((r) => r?.payload || r).filter(Boolean);
+            tryApplyPayload(payloads);
+            return payloads;
+          })
+          .catch((e) => {
+            console.warn("Inline jobcard fetch failed:", e);
+            return [];
+          });
+
+        const bookingPromise = fetchBookingRows(qNorm, modeNow)
+          .then((result) => {
+            const payloads = (result?.rows || []).map((r) => r?.payload || r).filter(Boolean);
+            tryApplyPayload(payloads);
+            return payloads;
+          })
+          .catch((e) => {
+            console.warn("Inline booking fetch failed:", e);
+            return [];
+          });
+
+        const [jobSettled, bookingSettled] = await Promise.allSettled([jobPromise, bookingPromise]);
+        if (!applied) {
+          const allPayloads = [jobSettled, bookingSettled].flatMap((res) =>
+            res.status === "fulfilled" && Array.isArray(res.value) ? res.value : []
+          );
+          if (!tryApplyPayload(allPayloads)) {
+            showNotFoundModal({ source });
+            setMatches([]);
+          }
+        }
+        return;
+      }
+
       const result = await fetchRows(qNorm, modeNow);
       if (!result) throw new Error('No result');
       if (result.mode === 'webhook') {

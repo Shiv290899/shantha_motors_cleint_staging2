@@ -15,8 +15,8 @@ const HEAD = {
   name: ["Customer_Name", "Customer", "Name"],
   mobile: ["Mobile", "Phone", "Mobile Number"],
   branch: ["Branch"],
-  executive: ["Executive"],
-  serialNo: ["Quotation No.", "Quotation No", "Serial", "Serial No", "Quote Id"],
+  executive: ["Executive", "Executive_Name", "Executive Name"],
+  serialNo: ["Quotation No.", "Quotation No", "Serial", "Serial No", "Quote Id", "Quotation_ID", "Quotation ID"],
   company: ["Company"],
   model: ["Model", "Bike Model"],
   variant: ["Variant"],
@@ -121,7 +121,14 @@ const uniqueNonEmpty = (list = []) =>
     )
   );
 
-const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText }) => {
+const buildQuotationOfferingDetails = ({
+  payload,
+  baseOfferings,
+  fallbackText,
+  fallbackCompany,
+  fallbackModel,
+  fallbackVariant,
+}) => {
   const remarks = String(baseOfferings || "").trim();
   const vehicles = [];
   if (payload && typeof payload === "object") {
@@ -162,9 +169,9 @@ const buildQuotationOfferingDetails = ({ payload, baseOfferings, fallbackText })
 
     addVehicle({
       label: "Vehicle 1",
-      company: fv.company ?? payload.company,
-      model: fv.bikeModel ?? fv.model ?? payload.model,
-      variant: fv.variant ?? payload.variant,
+      company: fv.company ?? payload.company ?? fallbackCompany,
+      model: fv.bikeModel ?? fv.model ?? payload.model ?? fallbackModel,
+      variant: fv.variant ?? payload.variant ?? fallbackVariant,
       priceRaw: fv.onRoadPrice ?? payload.onRoadPrice,
       dpRaw: fv.downPayment ?? payload.downPayment,
       emiSetRaw: payload.emiSet,
@@ -691,6 +698,9 @@ export default function Quotations() {
         payload: r.payload,
         baseOfferings: r.offeringsBase,
         fallbackText: r.offerings,
+        fallbackCompany: r.company,
+        fallbackModel: r.model,
+        fallbackVariant: r.variant,
       });
       const count = details.vehicles.length;
       const popoverContent = (

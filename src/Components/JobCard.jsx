@@ -238,6 +238,21 @@ const REGEX_FULL = /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/;
 // Normalize text inputs to uppercase for consistent storage/display
 const toUpperSafe = (val) => (typeof val === "string" ? val.toUpperCase() : val);
 const upperFromEvent = (e) => toUpperSafe(e?.target?.value ?? e);
+const sanitizeCustomerName = (value) =>
+  String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trimStart();
+const customerNameFromEvent = (e) => sanitizeCustomerName(e?.target?.value ?? e);
+const customerNameRule = {
+  validator: async (_, value) => {
+    const v = String(value || "").trim();
+    if (!v) return Promise.resolve();
+    if (v.startsWith("=")) throw new Error("Name cannot start with =");
+    if (/[^A-Z\s]/.test(v)) throw new Error("Name can contain only letters and spaces");
+  },
+};
 const normalizeRowDesc = (rows) =>
   Array.isArray(rows) ? rows.map((r) => ({ ...r, desc: toUpperSafe(r?.desc || "") })) : [];
 const normalizeChassis = (val) =>
@@ -589,7 +604,6 @@ export default function JobCard({ initialValues = null } = {}) {
   const [inlineFetchLoading, setInlineFetchLoading] = useState(false);
   const [inlineFetchTarget, setInlineFetchTarget] = useState(null);
   const lastAutoRegRef = useRef("");
-  const lastAutoMobileRef = useRef("");
   const [bikeData, setBikeData] = useState([]);
   const [selectedCompany, setSelectedCompany] = useState("");
   const startActionCooldown = (ms = 6000) => {
@@ -1160,7 +1174,6 @@ export default function JobCard({ initialValues = null } = {}) {
   const discounts = useMemo(() => discountsRaw || { labour: 0 }, [discountsRaw]);
   const kmWatch = Form.useWatch("km", form);
   const companyWatch = Form.useWatch("company", form);
-  const mobileWatch = Form.useWatch("custMobile", form);
 
   useEffect(() => {
     const next = formatReg(regDisplay || form.getFieldValue("regNo") || "", regDisplay || "");
@@ -1172,14 +1185,6 @@ export default function JobCard({ initialValues = null } = {}) {
     triggerInlineFetch("vehicle");
   }, [regDisplay, inlineFetchLoading, form]);
 
-  useEffect(() => {
-    const mobile = String(mobileWatch || "").replace(/\D/g, "").slice(-10);
-    if (mobile.length !== 10) return;
-    if (inlineFetchLoading) return;
-    if (lastAutoMobileRef.current === mobile) return;
-    lastAutoMobileRef.current = mobile;
-    triggerInlineFetch("mobile");
-  }, [mobileWatch, inlineFetchLoading]);
   const totals = useMemo(() => {
     const labourSub = labourRows.reduce(
       (sum, r) => sum + Number(r?.qty || 0) * Number(r?.rate || 0),
@@ -1237,9 +1242,6 @@ export default function JobCard({ initialValues = null } = {}) {
       setPostServiceLock(POST_LOCK_EMPTY);
     }
     form.setFieldsValue({ custMobile: val });
-    if (String(val || "").length < 10) {
-      lastAutoMobileRef.current = "";
-    }
   };
 
   const kmDigits = Number(String(kmWatch || "").replace(/\D/g, "")) || 0;
@@ -2007,41 +2009,114 @@ export default function JobCard({ initialValues = null } = {}) {
               <List
                 size="small"
                 dataSource={pendingItems}
-                renderItem={(item) => (
-                  <List.Item>
-                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, width: "100%" }}>
+                renderItem={(item) => {
+                  const name = String(item.name || "-").trim();
+                  const mobile = String(item.mobile || "-").trim();
+                  const jcNo = String(item.jcNo || "-").trim();
+                  const regNo = String(item.regNo || "-").trim();
+                  const branch = String(item.branch || "-").trim();
+                  const followUpAt = String(item.followUpAt || "-").trim();
+                  const notes = String(item.followUpNotes || "").trim();
+                  const avatar = (name && name !== "-" ? name[0] : "P").toUpperCase();
+                  const title = [name, mobile, jcNo, regNo, branch, followUpAt, notes].filter(Boolean).join(" | ");
+                  return (
+                    <List.Item style={{ paddingInline: 0, paddingBlock: 6 }}>
                       <div
                         style={{
-                          flex: 1,
-                          minWidth: 0,
-                          whiteSpace: "normal",
-                          overflow: "visible",
-                          wordBreak: "break-word",
-                          fontWeight: 600,
-                          fontSize: 16,
-                          lineHeight: 1.4
+                          width: "100%",
+                          display: "grid",
+                          gridTemplateColumns: "1fr auto",
+                          alignItems: "start",
+                          gap: 10,
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          border: "1px solid #dbe6ff",
+                          background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
                         }}
-                        title={`${item.name || "-"} | ${item.mobile || "-"} | ${item.jcNo || "-"} | ${item.regNo || "-"} | ${item.branch || "-"}${item.followUpAt ? ` | ${item.followUpAt}` : ""}${item.followUpNotes ? ` | ${item.followUpNotes}` : ""}`}
+                        title={title}
                       >
-                        {(item.name || "-")} | {(item.mobile || "-")} | {(item.jcNo || "-")} | {(item.regNo || "-")} | {(item.branch || "-")}{item.followUpAt ? ` | ${item.followUpAt}` : ""}{item.followUpNotes ? ` | ${item.followUpNotes}` : ""}
+                        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div
+                              style={{
+                                width: 30,
+                                height: 30,
+                                borderRadius: "50%",
+                                background: "#2f6de1",
+                                color: "#fff",
+                                fontWeight: 700,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: 14,
+                              }}
+                            >
+                              {avatar}
+                            </div>
+                            <span style={{ fontSize: 16, fontWeight: 800, color: "#0f172a", textTransform: "uppercase" }}>
+                              {name}
+                            </span>
+                          </div>
+
+                          <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.35, whiteSpace: "normal", wordBreak: "break-word" }}>
+                            <b>{mobile}</b> | {jcNo} | {regNo}
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span
+                              style={{
+                                padding: "1px 8px",
+                                borderRadius: 999,
+                                background: "#eef3ff",
+                                border: "1px solid #d2dcf5",
+                                color: "#2b4f92",
+                                fontWeight: 700,
+                                fontSize: 12,
+                                textTransform: "uppercase",
+                              }}
+                            >
+                              {branch}
+                            </span>
+                            <span
+                              style={{
+                                padding: "1px 8px",
+                                borderRadius: 999,
+                                background: "#f1f5fb",
+                                border: "1px solid #d7deec",
+                                color: "#41526d",
+                                fontWeight: 600,
+                                fontSize: 12,
+                              }}
+                            >
+                              FU: {followUpAt}
+                            </span>
+                          </div>
+
+                          {notes ? (
+                            <div style={{ fontSize: 12, color: "#5b6472", lineHeight: 1.35 }}>
+                              {notes}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <Button
+                          size="small"
+                          type="primary"
+                          onClick={() => {
+                            const query = item.mobile || item.jcNo;
+                            const mode = item.mobile ? "mobile" : "jc";
+                            if (!query) return;
+                            setPendingAutoSearch({ mode, query, token: Date.now() });
+                            setPendingOpen(false);
+                            setPendingItems((prev) => prev.filter((p) => p.jcNo !== item.jcNo));
+                          }}
+                        >
+                          Post Service
+                        </Button>
                       </div>
-                      <Button
-                        size="small"
-                        type="primary"
-                        onClick={() => {
-                          const query = item.mobile || item.jcNo;
-                          const mode = item.mobile ? "mobile" : "jc";
-                          if (!query) return;
-                          setPendingAutoSearch({ mode, query, token: Date.now() });
-                          setPendingOpen(false);
-                          setPendingItems((prev) => prev.filter((p) => p.jcNo !== item.jcNo));
-                        }}
-                      >
-                        Post Service
-                      </Button>
-                    </div>
-                  </List.Item>
-                )}
+                    </List.Item>
+                  );
+                }}
               />
             ) : (
               <div style={{ color: "#666" }}>No pending job cards.</div>
@@ -2152,8 +2227,8 @@ export default function JobCard({ initialValues = null } = {}) {
                 <Form.Item 
                   label="Customer Name" 
                   name="custName" 
-                  rules={[{ required: true, whitespace: true, message: 'Please enter customer name' }]}
-                  getValueFromEvent={upperFromEvent}
+                  rules={[{ required: true, whitespace: true, message: 'Please enter customer name' }, customerNameRule]}
+                  getValueFromEvent={customerNameFromEvent}
                 >
                   <Input placeholder="e.g., RAHUL SHARMA" style={{ textTransform: 'uppercase' }} />
                 </Form.Item>

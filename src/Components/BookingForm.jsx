@@ -115,6 +115,22 @@ const phoneRule = [
   { pattern: /^[6-9]\d{9}$/, message: "Enter a valid 10-digit Indian mobile number" },
 ];
 
+const sanitizeCustomerName = (value) =>
+  String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trimStart();
+
+const customerNameRule = {
+  validator: async (_, value) => {
+    const v = String(value || "").trim();
+    if (!v) return Promise.resolve();
+    if (v.startsWith("=")) throw new Error("Name cannot start with =");
+    if (/[^A-Z\s]/.test(v)) throw new Error("Name can contain only letters and spaces");
+  },
+};
+
 // CSV published from Google Sheets (same as in Quotation.jsx)
 const SHEET_CSV_URL =
   import.meta.env.VITE_VEHICLE_SHEET_CSV_URL ||
@@ -1627,10 +1643,10 @@ export default function BookingForm({
           <Form.Item
             label="Customer Name"
             name="customerName"
-            rules={[{ required: true, message: "Please enter customer name" }]}
+            rules={[{ required: true, message: "Please enter customer name" }, customerNameRule]}
             getValueFromEvent={(e) => {
               const v = e?.target?.value ?? e;
-              return typeof v === "string" ? v.toUpperCase() : v;
+              return typeof v === "string" ? sanitizeCustomerName(v) : v;
             }}
           >
             <Input

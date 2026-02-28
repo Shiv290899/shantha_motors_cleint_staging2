@@ -36,6 +36,21 @@ const HEAD = {
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj[k] ?? "").find((v) => v !== "") || "").trim();
 
+const SHEET_ERROR_TOKENS = new Set([
+  "#ERROR!",
+  "#N/A",
+  "#VALUE!",
+  "#REF!",
+  "#NAME?",
+  "#DIV/0!",
+]);
+
+const cleanSheetValue = (value) => {
+  const s = String(value ?? "").trim();
+  if (!s) return "";
+  return SHEET_ERROR_TOKENS.has(s.toUpperCase()) ? "" : s;
+};
+
 export default function Bookings() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -179,12 +194,20 @@ export default function Bookings() {
     const remarkLevelRaw = (payload?.remark?.level || o.RemarkLevel || o.remarkLevel || '').toString();
     const remarkTextRaw = payload?.remark?.text || o.RemarkText || o.remarkText || '';
     const remarkLevelNorm = String(remarkLevelRaw || '').toLowerCase();
+    const nameFromSheet = cleanSheetValue(pick(o, HEAD.name));
+    const nameFromPayload = cleanSheetValue(
+      payload?.customerName ||
+      payload?.name ||
+      payload?.formValues?.custName ||
+      payload?.formValues?.name ||
+      ''
+    );
     return {
       key: idx,
       ts: pick(o, HEAD.ts),
       tsMs: parseTsMs(pick(o, HEAD.ts)),
       bookingId: pick(o, HEAD.bookingId),
-      name: pick(o, HEAD.name),
+      name: nameFromSheet || nameFromPayload,
       mobile: pick(o, HEAD.mobile),
       company: pick(o, HEAD.company),
       model: pick(o, HEAD.model),
