@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Card, Col, DatePicker, Row, Select, Space, Typography, Table, Button, message, Grid, Spin, Tag, Divider, Checkbox } from "antd";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Card, Col, DatePicker, Row, Select, Space, Typography, Table, Button, message, Grid, Tag, Divider, Checkbox } from "antd";
 import dayjs from "dayjs";
 import { saveBookingViaWebhook, saveJobcardViaWebhook } from "../../apiCalls/forms";
 import {
@@ -25,17 +25,32 @@ const DEFAULT_QUOT_GAS_URL =
 const DEFAULT_JOBCARD_GAS_URL =
   "https://script.google.com/macros/s/AKfycbxwuwETUUiAoFyksSoEOHVimCtlIZYb6JTQ7yJ8-vkwth9xYwEOlMA8ktiE45UQ6VA3Lg/exec";
 
-const HEAD_BOOKING = { ts: ["Submitted At", "Timestamp", "Time", "Date"], branch: ["Branch"] };
-const HEAD_QUOT = { ts: ["Timestamp", "Time", "Date"], branch: ["Branch"], executive: ["Executive"], payload: ["Payload"] };
+const HEAD_BOOKING = { ts: ["Submitted At", "Timestamp", "Time", "Date"], branch: ["Branch", "Branch_Name"] };
+const HEAD_QUOT = {
+  ts: ["Timestamp", "Submitted At", "Time", "Date"],
+  branch: ["Branch", "Branch_Name"],
+  executive: ["Executive", "Executive_Name", "Executive Name", "ExecutiveName", "Executive_Mame"],
+  payload: ["Payload"],
+};
 const HEAD_JC = {
   ts: ["Timestamp", "Time", "Date"],
-  branch: ["Branch"],
-  executive: ["Executive"],
+  branch: ["Branch", "Branch_Name"],
+  executive: ["Executive", "Executive_Name", "Executive Name", "ExecutiveName"],
   payload: ["Payload"],
 };
 
 const pick = (obj, aliases) => String(aliases.map((k) => obj?.[k] ?? "").find((v) => v !== "") || "").trim();
 const normalizeKey = (v) => String(v || "").trim().toLowerCase();
+const extractListRows = (js) => (Array.isArray(js?.data) ? js.data : (Array.isArray(js?.rows) ? js.rows : []));
+const extractTotalRows = (js) => {
+  const direct = Number(js?.total);
+  if (Number.isFinite(direct) && direct >= 0) return direct;
+  const nested = Number(js?.data?.total);
+  if (Number.isFinite(nested) && nested >= 0) return nested;
+  const count = Number(js?.count);
+  if (Number.isFinite(count) && count >= 0) return count;
+  return null;
+};
 function parseTsMs(v) {
   if (!v) return null;
   if (v instanceof Date) return v.getTime();
@@ -85,10 +100,12 @@ export default function Analytics() {
   const [sourceFilter, setSourceFilter] = useState(["bookings", "quotations", "jobcards"]);
   const [groupBy, setGroupBy] = useState("day"); // day | week | month
   const [loading, setLoading] = useState(false);
+  const [sourceLoading, setSourceLoading] = useState({ bookings: false, quotations: false, jobcards: false });
   const [bookings, setBookings] = useState([]);
   const [quotations, setQuotations] = useState([]);
   const [jobcards, setJobcards] = useState([]);
   const [lastLoadedAt, setLastLoadedAt] = useState(null);
+  const activeRefreshRef = useRef(0);
 
   const BOOKING_GAS_URL = import.meta.env.VITE_BOOKING_GAS_URL || DEFAULT_BOOKING_GAS_URL;
   const BOOKING_SECRET = import.meta.env.VITE_BOOKING_GAS_SECRET || "";
@@ -97,25 +114,47 @@ export default function Analytics() {
   const JOBCARD_GAS_URL = import.meta.env.VITE_JOBCARD_GAS_URL || DEFAULT_JOBCARD_GAS_URL;
   const JOBCARD_SECRET = import.meta.env.VITE_JOBCARD_GAS_SECRET || "";
 
+  const fetchListOnce = async ({ webhookUrl, secret, proxy, method = "GET" }) => {
+    const PAGE_SIZE = 10000;
+    const makePayload = (page) => (
+      secret
+        ? { action: "list", page, pageSize: PAGE_SIZE, lite: 1, secret }
+        : { action: "list", page, pageSize: PAGE_SIZE, lite: 1 }
+    );
+    const callPage = async (page) => {
+      const payload = makePayload(page);
+      const resp = await proxy({ webhookUrl, method, payload });
+      return resp?.data || resp;
+    };
+
+    const first = await callPage(1);
+    let rows = extractListRows(first);
+    const total = extractTotalRows(first);
+    if (total !== null && rows.length >= total) return rows;
+    if (total === null || rows.length === 0 || rows.length >= PAGE_SIZE) return rows;
+
+    // Safety fallback for environments still returning only first page (often 100).
+    const all = [...rows];
+    let page = 2;
+    while (all.length < total && page <= 200) {
+      const js = await callPage(page);
+      const pageRows = extractListRows(js);
+      if (!pageRows.length) break;
+      all.push(...pageRows);
+      page += 1;
+    }
+    rows = all;
+    return rows;
+  };
+
   const fetchBookings = async () => {
     if (!BOOKING_GAS_URL) return [];
-    const pageSize = 5000;
-    const all = [];
-    let page = 1;
-    for (;;) {
-      const payload = BOOKING_SECRET
-        ? { action: "list", page, pageSize, secret: BOOKING_SECRET }
-        : { action: "list", page, pageSize };
-      const resp = await saveBookingViaWebhook({ webhookUrl: BOOKING_GAS_URL, method: "GET", payload });
-      const js = resp?.data || resp;
-      const dataArr = Array.isArray(js?.data) ? js.data : [];
-      all.push(...dataArr);
-      const total = typeof js?.total === "number" ? js.total : null;
-      if (total !== null && all.length >= total) break;
-      if (dataArr.length === 0) break;
-      page += 1;
-      if (page > 100) break;
-    }
+    const all = await fetchListOnce({
+      webhookUrl: BOOKING_GAS_URL,
+      secret: BOOKING_SECRET,
+      proxy: saveBookingViaWebhook,
+      method: "GET",
+    });
     return all.map((o) => {
       const obj = o?.values ? o.values : o;
       const ts = pick(obj, HEAD_BOOKING.ts);
@@ -130,39 +169,20 @@ export default function Analytics() {
 
   const fetchQuotations = async () => {
     if (!QUOT_GAS_URL) return [];
-    const pageSize = 5000;
-    const all = [];
-    let page = 1;
-    for (;;) {
-      const payload = QUOT_SECRET
-        ? { action: "list", page, pageSize, secret: QUOT_SECRET }
-        : { action: "list", page, pageSize };
-      const resp = await saveBookingViaWebhook({ webhookUrl: QUOT_GAS_URL, method: "GET", payload });
-      const js = resp?.data || resp;
-      const dataArr = Array.isArray(js?.data) ? js.data : [];
-      all.push(...dataArr);
-      const total = typeof js?.total === "number" ? js.total : null;
-      if (total !== null && all.length >= total) break;
-      if (dataArr.length === 0) break;
-      page += 1;
-      if (page > 100) break;
-    }
+    const all = await fetchListOnce({
+      webhookUrl: QUOT_GAS_URL,
+      secret: QUOT_SECRET,
+      proxy: saveBookingViaWebhook,
+      method: "GET",
+    });
     return all.map((o) => {
       const obj = o?.values ? o.values : o;
-      const payloadRaw = o?.payload || obj?.[HEAD_QUOT.payload[0]] || "";
-      let payloadObj = null;
-      try {
-        payloadObj = typeof payloadRaw === "object" ? payloadRaw : JSON.parse(String(payloadRaw || "{}"));
-      } catch {
-        payloadObj = null;
-      }
-      const fv = payloadObj?.formValues || {};
       const ts = pick(obj, HEAD_QUOT.ts);
       return {
         ts,
         tsMs: parseTsMs(ts),
-        branch: fv.branch || pick(obj, HEAD_QUOT.branch),
-        executive: fv.executive || pick(obj, HEAD_QUOT.executive),
+        branch: pick(obj, HEAD_QUOT.branch),
+        executive: pick(obj, HEAD_QUOT.executive),
         _raw: o,
       };
     });
@@ -170,57 +190,59 @@ export default function Analytics() {
 
   const fetchJobcards = async () => {
     if (!JOBCARD_GAS_URL) return [];
-    const pageSize = 5000;
-    const all = [];
-    let page = 1;
-    for (;;) {
-      const payload = JOBCARD_SECRET
-        ? { action: "list", page, pageSize, secret: JOBCARD_SECRET }
-        : { action: "list", page, pageSize };
-      const resp = await saveJobcardViaWebhook({ webhookUrl: JOBCARD_GAS_URL, method: "GET", payload });
-      const js = resp?.data || resp;
-      const dataArr = Array.isArray(js?.data) ? js.data : [];
-      all.push(...dataArr);
-      const total = typeof js?.total === "number" ? js.total : null;
-      if (total !== null && all.length >= total) break;
-      if (dataArr.length === 0) break;
-      page += 1;
-      if (page > 100) break;
-    }
+    const all = await fetchListOnce({
+      webhookUrl: JOBCARD_GAS_URL,
+      secret: JOBCARD_SECRET,
+      proxy: saveJobcardViaWebhook,
+      method: "GET",
+    });
     return all.map((o) => {
       const obj = o?.values ? o.values : o;
-      const payloadRaw = o?.payload || obj?.[HEAD_JC.payload[0]] || "";
-      let payloadObj = null;
-      try {
-        payloadObj = typeof payloadRaw === "object" ? payloadRaw : JSON.parse(String(payloadRaw || "{}"));
-      } catch {
-        payloadObj = null;
-      }
-      const fv = payloadObj?.formValues || {};
       const ts = pick(obj, HEAD_JC.ts);
       return {
         ts,
         tsMs: parseTsMs(ts),
-        branch: fv.branch || pick(obj, HEAD_JC.branch),
-        executive: fv.executive || pick(obj, HEAD_JC.executive),
+        branch: pick(obj, HEAD_JC.branch),
+        executive: pick(obj, HEAD_JC.executive),
         _raw: o,
       };
     });
   };
 
   const refresh = async () => {
+    const refreshId = Date.now();
+    activeRefreshRef.current = refreshId;
     setLoading(true);
-    try {
-      const [b, q, j] = await Promise.all([fetchBookings(), fetchQuotations(), fetchJobcards()]);
-      setBookings(b);
-      setQuotations(q);
-      setJobcards(j);
-      setLastLoadedAt(Date.now());
-    } catch {
-      message.error("Could not load analytics data. Check Apps Script URLs / access.");
-    } finally {
-      setLoading(false);
-    }
+    setSourceLoading({ bookings: true, quotations: true, jobcards: true });
+
+    const finishSource = (key) => {
+      setSourceLoading((prev) => {
+        const next = { ...prev, [key]: false };
+        if (!next.bookings && !next.quotations && !next.jobcards) {
+          setLoading(false);
+        }
+        return next;
+      });
+    };
+
+    const runSource = async (key, fn, apply) => {
+      try {
+        const data = await fn();
+        if (activeRefreshRef.current !== refreshId) return;
+        apply(data);
+        setLastLoadedAt(Date.now());
+      } catch {
+        if (activeRefreshRef.current === refreshId) {
+          message.error(`Could not load ${key}. Check Apps Script URL / access.`);
+        }
+      } finally {
+        if (activeRefreshRef.current === refreshId) finishSource(key);
+      }
+    };
+
+    runSource("bookings", fetchBookings, setBookings);
+    runSource("quotations", fetchQuotations, setQuotations);
+    runSource("jobcards", fetchJobcards, setJobcards);
   };
 
   useEffect(() => {
@@ -543,6 +565,7 @@ export default function Analytics() {
           <Title level={3} style={{ margin: 0 }}>Analytics</Title>
           <Text type="secondary">
             {lastLoadedAt ? `Last refreshed ${dayjs(lastLoadedAt).format("DD-MM-YYYY HH:mm")}` : "Ready"}
+            {loading ? " • Loading…" : ""}
           </Text>
         </Col>
         <Col xs={24} md={12}>
@@ -629,6 +652,11 @@ export default function Analytics() {
       </Row>
 
       <Divider />
+      <Space size={8} style={{ marginBottom: 8 }}>
+        <Tag color={sourceLoading.bookings ? "processing" : "default"}>Bookings {sourceLoading.bookings ? "loading" : "ready"}</Tag>
+        <Tag color={sourceLoading.quotations ? "processing" : "default"}>Quotations {sourceLoading.quotations ? "loading" : "ready"}</Tag>
+        <Tag color={sourceLoading.jobcards ? "processing" : "default"}>Job Cards {sourceLoading.jobcards ? "loading" : "ready"}</Tag>
+      </Space>
 
       <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
         <Col xs={24}>
@@ -665,34 +693,28 @@ export default function Analytics() {
 
         <Col xs={24} lg={12}>
           <Card title="Branch-level Activity" bodyStyle={{ padding: 12 }}>
-            {loading ? (
-              <Spin />
-            ) : (
-              <>
-                <div style={{ height: 220 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={branchSummary.slice(0, 8)}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="branch" tick={{ fontSize: 11 }} interval={0} angle={-15} height={50} />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="bookings" stackId="a" fill="#06b6d4" name="Bookings" />
-                      <Bar dataKey="quotations" stackId="a" fill="#f59e0b" name="Quotations" />
-                      <Bar dataKey="jobcards" stackId="a" fill="#2563eb" name="Job Cards" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <Table
-                  size="small"
-                  columns={branchColumns}
-                  dataSource={branchSummary}
-                  pagination={false}
-                  locale={{ emptyText: "No data" }}
-                  scroll={{ x: 540 }}
-                  style={{ marginTop: 12 }}
-                />
-              </>
-            )}
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={branchSummary.slice(0, 8)}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="branch" tick={{ fontSize: 11 }} interval={0} angle={-15} height={50} />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="bookings" stackId="a" fill="#06b6d4" name="Bookings" />
+                  <Bar dataKey="quotations" stackId="a" fill="#f59e0b" name="Quotations" />
+                  <Bar dataKey="jobcards" stackId="a" fill="#2563eb" name="Job Cards" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <Table
+              size="small"
+              columns={branchColumns}
+              dataSource={branchSummary}
+              pagination={false}
+              locale={{ emptyText: loading ? "Loading…" : "No data" }}
+              scroll={{ x: 540 }}
+              style={{ marginTop: 12 }}
+            />
           </Card>
         </Col>
 
@@ -706,93 +728,77 @@ export default function Analytics() {
             }
             bodyStyle={{ padding: 12 }}
           >
-            {loading ? (
-              <Spin />
-            ) : (
-              <>
-                <div style={{ height: 220 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={dailySeries}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                      <YAxis />
-                      <Tooltip />
-                      <Legend />
-                      <Line type="monotone" dataKey="bookings" stroke="#06b6d4" name="Bookings" strokeWidth={2} />
-                      <Line type="monotone" dataKey="quotations" stroke="#f59e0b" name="Quotations" strokeWidth={2} />
-                      <Line type="monotone" dataKey="jobcards" stroke="#2563eb" name="Job Cards" strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-                <Table
-                  size="small"
-                  columns={[
-                    { title: "Date", dataIndex: "date", key: "date" },
-                    { title: "Bookings", dataIndex: "bookings", key: "bookings" },
-                    { title: "Quotations", dataIndex: "quotations", key: "quotations" },
-                    { title: "Job Cards", dataIndex: "jobcards", key: "jobcards" },
-                    { title: "Total", dataIndex: "total", key: "total" },
-                  ]}
-                  dataSource={dailySeries.slice(-10).reverse()}
-                  pagination={false}
-                  locale={{ emptyText: "No data" }}
-                  style={{ marginTop: 12 }}
-                />
-              </>
-            )}
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={dailySeries}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="bookings" stroke="#06b6d4" name="Bookings" strokeWidth={2} />
+                  <Line type="monotone" dataKey="quotations" stroke="#f59e0b" name="Quotations" strokeWidth={2} />
+                  <Line type="monotone" dataKey="jobcards" stroke="#2563eb" name="Job Cards" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <Table
+              size="small"
+              columns={[
+                { title: "Date", dataIndex: "date", key: "date" },
+                { title: "Bookings", dataIndex: "bookings", key: "bookings" },
+                { title: "Quotations", dataIndex: "quotations", key: "quotations" },
+                { title: "Job Cards", dataIndex: "jobcards", key: "jobcards" },
+                { title: "Total", dataIndex: "total", key: "total" },
+              ]}
+              dataSource={dailySeries.slice(-10).reverse()}
+              pagination={false}
+              locale={{ emptyText: loading ? "Loading…" : "No data" }}
+              style={{ marginTop: 12 }}
+            />
           </Card>
         </Col>
 
         <Col xs={24} lg={12}>
           <Card title="Performance Tracking" bodyStyle={{ padding: 12 }}>
-            {loading ? (
-              <Spin />
-            ) : (
-              <>
-                <div style={{ height: 220 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={executiveSummary.slice(0, 8)}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="executive" tick={{ fontSize: 11 }} interval={0} angle={-15} height={50} />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="jobcards" stackId="a" fill="#2563eb" name="Job Cards" />
-                      <Bar dataKey="quotations" stackId="a" fill="#f59e0b" name="Quotations" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <Table
-                  size="small"
-                  columns={executiveColumns}
-                  dataSource={executiveSummary.slice(0, 10)}
-                  pagination={false}
-                  locale={{ emptyText: "No data" }}
-                  style={{ marginTop: 12 }}
-                />
-              </>
-            )}
+            <div style={{ height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={executiveSummary.slice(0, 8)}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="executive" tick={{ fontSize: 11 }} interval={0} angle={-15} height={50} />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="jobcards" stackId="a" fill="#2563eb" name="Job Cards" />
+                  <Bar dataKey="quotations" stackId="a" fill="#f59e0b" name="Quotations" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <Table
+              size="small"
+              columns={executiveColumns}
+              dataSource={executiveSummary.slice(0, 10)}
+              pagination={false}
+              locale={{ emptyText: loading ? "Loading…" : "No data" }}
+              style={{ marginTop: 12 }}
+            />
           </Card>
         </Col>
 
         <Col xs={24}>
           <Card title="Branch x Executive Performance" bodyStyle={{ padding: 12 }}>
-            {loading ? (
-              <Spin />
-            ) : (
-              <Table
-                size="small"
-                columns={[
-                  { title: "Branch", dataIndex: "branch", key: "branch" },
-                  { title: "Executive", dataIndex: "executive", key: "executive" },
-                  { title: "Quotations", dataIndex: "quotations", key: "quotations" },
-                  { title: "Job Cards", dataIndex: "jobcards", key: "jobcards" },
-                  { title: "Total", dataIndex: "total", key: "total" },
-                ]}
-                dataSource={branchExecutiveSummary}
-                pagination={{ pageSize: 15, showSizeChanger: true }}
-                locale={{ emptyText: "No data" }}
-              />
-            )}
+            <Table
+              size="small"
+              columns={[
+                { title: "Branch", dataIndex: "branch", key: "branch" },
+                { title: "Executive", dataIndex: "executive", key: "executive" },
+                { title: "Quotations", dataIndex: "quotations", key: "quotations" },
+                { title: "Job Cards", dataIndex: "jobcards", key: "jobcards" },
+                { title: "Total", dataIndex: "total", key: "total" },
+              ]}
+              dataSource={branchExecutiveSummary}
+              pagination={{ pageSize: 50, defaultPageSize: 50, showSizeChanger: true, pageSizeOptions: ["25", "50", "100"] }}
+              locale={{ emptyText: loading ? "Loading…" : "No data" }}
+            />
           </Card>
         </Col>
       </Row>

@@ -26,6 +26,7 @@ const HEAD = {
   executive: ["Executive"],
   jcNo: ["JC No.", "JC No", "Job Card No", "JobCard No", "JCNumber"],
   regNo: ["Vehicle No", "Vehicle_No", "Registration Number", "RegNo", "Reg No"],
+  company: ["Company", "Company Name", "Vehicle Company", "Brand"],
   model: ["Model", "Bike Model"],
   serviceType: ["Service Type", "Service", "Service_Type"],
   vehicleType: ["Vehicle Type", "Type of Vehicle", "Vehicle_Type"],
@@ -127,7 +128,7 @@ export default function Jobcards() {
     let payload = null;
     try { payload = typeof payloadRaw === 'object' ? payloadRaw : JSON.parse(String(payloadRaw || '{}')); } catch { payload = null; }
     const fv = (payload && payload.formValues) ? payload.formValues : {};
-    const company = fv.company || '';
+    const company = fv.company || payload?.company || pick(obj, HEAD.company);
     const model = fv.model || pick(obj, HEAD.model);
     const regNo = fv.regNo || pick(obj, HEAD.regNo);
     const serviceAmount = (() => {
