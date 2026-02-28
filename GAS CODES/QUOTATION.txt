@@ -27,7 +27,8 @@ function doGet(e) {
       const mode = String(p.mode || '').trim().toLowerCase();
 
       const page = Math.max(1, parseInt(p.page || '1', 10) || 1);
-      const pageSize = Math.min(100, Math.max(1, parseInt(p.pageSize || p.pagesize || '10', 10) || 10));
+      // Allow large one-shot list fetches for analytics
+      const pageSize = Math.min(10000, Math.max(0, parseInt(p.pageSize || p.pagesize || '0', 10) || 0));
 
       const q = String(p.q || '').trim();
       const status = String(p.status || '').trim().toLowerCase();
@@ -68,7 +69,8 @@ function doPost(e) {
       const mode = String(body.mode || '').trim().toLowerCase();
 
       const page = Math.max(1, parseInt(body.page || '1', 10) || 1);
-      const pageSize = Math.min(100, Math.max(1, parseInt(body.pageSize || body.pagesize || '10', 10) || 10));
+      // Allow large one-shot list fetches for analytics
+      const pageSize = Math.min(10000, Math.max(0, parseInt(body.pageSize || body.pagesize || '0', 10) || 0));
 
       const q = String(body.q || '').trim();
       const status = String(body.status || '').trim().toLowerCase();
@@ -506,7 +508,7 @@ function updateFollowup_(serialNo, patch) {
 }
 
 // ---------- List Quotations (paginated + filters) ----------
-function list_({ page = 1, pageSize = 10, limit = 0, branch = '', mode = '', q = '', status = '', start = null, end = null } = {}) {
+function list_({ page = 1, pageSize = 0, limit = 0, branch = '', mode = '', q = '', status = '', start = null, end = null } = {}) {
   const sh = getSheet_();
   const last = sh.getLastRow();
   if (last <= 1) return { data: [], total: 0 };
@@ -616,8 +618,10 @@ function list_({ page = 1, pageSize = 10, limit = 0, branch = '', mode = '', q =
 
   // Legacy limit support (if limit > 0 and page not set by caller)
   let dataSlice;
-  if (limit > 0 && (page === 1 && pageSize === 10 && !q && !status && !start && !end)) {
+  if (limit > 0 && (page === 1 && pageSize === 0 && !q && !status && !start && !end)) {
     dataSlice = filtered.slice(0, limit);
+  } else if (pageSize <= 0) {
+    dataSlice = filtered;
   } else {
     const startIdx = (page - 1) * pageSize;
     dataSlice = filtered.slice(startIdx, startIdx + pageSize);

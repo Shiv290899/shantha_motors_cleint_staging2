@@ -977,7 +977,8 @@ function attachDocument_(bookingId, mobileOpt, file, docType, append, tsIso) {
 
 function listBookings_(p) {
   const page = Math.max(1, _toInt(p && p.page, 1));
-  const pageSize = Math.min(100, Math.max(1, _toInt(p && p.pageSize, 10)));
+  // Allow large one-shot list fetches for analytics
+  const pageSize = Math.min(10000, Math.max(1, _toInt(p && p.pageSize, 10)));
 
   const q = _lc((p && p.q) || '');
   const branch = _lc((p && p.branch) || '');
