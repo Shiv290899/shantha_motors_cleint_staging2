@@ -376,7 +376,7 @@ export default function StockUpdate() {
       // For staff-like roles, show current inventory only (latest per chassis)
       const branchParam = isStaffLike ? myBranch : (branchFilter === 'all' ? undefined : branchFilter);
       const fetchAllPages = async (fetchFn) => {
-        const perPage = 5000;
+        const perPage = 10000;
         const maxPages = 40;
         const merged = [];
         const seen = new Set();
@@ -401,7 +401,7 @@ export default function StockUpdate() {
 
           if (added === 0) break;
           if (expectedTotal && merged.length >= expectedTotal) break;
-          if (list.length < 500) break; // server appears to cap each page at 500
+          if (list.length < perPage) break;
           pageNo += 1;
         }
 

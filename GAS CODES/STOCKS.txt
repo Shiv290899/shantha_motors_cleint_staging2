@@ -23,7 +23,7 @@
 const CONFIG = {
   MOVEMENTS_SHEET: 'StockMovements',
   SNAPSHOT_SHEET: 'StockSnapshot',
-  DEFAULT_LIMIT: 500,
+  DEFAULT_LIMIT: 10000,
   // If this Apps Script is NOT bound to a spreadsheet, set this to your sheet ID.
   // Example: '1AbC...xyz' from https://docs.google.com/spreadsheets/d/<ID>/edit
   SPREADSHEET_ID: '',
@@ -197,7 +197,7 @@ function handleDelete(body) {
 function handleList(params) {
   const branch = trim(params.branch || '');
   const mode = lower(params.mode || 'any'); // source|target|any
-  const limit = clampInt(params.limit, CONFIG.DEFAULT_LIMIT);
+  const limit = clampInt(params.limit || params.pageSize || params.pagesize, CONFIG.DEFAULT_LIMIT);
   const page = Math.max(parseInt(params.page || '1', 10), 1);
   const skip = (page - 1) * limit;
   const branchKey = normalizeKey(branch);
@@ -217,7 +217,7 @@ function handleList(params) {
 function handleCurrent(params) {
   const branch = trim(params.branch || '');
   const branchKey = normalizeKey(branch);
-  const limit = clampInt(params.limit, CONFIG.DEFAULT_LIMIT);
+  const limit = clampInt(params.limit || params.pageSize || params.pagesize, CONFIG.DEFAULT_LIMIT);
   const page = Math.max(parseInt(params.page || '1', 10), 1);
   const skip = (page - 1) * limit;
   const rows = readTable(CONFIG.SNAPSHOT_SHEET, SNAPSHOT_HEADERS)
@@ -231,7 +231,7 @@ function handleCurrent(params) {
 function handlePendingTransfers(params) {
   const branch = trim(params.branch || '');
   const branchKey = normalizeKey(branch);
-  const limit = clampInt(params.limit, CONFIG.DEFAULT_LIMIT);
+  const limit = clampInt(params.limit || params.pageSize || params.pagesize, CONFIG.DEFAULT_LIMIT);
   const rows = readTable(CONFIG.MOVEMENTS_SHEET, MOVEMENT_HEADERS)
     .filter((m) => !truthy(m.deleted))
     .filter((m) => lower(m.action) === 'transfer' && lower(m.transferStatus) === 'pending')
