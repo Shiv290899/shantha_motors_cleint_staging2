@@ -81,14 +81,13 @@ const EXECUTIVES = [
 
 const SERVICE_TYPES = ["Free", "Paid", "Minor", "Accidental"]; // checkbox UI (single-select enforced)
 const VEHICLE_TYPES = ["Motorcycle", "Scooter"]; // tabs
-const MECHANIC = ["SONU", "KARTHIK", "MANMOHAN", "MANSUR", "IRSHAD", "DAKSHAT", "SALMAN"];
+const MECHANIC = ["SONU", "KARTHIK", "MANMOHAN", "MANSUR", "IRSHAD", "SALMAN"];
 const MECHANIC_CONTACTS = {
   SONU: "7033558306",
   KARTHIK: "7338386813",
   MANMOHAN: "9956079799",
   MANSUR: "7795047627",
   IRSHAD: "6207176821",
-  DAKSHAT: "7829096931",
   SALMAN: "7892335161",
 };
 

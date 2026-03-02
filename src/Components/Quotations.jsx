@@ -433,15 +433,14 @@ export default function Quotations() {
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
         const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
         const data = dataArr.map((o, idx) => mapRow(o, idx));
-        const filteredRows = data.filter((r)=>r.name || r.mobile || r.serialNo);
         if (!cancelled) {
-          setRows(filteredRows);
-          const nextTotal = typeof js.total === 'number' ? js.total : filteredRows.length;
+          setRows(data);
+          const nextTotal = typeof js.total === 'number' ? js.total : data.length;
           setTotalCount(nextTotal);
           const map = {};
-          filteredRows.forEach(rr => { if (rr.serialNo) map[rr.serialNo] = { level: rr._remarkLevel || undefined, text: rr._remarkText || '' }; });
+          data.forEach(rr => { if (rr.serialNo) map[rr.serialNo] = { level: rr._remarkLevel || undefined, text: rr._remarkText || '' }; });
           setRemarksMap(map);
-          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: filteredRows, total: nextTotal })); } catch {
+          try { localStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), rows: data, total: nextTotal })); } catch {
             //hjsd
           }
         }
@@ -553,7 +552,10 @@ export default function Quotations() {
     return all.map((o, idx) => mapRow(o, idx)).filter((r)=>r.name || r.mobile || r.serialNo);
   }, [USE_SERVER_PAG, gasConfig, branchFilter, dateRange, debouncedQ, mapRow, modeFilter, rows, statusFilter]);
 
-  const filtered = useMemo(() => applyFilters(rows), [applyFilters, rows]);
+  const filtered = useMemo(
+    () => (USE_SERVER_PAG ? rows : applyFilters(rows)),
+    [USE_SERVER_PAG, applyFilters, rows]
+  );
 
   // Branch summary should be based on full filtered dataset, not just visible rows
   useEffect(() => {

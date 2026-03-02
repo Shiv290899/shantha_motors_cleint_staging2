@@ -371,8 +371,7 @@ export default function Jobcards() {
         if (!js || (!js.ok && !js.success)) throw new Error('Invalid response');
         const dataArr = Array.isArray(js.data) ? js.data : (Array.isArray(js.rows) ? js.rows : []);
         const data = dataArr.map((o, idx) => mapJobRow(o, idx));
-        const filteredRows = data.filter((r)=>r.jcNo || r.name || r.mobile);
-        const sortedRows = filteredRows.slice().sort((a, b) => (b.tsMs || 0) - (a.tsMs || 0));
+        const sortedRows = data.slice().sort((a, b) => (b.tsMs || 0) - (a.tsMs || 0));
         if (!cancelled) {
           setRows(sortedRows);
           const nextTotal = typeof js.total === 'number' ? js.total : sortedRows.length;

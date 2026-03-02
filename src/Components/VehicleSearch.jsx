@@ -67,7 +67,6 @@ const MECHANIC_CONTACTS = {
   MANMOHAN: "9956079799",
   MANSUR: "7795047627",
   IRSHAD: "6207176821",
-  DAKSHAT: "7829096931",
   SALMAN: "7892335161",
 };
 
@@ -427,41 +426,6 @@ export default function VehicleSearch() {
     });
     return sorted;
   }, [services]);
-
-  const fetchServiceHistory = async (searchQuery) => {
-    if (!JOBCARD_GAS_URL) return [];
-    const payload = GAS_SECRET
-      ? { action: "getServiceHistory", query: searchQuery, mode, secret: GAS_SECRET }
-      : { action: "getServiceHistory", query: searchQuery, mode };
-    const call = async (method) => {
-      const resp = await saveJobcardViaWebhook({
-        webhookUrl: JOBCARD_GAS_URL,
-        method,
-        payload,
-      });
-      const js = resp?.data || resp;
-      return Array.isArray(js?.rows) ? js.rows : [];
-    };
-    try {
-      let rows = [];
-      try {
-        rows = await call("GET");
-      } catch (e) {
-        console.warn("Service history GET failed", e);
-      }
-      if (!rows.length) {
-        try {
-          rows = await call("POST");
-        } catch (e) {
-          console.warn("Service history POST failed", e);
-        }
-      }
-      return rows;
-    } catch (e) {
-      console.warn("Service history fetch failed", e);
-      return [];
-    }
-  };
 
   const runSearch = async () => {
     const qRaw = String(query || "").trim();
