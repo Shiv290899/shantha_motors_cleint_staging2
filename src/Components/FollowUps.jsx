@@ -1753,6 +1753,31 @@ const extractRawPayloadObject = (...sources) => {
     return null;
   };
 
+  const ODOMETER_KEYS = [
+    "km",
+    "KM",
+    "kms",
+    "KMS",
+    "odometer",
+    "odometerReading",
+    "odometer_reading",
+    "odo",
+    "Odometer Reading",
+    "Odometer",
+  ];
+  const extractKmDigits = (...sources) => {
+    for (const src of sources) {
+      if (!src || typeof src !== "object") continue;
+      for (const key of ODOMETER_KEYS) {
+        const raw = src?.[key];
+        if (raw == null) continue;
+        const digits = String(raw).replace(/\D/g, "");
+        if (digits) return digits;
+      }
+    }
+    return "";
+  };
+
   const buildInvoicePayload = (payload, row) => {
     if (!payload) return null;
     const fv = payload.formValues || payload.values || {};
@@ -1785,7 +1810,16 @@ const extractRawPayloadObject = (...sources) => {
         regNo: row?.regNo || fv.regNo || "",
         custName: row?.name || fv.custName || fv.name || "",
         custMobile: row?.mobile || fv.custMobile || fv.mobile || "",
-        km: row?.km || fv.km || "",
+        km: extractKmDigits(
+          { km: row?.km },
+          fv,
+          payload,
+          row,
+          row?.values,
+          row?.formValues,
+          row?._raw,
+          row?._raw?.values
+        ),
         model: row?.model || fv.model || "",
         colour: fv.colour || row?.colour || "",
         branch: row?.branch || fv.branch || "",
