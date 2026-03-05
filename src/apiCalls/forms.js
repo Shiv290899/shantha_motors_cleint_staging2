@@ -40,7 +40,7 @@ export const saveBookingViaWebhook = async ({ webhookUrl, payload, headers, meth
 
 // Jobcard-specific webhook proxy (separate from booking for clarity)
 export const saveJobcardViaWebhook = async ({ webhookUrl, payload, headers, method }) => {
-  const { data } = await axiosInstance.post("/forms/jobcard/webhook", { webhookUrl, payload, headers, method });
+  const { data } = await axiosInstance.post("/forms/jobcard/webhook", { webhookUrl, payload, headers, method }, { timeout: 60000 });
   return data;
 };
 
