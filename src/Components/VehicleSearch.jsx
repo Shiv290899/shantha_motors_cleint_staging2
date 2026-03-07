@@ -83,13 +83,96 @@ const parseDate = (val) => {
 
 const _pick = (obj = {}, keys = []) =>
   String(keys.map((k) => obj?.[k] ?? "").find((v) => v !== "") || "").trim();
+const hasValue = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+const serviceQualityScore = (s = {}) => {
+  const fields = [
+    s.jcNo,
+    s.regNo,
+    s.custName || s.customerName,
+    s.model || s.company,
+    s.branch,
+    s.mechanic,
+    s.executive,
+    s.paymentMode,
+    s.km,
+    s.amount,
+    s.createdAt,
+    s.serviceType,
+    s.remarks,
+    s.billLink,
+  ];
+  return fields.reduce((n, v) => n + (hasValue(v) ? 1 : 0), 0);
+};
+const isThinServiceRow = (s = {}) => {
+  // Rows echoed from fallback endpoints sometimes carry only KM/amount with no identity fields.
+  const identityFields = [
+    s.jcNo,
+    s.regNo,
+    s.custName || s.customerName,
+    s.model || s.company,
+    s.branch,
+    s.mechanic,
+    s.executive,
+    s.remarks,
+    s.createdAt,
+  ];
+  const identityCount = identityFields.reduce((n, v) => n + (hasValue(v) ? 1 : 0), 0);
+  return identityCount === 0 && (hasValue(s.km) || hasValue(s.amount));
+};
+const amountKmKey = (s = {}) => {
+  const amt = String(s.amount ?? "").trim();
+  const km = String(s.km ?? "").trim();
+  if (!amt || !km) return "";
+  return `amtkm:${amt}|${km}`;
+};
+
+const mergeServiceRows = (a = {}, b = {}) => {
+  const out = { ...a };
+  Object.keys(b).forEach((k) => {
+    if (!hasValue(out[k]) && hasValue(b[k])) out[k] = b[k];
+  });
+  out.raw = { ...(a.raw || {}), ...(b.raw || {}) };
+  return out;
+};
+
+const serviceKeyCandidates = (s = {}) => {
+  const jc = String(s.jcNo || "").trim().toUpperCase();
+  const reg = normalizeReg(s.regNo || "");
+  const mobile = normalizeMobile(s.mobile || "");
+  const serviceNo = Number.isFinite(s.serviceNo) ? String(s.serviceNo) : "";
+  const km = String(s.km || "").trim();
+  const amount = String(s.amount || "").trim();
+  const out = [];
+  if (jc) out.push(`jc:${jc}`);
+  if (reg && serviceNo) out.push(`regsvc:${reg}|${serviceNo}`);
+  if (reg && km) out.push(`regkm:${reg}|${km}`);
+  if (mobile && serviceNo) out.push(`mobsvc:${mobile}|${serviceNo}`);
+  if (serviceNo && km && amount) out.push(`svc:${serviceNo}|${km}|${amount}`);
+  if (km && amount) out.push(`amtkm:${amount}|${km}`);
+  if (reg) out.push(`reg:${reg}`);
+  return out;
+};
 
 const parseBookingRow = (row) => {
   const vTop = row?.values || {};
   const p = row?.payload || row || {};
-  const v = p.vehicle || {};
-  const mobile = normalizeMobile(p.mobileNumber || p.mobile || "");
-  const when = parseDate(p.ts || p.createdAt);
+  const rawPayload = (() => {
+    const raw = p?.rawPayload || row?.rawPayload || vTop?.rawPayload || vTop?.["Raw Payload"];
+    if (!raw) return {};
+    if (typeof raw === "object") return raw;
+    try {
+      const parsed = JSON.parse(String(raw));
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  })();
+  const source = { ...rawPayload, ...p };
+  const v = { ...(rawPayload?.vehicle || {}), ...(p?.vehicle || {}) };
+  const mobile = normalizeMobile(
+    source.mobileNumber || source.mobile || p.mobileNumber || p.mobile || ""
+  );
+  const when = parseDate(source.ts || source.createdAt || source.updatedAt || p.ts || p.createdAt);
   const cleanLink = (val) => {
     const next = String(val || "").trim();
     return next || null;
@@ -153,8 +236,8 @@ const parseBookingRow = (row) => {
     attachments?.[0]?.url ||
     null;
   return {
-    id: p.bookingId || p.serialNo || p.id || "",
-    customerName: p.customerName || p.name || "",
+    id: source.bookingId || source.serialNo || source.id || p.bookingId || p.serialNo || p.id || "",
+    customerName: source.customerName || source.name || p.customerName || p.name || "",
     mobile,
     regNo:
       p.regNo ||
@@ -180,10 +263,38 @@ const parseBookingRow = (row) => {
     vehicle: [v.company, v.model, v.variant].filter(Boolean).join(" "),
     color: v.color || "",
     chassis: v.chassisNo || "",
-    branch: p.branch || "",
-    purchaseMode: p.purchaseMode || p.purchaseType || "",
+    branch: source.branch || p.branch || "",
+    purchaseMode: source.purchaseMode || source.purchaseType || p.purchaseMode || p.purchaseType || "",
+    financier: source.financier || source.nohpFinancier || p.financier || p.nohpFinancier || "",
+    disbursementAmount:
+      source.disbursementAmount ??
+      source["Disbursement Amount"] ??
+      p.disbursementAmount ??
+      "",
+    emiAmount:
+      source.emiAmount ??
+      source["EMI Amount"] ??
+      p.emiAmount ??
+      "",
+    tenure:
+      source.tenure ??
+      source.tenureMonths ??
+      source["Tenure"] ??
+      source["Tenure Months"] ??
+      p.tenure ??
+      "",
+    bookingAmount:
+      source.bookingAmount ??
+      source["Booking Amount"] ??
+      p.bookingAmount ??
+      "",
+    downPayment: source.downPayment ?? source["Down Payment"] ?? p.downPayment ?? "",
+    totalDp: source.totalDp ?? p.totalDp ?? "",
+    balancedDp: source.balancedDp ?? p.balancedDp ?? "",
+    totalVehicleCost: source.totalVehicleCost ?? p.totalVehicleCost ?? "",
+    balancedAmount: source.balancedAmount ?? p.balancedAmount ?? "",
     createdAt: when,
-    raw: p,
+    raw: source,
     billLink,
     invoiceUrl,
     insuranceUrl,
@@ -195,6 +306,7 @@ const parseJobRow = (row) => {
   const root = row || {};
   const p = row?.payload || row?.values || root;
   const fv = p.formValues || p.values || {};
+  const merged = { ...root, ...(row?.values || {}), ...p, ...fv };
   const custName =
     fv.custName ||
     p.custName ||
@@ -261,6 +373,7 @@ const parseJobRow = (row) => {
       p["Payment Mode"] ||
       p.Payment_Mode ||
       fv.paymentMode ||
+      root.paymentMode ||
       "",
     branch: fv.branch || p.branch || "",
     mechanic: fv.mechanic || p.mechanic || "",
@@ -271,11 +384,22 @@ const parseJobRow = (row) => {
       p.remarkText ||
       p["Remark Text"] ||
       fv.remarks ||
+      fv.remarkText ||
       root.remarks ||
       root.Remarks ||
       root.remarkText ||
       root["Remark Text"] ||
       "",
+  
+    obs:
+      _pick(merged, [
+        "obs",
+        "observation",
+        "Observation",
+        "Concern",
+        "concern",
+        "problemDescription",
+      ]) || "",
     km: (() => {
       const raw =
         fv.km ||
@@ -311,7 +435,7 @@ const parseJobRow = (row) => {
     mobile,
     createdAt: parseDate(ts),
     billLink,
-    raw: p,
+    raw: merged,
   };
 };
 
@@ -459,19 +583,50 @@ export default function VehicleSearch() {
     try {
       const searchQuery = mode === "mobile" ? normalizeMobile(q) || q : normalizeReg(q);
       const isActiveSearch = () => activeSearchRef.current === searchId;
-      const dedupeServices = (list = []) => {
+      const dedupeBookings = (list = []) => {
         const seen = new Set();
-        return list.filter((s) => {
+        return list.filter((b) => {
           const key = [
-            String(s.jcNo || "").trim(),
-            String(s.regNo || "").trim(),
-            String(s.mobile || "").trim(),
-            s.createdAt?.valueOf?.() || "",
+            String(b.id || "").trim(),
+            String(b.mobile || "").trim(),
+            String(b.regNo || "").trim(),
+            b.createdAt?.valueOf?.() || "",
           ].join("|");
           if (!key) return true;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
+        });
+      };
+      const dedupeServices = (list = []) => {
+        const keyToIndex = new Map();
+        const out = [];
+        list.forEach((s) => {
+          const candidates = serviceKeyCandidates(s);
+          const hit = candidates.find((k) => keyToIndex.has(k));
+          if (!hit) {
+            const nextIndex = out.length;
+            out.push(s);
+            candidates.forEach((k) => keyToIndex.set(k, nextIndex));
+            return;
+          }
+          const idx = keyToIndex.get(hit);
+          const merged = mergeServiceRows(out[idx], s);
+          const keepIncoming = serviceQualityScore(s) > serviceQualityScore(out[idx]);
+          out[idx] = keepIncoming ? mergeServiceRows(s, out[idx]) : merged;
+          serviceKeyCandidates(out[idx]).forEach((k) => keyToIndex.set(k, idx));
+        });
+        // Drop thin placeholder duplicates when a richer row exists for same KM+Amount.
+        const richAmtKm = new Set(
+          out
+            .filter((row) => !isThinServiceRow(row))
+            .map((row) => amountKmKey(row))
+            .filter(Boolean)
+        );
+        return out.filter((row) => {
+          if (!isThinServiceRow(row)) return true;
+          const k = amountKmKey(row);
+          return !(k && richAmtKm.has(k));
         });
       };
       const fetchBookings = async (payload, method = "GET") => {
@@ -485,7 +640,7 @@ export default function VehicleSearch() {
       };
 
       const bookingPromise = (async () => {
-        let best = [];
+        let aggregate = [];
         if (!BOOKING_GAS_URL) return;
         if (!(mode === "mobile" || isMobileLike(q) || q.toUpperCase().startsWith("BK-") || mode === "vehicle")) return;
         const payload = (() => {
@@ -494,15 +649,13 @@ export default function VehicleSearch() {
           return { action: "search", mode: "mobile", query: normalizeMobile(q) || q };
         })();
         if (BOOKING_SECRET) payload.secret = BOOKING_SECRET;
-        let rendered = false;
         const runBookingCall = async (method) => {
           try {
             const rows = await fetchBookings(payload, method);
             const mapped = rows.map((r) => parseBookingRow(r));
-            if (mapped.length && !rendered && isActiveSearch()) {
-              rendered = true;
-              best = mapped;
-              setBookings(mapped);
+            if (mapped.length && isActiveSearch()) {
+              aggregate = dedupeBookings([...aggregate, ...mapped]);
+              setBookings(aggregate);
             }
             return mapped;
           } catch (e) {
@@ -514,29 +667,25 @@ export default function VehicleSearch() {
           runBookingCall("GET"),
           runBookingCall("POST"),
         ]);
-        if (!best.length) {
-          const merged = results.flatMap((r) =>
-            r.status === "fulfilled" && Array.isArray(r.value) ? r.value : []
-          );
-          if (merged.length && isActiveSearch()) {
-            best = merged;
-            setBookings(merged);
-          }
+        const merged = dedupeBookings(results.flatMap((r) =>
+          r.status === "fulfilled" && Array.isArray(r.value) ? r.value : []
+        ));
+        if (merged.length && isActiveSearch()) {
+          aggregate = dedupeBookings([...aggregate, ...merged]);
+          setBookings(aggregate);
         }
-        return best;
+        return aggregate;
       })();
 
       const servicesPromise = (async () => {
-        let best = [];
+        let aggregate = [];
         if (!JOBCARD_GAS_URL) return;
         const jobModes = mode === "vehicle" && !isMobileLike(q) ? ["reg", "vehicle"] : ["mobile", "reg"];
-        let rendered = false;
         const maybeRenderServices = (rows = []) => {
           const mapped = dedupeServices(rows.map((r) => parseJobRow(r)));
-          if (mapped.length && !rendered && isActiveSearch()) {
-            rendered = true;
-            best = mapped;
-            setServices(mapped);
+          if (mapped.length && isActiveSearch()) {
+            aggregate = dedupeServices([...aggregate, ...mapped]);
+            setServices(aggregate);
           }
           return mapped;
         };
@@ -576,14 +725,15 @@ export default function VehicleSearch() {
         });
 
         const settled = await Promise.allSettled(serviceCalls);
-        if (!best.length) {
-          const merged = settled.flatMap((r) =>
-            r.status === "fulfilled" && Array.isArray(r.value?.rows) ? r.value.rows : []
-          );
-          const mapped = maybeRenderServices(merged);
-          if (mapped.length) best = mapped;
+        const merged = settled.flatMap((r) =>
+          r.status === "fulfilled" && Array.isArray(r.value?.rows) ? r.value.rows : []
+        );
+        maybeRenderServices(merged);
+        if (aggregate.length) {
+          aggregate = dedupeServices(aggregate);
+          if (isActiveSearch()) setServices(aggregate);
         }
-        return best;
+        return aggregate;
       })();
 
       const [bookingSettled, servicesSettled] = await Promise.allSettled([bookingPromise, servicesPromise]);
@@ -622,26 +772,31 @@ export default function VehicleSearch() {
     }
   };
 
-  const bookingMeta = mainBooking
-    ? [
-        { label: "Customer", value: mainBooking.customerName || "-" },
-        { label: "Mobile", value: mainBooking.mobile || "-" },
-        { label: "Vehicle", value: mainBooking.vehicle || "-" },
-        { label: "Color", value: mainBooking.color || "-" },
-        { label: "Chassis", value: mainBooking.chassis || "-" },
-        { label: "Branch", value: mainBooking.branch || "-" },
-        {
-          label: "Mode",
-          value: (mainBooking.purchaseMode || "").toUpperCase() || "-",
-        },
-        {
-          label: "Created",
-          value: mainBooking.createdAt
-            ? mainBooking.createdAt.format("DD-MM-YYYY HH:mm")
-            : "-",
-        },
-      ]
-    : [];
+  const bookingMeta = useMemo(() => {
+    if (!mainBooking) return [];
+    const mode = String(mainBooking.purchaseMode || "").toLowerCase();
+    const isFinanceMode = ["loan", "nohp", "hp", "finance"].includes(mode);
+    const rows = [
+      { label: "Customer", value: mainBooking.customerName || "-" },
+      { label: "Mobile", value: mainBooking.mobile || "-" },
+      { label: "Vehicle", value: mainBooking.vehicle || "-" },
+      { label: "Color", value: mainBooking.color || "-" },
+      { label: "Chassis", value: mainBooking.chassis || "-" },
+      { label: "Branch", value: mainBooking.branch || "-" },
+      { label: "Mode", value: (mainBooking.purchaseMode || "").toUpperCase() || "-" },
+      ...(isFinanceMode
+        ? [
+            { label: "EMI Amount", value: hasValue(mainBooking.emiAmount) ? String(mainBooking.emiAmount) : "-" },
+            { label: "EMI Tenure", value: hasValue(mainBooking.tenure) ? String(mainBooking.tenure) : "-" },
+          ]
+        : []),
+      {
+        label: "Created",
+        value: mainBooking.createdAt ? mainBooking.createdAt.format("DD-MM-YYYY HH:mm") : "-",
+      },
+    ];
+    return rows;
+  }, [mainBooking]);
 
   const newJobcardQuery = useMemo(() => {
     const latestService =
@@ -1068,6 +1223,16 @@ export default function VehicleSearch() {
                 dataSource={serviceTimeline}
                 renderItem={(s, idx) => (
                   <List.Item>
+                    {(() => {
+                      const serviceMeta = [
+                        { label: "Reg No", value: s.regNo || "-" },
+                        { label: "Payment Mode", value: (s.paymentMode || "-").toUpperCase() },
+                        { label: "Amount", value: hasValue(s.amount) ? String(s.amount) : "-" },
+                        { label: "Executive", value: s.executive || "-" },
+                        { label: "Observation", value: s.obs || "-" },
+                        { label: "Remarks", value: s.remarks || "-" },
+                      ].filter((row) => hasValue(row.value) && row.value !== "-");
+                      return (
                     <div
                       style={{
                         width: "100%",
@@ -1127,12 +1292,19 @@ export default function VehicleSearch() {
                           </Button>
                         ) : null}
                       </div>
-                      {s.remarks ? (
-                        <div style={{ marginTop: 6 }}>
-                          <Text strong>Remarks:</Text> <Text type="secondary">{s.remarks}</Text>
+                      {serviceMeta.length ? (
+                        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 6 }}>
+                          {serviceMeta.map((meta) => (
+                            <div key={`${s.jcNo || idx}-${meta.label}`} style={{ fontSize: 13 }}>
+                              <Text strong>{meta.label}:</Text>{" "}
+                              <Text type="secondary">{meta.value}</Text>
+                            </div>
+                          ))}
                         </div>
                       ) : null}
                     </div>
+                      );
+                    })()}
                   </List.Item>
                 )}
               />

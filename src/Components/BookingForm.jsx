@@ -62,6 +62,32 @@ const FINANCIERS = [
 
 // Helpers for booking payment splits
 const amt = (v) => Number(String(v ?? 0).replace(/[₹,\s]/g, "")) || 0;
+const MIN_PAYMENT_PARTS = 3;
+const MAX_PAYMENT_PARTS = 10;
+const paymentPartRange = (count = MIN_PAYMENT_PARTS) =>
+  Array.from({ length: Math.max(MIN_PAYMENT_PARTS, Number(count) || MIN_PAYMENT_PARTS) }, (_, i) => i + 1);
+const detectPaymentPartCount = (src, fallback = MIN_PAYMENT_PARTS) => {
+  const pick = (key) => {
+    try {
+      return typeof src === "function" ? src(key) : src?.[key];
+    } catch {
+      return undefined;
+    }
+  };
+  let maxPart = Math.max(MIN_PAYMENT_PARTS, Number(fallback) || MIN_PAYMENT_PARTS);
+  for (let idx = 1; idx <= MAX_PAYMENT_PARTS; idx++) {
+    const hasAmt =
+      amt(pick(`bookingAmount${idx}Cash`)) > 0 ||
+      amt(pick(`bookingAmount${idx}Online`)) > 0 ||
+      amt(pick(`bookingAmount${idx}`)) > 0;
+    const hasRef = String(pick(`paymentReference${idx}`) || "").trim() !== "";
+    if (hasAmt || hasRef) maxPart = idx;
+  }
+  const fromPayments = Array.isArray(pick("payments"))
+    ? pick("payments").reduce((mx, p) => Math.max(mx, Number(p?.part) || 0), 0)
+    : 0;
+  return Math.min(MAX_PAYMENT_PARTS, Math.max(maxPart, fromPayments || 0, MIN_PAYMENT_PARTS));
+};
 const derivePaymentPart = (src, idx) => {
   const pick = (key) => {
     try {
@@ -108,7 +134,8 @@ const derivePaymentPart = (src, idx) => {
     reference: online > 0 ? ref || undefined : undefined,
   };
 };
-const derivePaymentParts = (src) => [1, 2, 3].map((idx) => derivePaymentPart(src, idx));
+const derivePaymentParts = (src, count = MIN_PAYMENT_PARTS) =>
+  paymentPartRange(count).map((idx) => derivePaymentPart(src, idx));
 
 const phoneRule = [
   { required: true, message: "Mobile number is required" },
@@ -308,33 +335,27 @@ export default function BookingForm({
 
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [paymentPartsCount, setPaymentPartsCount] = useState(MIN_PAYMENT_PARTS);
+  const paymentPartIndices = useMemo(
+    () => paymentPartRange(paymentPartsCount),
+    [paymentPartsCount]
+  );
+  const formValuesWatch = Form.useWatch([], form) || {};
   const selectedVariant = Form.useWatch("variant", form);
   const selectedColor = Form.useWatch("color", form);
   const purchaseType = Form.useWatch("purchaseType", form);
   const addressProofMode = Form.useWatch("addressProofMode", form);
-  const paymentMode = Form.useWatch("paymentMode", form); // legacy, unused
-  const bookingAmount1Cash = Form.useWatch("bookingAmount1Cash", form);
-  const bookingAmount2Cash = Form.useWatch("bookingAmount2Cash", form);
-  const bookingAmount3Cash = Form.useWatch("bookingAmount3Cash", form);
-  const bookingAmount1Online = Form.useWatch("bookingAmount1Online", form);
-  const bookingAmount2Online = Form.useWatch("bookingAmount2Online", form);
-  const bookingAmount3Online = Form.useWatch("bookingAmount3Online", form);
-  const bookingAmount1 = Form.useWatch("bookingAmount1", form);
-  const bookingAmount2 = Form.useWatch("bookingAmount2", form);
-  const bookingAmount3 = Form.useWatch("bookingAmount3", form);
-  const paymentMode1 = Form.useWatch("paymentMode1", form);
-  const paymentMode2 = Form.useWatch("paymentMode2", form);
-  const paymentMode3 = Form.useWatch("paymentMode3", form);
-  const paymentReference1 = Form.useWatch("paymentReference1", form);
-  const paymentReference2 = Form.useWatch("paymentReference2", form);
-  const paymentReference3 = Form.useWatch("paymentReference3", form);
   const chassisNo = Form.useWatch("chassisNo", form);
 
   const handleBookingApplied = useCallback(
-    ({ bookingId, mobile, vehicle }) => {
+    ({ bookingId, mobile, vehicle, paymentCount }) => {
       setPaymentsOnlyMode(true);
       setEditRef({ bookingId: bookingId || null, mobile: mobile || null });
       setHasFetchedBookingFlag(true);
+      const nextPartCount = paymentCount || detectPaymentPartCount(form.getFieldsValue(true), MIN_PAYMENT_PARTS);
+      setPaymentPartsCount(
+        Math.max(MIN_PAYMENT_PARTS, Math.min(MAX_PAYMENT_PARTS, Number(nextPartCount) || MIN_PAYMENT_PARTS))
+      );
       const availability = String(vehicle?.availability || "").toLowerCase();
       const chassisVal = vehicle?.chassisNo || form.getFieldValue("chassisNo");
       const isAllot =
@@ -345,16 +366,6 @@ export default function BookingForm({
     },
     [form]
   );
-
-  // Live-print watchers
-  const wCustomerName = Form.useWatch("customerName", form);
-  const wMobileNumber = Form.useWatch("mobileNumber", form);
-  const wAddress = Form.useWatch("address", form);
-  const wExecutive = Form.useWatch("executive", form);
-  const wBranch = Form.useWatch("branch", form);
-  const wRtoOffice = Form.useWatch("rtoOffice", form);
-  const wFinancier = Form.useWatch("financier", form);
-  const wNohpFinancier = Form.useWatch("nohpFinancier", form);
 
   // Backend override dropdowns (executive/branch)
   const branchSelectOptions = useMemo(() => {
@@ -388,35 +399,9 @@ export default function BookingForm({
 
   // Total booking amount
   const bookingTotal = useMemo(() => {
-    const parts = derivePaymentParts({
-      bookingAmount1Cash,
-      bookingAmount2Cash,
-      bookingAmount3Cash,
-      bookingAmount1Online,
-      bookingAmount2Online,
-      bookingAmount3Online,
-      bookingAmount1,
-      bookingAmount2,
-      bookingAmount3,
-      paymentMode1,
-      paymentMode2,
-      paymentMode3,
-    });
+    const parts = derivePaymentParts((key) => formValuesWatch[key], paymentPartsCount);
     return parts.reduce((sum, p) => sum + p.total, 0);
-  }, [
-    bookingAmount1Cash,
-    bookingAmount2Cash,
-    bookingAmount3Cash,
-    bookingAmount1Online,
-    bookingAmount2Online,
-    bookingAmount3Online,
-    bookingAmount1,
-    bookingAmount2,
-    bookingAmount3,
-    paymentMode1,
-    paymentMode2,
-    paymentMode3,
-  ]);
+  }, [formValuesWatch, paymentPartsCount]);
 
   const downPaymentWatch = Form.useWatch("downPayment", form);
   const extraFittingAmountWatch = Form.useWatch("extraFittingAmount", form);
@@ -583,7 +568,8 @@ export default function BookingForm({
   // Prepare booking values for the printable sheet
   const valsForPrint = useMemo(() => {
     const fv = form.getFieldsValue(true);
-    const split = derivePaymentParts((k) => fv[k]);
+    const splitCount = detectPaymentPartCount(fv, paymentPartsCount);
+    const split = derivePaymentParts((k) => fv[k], splitCount);
     const payments = [];
     split.forEach((p) => {
       if (p.cash > 0) payments.push({ part: p.part, amount: p.cash, mode: "cash" });
@@ -621,31 +607,8 @@ export default function BookingForm({
     branchDefault,
     executiveDefault,
     chassisStatus,
-    purchaseType,
-    paymentMode,
-    addressProofMode,
-    selectedCompany,
-    selectedModel,
-    selectedVariant,
-    selectedColor,
-    chassisNo,
-    bookingAmount1Cash,
-    bookingAmount2Cash,
-    bookingAmount3Cash,
-    bookingAmount1Online,
-    bookingAmount2Online,
-    bookingAmount3Online,
-    paymentReference1,
-    paymentReference2,
-    paymentReference3,
-    wCustomerName,
-    wMobileNumber,
-    wAddress,
-    wExecutive,
-    wBranch,
-    wRtoOffice,
-    wFinancier,
-    wNohpFinancier,
+    paymentPartsCount,
+    formValuesWatch,
     addressProofFiles,
     bookingTotal,
   ]);
@@ -814,7 +777,7 @@ export default function BookingForm({
   // Clear payment references when the corresponding mode is not online
   useEffect(() => {
     const patch = {};
-    const parts = derivePaymentParts((key) => form.getFieldValue(key));
+    const parts = derivePaymentParts((key) => form.getFieldValue(key), paymentPartsCount);
     parts.forEach((p) => {
       const refKey = `paymentReference${p.part}`;
       if (p.online <= 0 && form.getFieldValue(refKey)) {
@@ -822,18 +785,7 @@ export default function BookingForm({
       }
     });
     if (Object.keys(patch).length) form.setFieldsValue(patch);
-  }, [
-    bookingAmount1Online,
-    bookingAmount2Online,
-    bookingAmount3Online,
-    bookingAmount1,
-    bookingAmount2,
-    bookingAmount3,
-    paymentMode1,
-    paymentMode2,
-    paymentMode3,
-    form,
-  ]);
+  }, [formValuesWatch, paymentPartsCount, form]);
 
   // Apply external initial values (e.g., from Stocks)
   useEffect(() => {
@@ -842,6 +794,7 @@ export default function BookingForm({
         const patch = { ...initialValues };
         if (patch.model && !patch.bikeModel) patch.bikeModel = patch.model;
         if (patch.chassis && !patch.chassisNo) patch.chassisNo = patch.chassis;
+        setPaymentPartsCount(detectPaymentPartCount(patch, MIN_PAYMENT_PARTS));
         form.setFieldsValue(patch);
         if (patch.company) setSelectedCompany(patch.company);
         if (patch.bikeModel) setSelectedModel(patch.bikeModel);
@@ -1192,7 +1145,10 @@ export default function BookingForm({
         effAff -
         (Number(values.discountAmount) || 0);
 
-      const parts = derivePaymentParts((key) => values[key]);
+      const parts = derivePaymentParts(
+        (key) => values[key],
+        detectPaymentPartCount(values, paymentPartsCount)
+      );
       const bookingSum = parts.reduce((s, p) => s + p.total, 0);
 
       if (bookingSum <= 0) {
@@ -1229,6 +1185,17 @@ export default function BookingForm({
         mode: p.mode ? p.mode.toUpperCase() : undefined,
         reference: p.reference,
       }));
+      const dynamicLegacyFields = {};
+      const dynamicSplitFields = {};
+      legacyPayments.forEach((p, idx) => {
+        const partNo = idx + 1;
+        dynamicLegacyFields[`bookingAmount${partNo}`] = p.amount;
+        dynamicLegacyFields[`paymentMode${partNo}`] = p.mode;
+        dynamicLegacyFields[`paymentReference${partNo}`] =
+          (parts[idx]?.online || 0) > 0 ? p.reference || undefined : undefined;
+        dynamicSplitFields[`bookingAmount${partNo}Cash`] = values[`bookingAmount${partNo}Cash`] ?? undefined;
+        dynamicSplitFields[`bookingAmount${partNo}Online`] = values[`bookingAmount${partNo}Online`] ?? undefined;
+      });
 
       // Prepare raw payload snapshot
       const rawPayloadObj = {
@@ -1250,25 +1217,9 @@ export default function BookingForm({
         addressProofTypes: values.addressProofTypes || [],
         address: values.address || undefined,
         bookingAmount: bookingSum || undefined,
-        bookingAmount1: legacyPayments[0]?.amount,
-        bookingAmount2: legacyPayments[1]?.amount,
-        bookingAmount3: legacyPayments[2]?.amount,
-        paymentMode1: legacyPayments[0]?.mode,
-        paymentMode2: legacyPayments[1]?.mode,
-        paymentMode3: legacyPayments[2]?.mode,
-        paymentReference1:
-          (parts[0]?.online || 0) > 0 ? parts[0]?.reference || undefined : undefined,
-        paymentReference2:
-          (parts[1]?.online || 0) > 0 ? parts[1]?.reference || undefined : undefined,
-        paymentReference3:
-          (parts[2]?.online || 0) > 0 ? parts[2]?.reference || undefined : undefined,
-        // Split amounts per partial (for easier reading in Sheet)
-        bookingAmount1Cash: values.bookingAmount1Cash ?? undefined,
-        bookingAmount1Online: values.bookingAmount1Online ?? undefined,
-        bookingAmount2Cash: values.bookingAmount2Cash ?? undefined,
-        bookingAmount2Online: values.bookingAmount2Online ?? undefined,
-        bookingAmount3Cash: values.bookingAmount3Cash ?? undefined,
-        bookingAmount3Online: values.bookingAmount3Online ?? undefined,
+        paymentPartsCount: parts.length,
+        ...dynamicLegacyFields,
+        ...dynamicSplitFields,
         // Loan / No HP
         disbursementAmount:
           values.purchaseType === "loan" ||
@@ -1382,25 +1333,10 @@ export default function BookingForm({
         onlineCollected,
         totalCollected,
         bookingAmount: bookingSum || undefined,
-        // Legacy-compatible fields for older GAS columns
-        bookingAmount1: legacyPayments[0]?.amount,
-        bookingAmount2: legacyPayments[1]?.amount,
-        bookingAmount3: legacyPayments[2]?.amount,
-        paymentMode1: legacyPayments[0]?.mode,
-        paymentMode2: legacyPayments[1]?.mode,
-        paymentMode3: legacyPayments[2]?.mode,
-        paymentReference1:
-          (parts[0]?.online || 0) > 0 ? parts[0]?.reference || undefined : undefined,
-        paymentReference2:
-          (parts[1]?.online || 0) > 0 ? parts[1]?.reference || undefined : undefined,
-        paymentReference3:
-          (parts[2]?.online || 0) > 0 ? parts[2]?.reference || undefined : undefined,
-        bookingAmount1Cash: values.bookingAmount1Cash ?? undefined,
-        bookingAmount1Online: values.bookingAmount1Online ?? undefined,
-        bookingAmount2Cash: values.bookingAmount2Cash ?? undefined,
-        bookingAmount2Online: values.bookingAmount2Online ?? undefined,
-        bookingAmount3Cash: values.bookingAmount3Cash ?? undefined,
-        bookingAmount3Online: values.bookingAmount3Online ?? undefined,
+        paymentPartsCount: parts.length,
+        // Legacy-compatible fields for older GAS columns and dynamic add-on parts
+        ...dynamicLegacyFields,
+        ...dynamicSplitFields,
         downPayment: values.downPayment ?? undefined,
         extraFittingAmount: values.extraFittingAmount ?? 0,
         affidavitCharges:
@@ -1488,6 +1424,7 @@ export default function BookingForm({
       if (!skipReset) {
         form.resetFields();
         writeJson(DRAFT_KEY, null);
+        setPaymentPartsCount(MIN_PAYMENT_PARTS);
         form.setFieldsValue({
           executive: executiveDefault || "",
           branch: branchDefault || "",
@@ -1561,7 +1498,7 @@ export default function BookingForm({
         try {
           if (!ENABLE_DRAFT) return;
           const copy = { ...all };
-          [1, 2, 3].forEach((idx) => {
+          paymentPartIndices.forEach((idx) => {
             const onlineVal = Number(copy[`bookingAmount${idx}Online`] || 0) || 0;
             if (onlineVal <= 0) delete copy[`paymentReference${idx}`];
           });
@@ -2342,14 +2279,21 @@ export default function BookingForm({
         </Row>
       )}
 
-      {/* Booking Amount (3 partial payments) — moved below Balanced DP/Amount */}
+      {/* Booking Amount (dynamic partial payments) — moved below Balanced DP/Amount */}
       <Row gutter={[16, 0]}>
         <Col xs={24}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
             Booking Payments (split Cash + Online inside each partial)
+            <Button
+              type="dashed"
+              onClick={() => setPaymentPartsCount((prev) => Math.min(MAX_PAYMENT_PARTS, prev + 1))}
+              disabled={paymentPartsCount >= MAX_PAYMENT_PARTS}
+            >
+              Add-on
+            </Button>
           </div>
         </Col>
-        {[1, 2, 3].map((idx) => (
+        {paymentPartIndices.map((idx) => (
           <React.Fragment key={`p-${idx}`}>
             <Col xs={24} md={8}>
               <Form.Item

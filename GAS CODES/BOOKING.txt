@@ -87,6 +87,17 @@ function doGet(e) {
     if (READ_SECRET && p.secret !== READ_SECRET) return json_({ ok: false, error: 'unauthorized' });
     const action = String(p.action || 'list').toLowerCase();
 
+    if (action === 'version' || action === 'ping') {
+      return json_({
+        ok: true,
+        service: 'booking',
+        build: 'booking-maxparts-10',
+        minPaymentParts: MIN_PAYMENT_PARTS,
+        maxPaymentParts: MAX_PAYMENT_PARTS,
+        ts: new Date().toISOString()
+      });
+    }
+
     if (action === 'search') {
       const mode = String(p.mode || '').toLowerCase(); // booking|mobile
       const query = String(p.query || '').trim();
@@ -116,6 +127,8 @@ const WRITE_SECRET = ''; // optional
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // <= 5 MB
 const ALLOWED_MIME = 'application/pdf';
+const MIN_PAYMENT_PARTS = 3;
+const MAX_PAYMENT_PARTS = 10;
 
 const HEADERS = [
   'Booking ID', 'Submitted At', 'Branch', 'Executive', 'Customer Name', 'Mobile Number',
@@ -238,7 +251,7 @@ function normalizePayments_(src, rawNested, prev) {
       if (!(amount > 0)) continue;
       var mode = normalizePaymentMode_(p.mode) || 'cash';
       var part = Number(p.part);
-      if (!(part >= 1 && part <= 3)) part = Math.min(3, i + 1);
+      if (!(part >= 1 && part <= MAX_PAYMENT_PARTS)) part = Math.min(MAX_PAYMENT_PARTS, i + 1);
       out.push({
         part: part,
         amount: amount,
@@ -249,7 +262,7 @@ function normalizePayments_(src, rawNested, prev) {
   }
 
   if (!out.length) {
-    for (var partNo = 1; partNo <= 3; partNo++) {
+    for (var partNo = 1; partNo <= MAX_PAYMENT_PARTS; partNo++) {
       var cash = numOrZero_(pickOne_(
         src && src['bookingAmount' + partNo + 'Cash'],
         rawNested && rawNested['bookingAmount' + partNo + 'Cash'],
@@ -294,17 +307,21 @@ function normalizePayments_(src, rawNested, prev) {
 }
 
 function toPaymentSplit_(payments) {
-  var split = [
-    { part: 1, cash: 0, online: 0, total: 0, mode: '' },
-    { part: 2, cash: 0, online: 0, total: 0, mode: '' },
-    { part: 3, cash: 0, online: 0, total: 0, mode: '' }
-  ];
+  var split = [];
+  for (var basePart = 1; basePart <= MIN_PAYMENT_PARTS; basePart++) {
+    split.push({ part: basePart, cash: 0, online: 0, total: 0, mode: '' });
+  }
   var list = Array.isArray(payments) ? payments : [];
   for (var i = 0; i < list.length; i++) {
     var p = list[i] || {};
     var part = Number(p.part);
-    if (!(part >= 1 && part <= 3)) part = Math.min(3, i + 1);
+    if (!(part >= 1 && part <= MAX_PAYMENT_PARTS)) part = Math.min(MAX_PAYMENT_PARTS, i + 1);
+    while (split.length < part && split.length < MAX_PAYMENT_PARTS) {
+      var nextPart = split.length + 1;
+      split.push({ part: nextPart, cash: 0, online: 0, total: 0, mode: '' });
+    }
     var idxPart = part - 1;
+    if (!split[idxPart]) continue;
     var amt = numOrZero_(p.amount);
     if (!(amt > 0)) continue;
     var mode = normalizePaymentMode_(p.mode) || 'cash';
@@ -560,7 +577,7 @@ function updateExistingBooking_(existing, data) {
         executive: payload.executive || executive || '',
         vehicle: payload.vehicle || {},
         purchaseMode: payload.purchaseMode || purchaseMode || '',
-        payments: (payload.payments || []).slice(0, 6),
+        payments: (payload.payments || []).slice(0, MAX_PAYMENT_PARTS * 2),
         bookingAmount: payload.bookingAmount || bookingAmount || '',
         updatedAt: payload.updatedAt || '',
         note: 'payload truncated'
@@ -774,7 +791,7 @@ function createNewBooking_(data) {
         executive: payload.executive || executive || '',
         vehicle: payload.vehicle || {},
         purchaseMode: payload.purchaseMode || purchaseMode || '',
-        payments: (payload.payments || []).slice(0, 6),
+        payments: (payload.payments || []).slice(0, MAX_PAYMENT_PARTS * 2),
         bookingAmount: payload.bookingAmount || bookingAmount || '',
         updatedAt: payload.updatedAt || '',
         note: 'payload truncated'

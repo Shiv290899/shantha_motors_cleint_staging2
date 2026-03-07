@@ -95,7 +95,18 @@ const BookingPrintSheet = forwardRef(function BookingPrintSheet({ active = true,
         pushPay(p?.part, "Online", p?.online, p?.reference || p?.ref || p?.utr);
       });
     } else {
-      [1, 2, 3].forEach((idx) => {
+      const detectParts = () => {
+        let maxPart = 3;
+        for (let idx = 1; idx <= 10; idx++) {
+          const cash = num(vals?.[`bookingAmount${idx}Cash`]);
+          const online = num(vals?.[`bookingAmount${idx}Online`]);
+          const legacyAmount = num(vals?.[`bookingAmount${idx}`]);
+          const ref = String(vals?.[`paymentReference${idx}`] || "").trim();
+          if (cash || online || legacyAmount || ref) maxPart = idx;
+        }
+        return Math.max(3, Math.min(10, maxPart));
+      };
+      Array.from({ length: detectParts() }, (_, i) => i + 1).forEach((idx) => {
         const cash = num(vals?.[`bookingAmount${idx}Cash`]);
         const online = num(vals?.[`bookingAmount${idx}Online`]);
         const legacyAmount = num(vals?.[`bookingAmount${idx}`]);

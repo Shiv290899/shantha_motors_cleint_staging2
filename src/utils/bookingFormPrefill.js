@@ -36,12 +36,35 @@ const normalizeMode = (mode) => {
   return "";
 };
 
+const MIN_PAYMENT_PARTS = 3;
+const MAX_PAYMENT_PARTS = 10;
+
+const detectPartCountFromSource = (payments = [], source = {}) => {
+  let maxPart = MIN_PAYMENT_PARTS;
+  for (let idx = 1; idx <= MAX_PAYMENT_PARTS; idx++) {
+    const hasAmt =
+      toNumber(read(source, [`bookingAmount${idx}Cash`])) > 0 ||
+      toNumber(read(source, [`bookingAmount${idx}Online`])) > 0 ||
+      toNumber(read(source, [`bookingAmount${idx}`])) > 0;
+    const hasRef = String(read(source, [`paymentReference${idx}`, `paymentRef${idx}`, `utr${idx}`]) || "").trim() !== "";
+    if (hasAmt || hasRef) maxPart = idx;
+  }
+  if (Array.isArray(payments)) {
+    payments.forEach((payment) => {
+      const part = Number(payment?.part) || 0;
+      if (part >= 1 && part <= MAX_PAYMENT_PARTS) maxPart = Math.max(maxPart, part);
+    });
+  }
+  return Math.min(MAX_PAYMENT_PARTS, Math.max(MIN_PAYMENT_PARTS, maxPart));
+};
+
 const buildPaymentParts = (payments = [], source = {}) => {
-  const split = [
-    { cash: 0, online: 0, ref: undefined },
-    { cash: 0, online: 0, ref: undefined },
-    { cash: 0, online: 0, ref: undefined },
-  ];
+  const partCount = detectPartCountFromSource(payments, source);
+  const split = Array.from({ length: partCount }, () => ({
+    cash: 0,
+    online: 0,
+    ref: undefined,
+  }));
 
   const assign = (payment, idxHint = 0) => {
     if (!payment) return;
@@ -49,9 +72,9 @@ const buildPaymentParts = (payments = [], source = {}) => {
     if (!amount) return;
     const mode = normalizeMode(payment.mode) || "cash";
     const part =
-      Number(payment.part) && Number(payment.part) >= 1 && Number(payment.part) <= 3
+      Number(payment.part) && Number(payment.part) >= 1 && Number(payment.part) <= MAX_PAYMENT_PARTS
         ? Number(payment.part) - 1
-        : Math.min(Math.max(idxHint, 0), 2);
+        : Math.min(Math.max(idxHint, 0), partCount - 1);
     if (mode === "online") {
       split[part].online += amount;
       if (!split[part].ref) {
@@ -65,7 +88,7 @@ const buildPaymentParts = (payments = [], source = {}) => {
 
   payments.forEach((payment, idx) => assign(payment, idx));
 
-  for (let idx = 0; idx < 3; idx++) {
+  for (let idx = 0; idx < partCount; idx++) {
     const cashKey = `bookingAmount${idx + 1}Cash`;
     const onlineKey = `bookingAmount${idx + 1}Online`;
     split[idx].cash = split[idx].cash || toNumber(read(source, [cashKey]));
@@ -178,15 +201,6 @@ export const buildBookingFormPatch = (payload = {}) => {
       read(source, ["addressProofMode", "addressProof", "Address Proof Mode"]) ||
       "aadhaar",
     addressProofTypes,
-    bookingAmount1Cash: parts[0].cash || undefined,
-    bookingAmount1Online: parts[0].online || undefined,
-    paymentReference1: parts[0].ref || undefined,
-    bookingAmount2Cash: parts[1].cash || undefined,
-    bookingAmount2Online: parts[1].online || undefined,
-    paymentReference2: parts[1].ref || undefined,
-    bookingAmount3Cash: parts[2].cash || undefined,
-    bookingAmount3Online: parts[2].online || undefined,
-    paymentReference3: parts[2].ref || undefined,
     downPayment: toNumber(
       read(source, ["downPayment"]) ?? read(source, ["dp"])?.downPayment
     ),
@@ -200,6 +214,12 @@ export const buildBookingFormPatch = (payload = {}) => {
       read(source, ["discountAmount"]) ?? read(source, ["dp"])?.discountAmount
     ),
   };
+  parts.forEach((part, idx) => {
+    const key = idx + 1;
+    patch[`bookingAmount${key}Cash`] = part.cash || undefined;
+    patch[`bookingAmount${key}Online`] = part.online || undefined;
+    patch[`paymentReference${key}`] = part.ref || undefined;
+  });
 
   return {
     patch,
@@ -207,6 +227,7 @@ export const buildBookingFormPatch = (payload = {}) => {
       bookingId: read(source, ["bookingId", "Booking ID", "serialNo"]) || undefined,
       mobile: toDigits10(read(source, ["mobileNumber", "mobile", "Mobile Number"]) || ""),
       vehicle,
+      paymentCount: parts.length,
     },
   };
 };
